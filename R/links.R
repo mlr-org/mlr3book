@@ -1,8 +1,16 @@
+update_db = function() {
+  if (is.null(db$base) || is.null(db$aliases)) {
+    hdb = hsearch_db(package = c(db$index, db$hosted), types = "help")
+    db$base = setkeyv(as.data.table(hdb$Base), "ID")
+    db$aliases = setkeyv(as.data.table(hdb$Aliases), "Alias")
+  }
+}
+
 ref = function(topic) {
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
 
   topic = trimws(topic)
-  strip_parenthesis = function(x) sub("\\(\\)$", "", x)  
+  strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   if (grepl("::", topic, fixed = TRUE)) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
@@ -10,6 +18,7 @@ ref = function(topic) {
     name = strip_parenthesis(parts[2L])
     pkg = parts[1L]
   } else {
+    update_db()
     matched = head(db$base[db$aliases[list(strip_parenthesis(topic)), on = "Alias", nomatch = 0L], on = "ID", nomatch = 0L], 1L)
     if (nrow(matched) == 0L)
       stop(sprintf("Could not find help page for topic '%s'", topic))
@@ -39,5 +48,5 @@ mlr_pkg = function(pkg) {
 gh_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
-  sprintf("[`%s`](https://github.com/%s)", parts[1L], pkg)
+  sprintf("[`%s`](https://github.com/%s)", parts[2L], pkg)
 }
