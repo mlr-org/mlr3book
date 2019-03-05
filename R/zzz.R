@@ -2,7 +2,6 @@
 #' @import mlr3
 #' @import servr
 #' @importFrom utils head hsearch_db
-#' @importFrom bookdown serve_book
 NULL
 
 db = new.env()
