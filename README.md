@@ -5,7 +5,7 @@
 Package to build the mlr3 [bookdown](https://bookdown.org/) book.
 
 To build the book, run the following command in the repository root:
-```r
+```{r}
 pkgload::load_all()
 serve_mlr3book()
 ```
