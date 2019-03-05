@@ -1,8 +1,9 @@
 # mlr3book
 
-Introduction to mlr3 as [bookdown](https://bookdown.org/) book.
+Package to build the mlr3 [bookdown](https://bookdown.org/) book.
 
-To preview the book, run the following command in the repository root:
+To build the book, run the following command in the repository root:
 ```r
-bookdown::serve_book()
+pkgload::load_all()
+mlr3book::serve_book()
 ```
