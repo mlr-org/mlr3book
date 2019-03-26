@@ -8,7 +8,10 @@
 #' @export
 render_mlr3book = function(...) {
   root = rprojroot::find_package_root_file()
-  withr::with_dir(file.path(root, "inst", "bookdown"),
-    bookdown::render_book(input = "index.Rmd")
+  source_dir = file.path(root, "inst", "bookdown")
+  output_dir = file.path(root, "docs")
+
+  withr::with_dir(source_dir,
+    bookdown::render_book(input = "index.Rmd", envir = new.env(), output_dir = output_dir)
   )
 }
