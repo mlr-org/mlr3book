@@ -7,8 +7,11 @@
 #'
 #' @export
 render_mlr3book = function(...) {
-  path = system.file("bookdown", package = "mlr3book", mustWork = TRUE)
-  withr::with_dir(path,
-    bookdown::render_book(input = "index.Rmd", ...)
+  root = rprojroot::find_package_root_file()
+  source_dir = file.path(root, "bookdown")
+  output_dir = file.path(root, "docs")
+
+  withr::with_dir(source_dir,
+    bookdown::render_book(input = "index.Rmd", envir = new.env(), output_dir = output_dir)
   )
 }

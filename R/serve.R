@@ -5,6 +5,6 @@
 #'
 #' @export
 serve_mlr3book = function() {
-  path = system.file("bookdown", package = "mlr3book", mustWork = TRUE)
-  bookdown::serve_book(path)
+  root = rprojroot::find_package_root_file()
+  bookdown::serve_book(file.path(root, "bookdown"))
 }

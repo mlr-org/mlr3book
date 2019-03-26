@@ -1,6 +1,5 @@
 #' @import data.table
 #' @import mlr3
-#' @import servr
 #' @importFrom utils head hsearch_db
 NULL
 
