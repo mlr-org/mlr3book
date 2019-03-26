@@ -6,5 +6,5 @@
 #' @export
 serve_mlr3book = function() {
   root = rprojroot::find_package_root_file()
-  bookdown::serve_book(file.path(root, "inst", "bookdown"))
+  bookdown::serve_book(file.path(root, "bookdown"))
 }

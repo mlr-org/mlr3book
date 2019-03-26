@@ -8,7 +8,7 @@
 #' @export
 render_mlr3book = function(...) {
   root = rprojroot::find_package_root_file()
-  source_dir = file.path(root, "inst", "bookdown")
+  source_dir = file.path(root, "bookdown")
   output_dir = file.path(root, "docs")
 
   withr::with_dir(source_dir,
