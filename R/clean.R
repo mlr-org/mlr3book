@@ -1,14 +1,12 @@
 #' @title Clean the mlr3 book
 #'
 #' @description
-#' Calls [bookdown::clean_book()].
-#'
-#' @param clean Passed down to [bookdown::clean_book()].
+#' Calls [bookdown::clean_book(TRUE)].
 #'
 #' @export
-clean_mlr3book = function(clean = FALSE) {
-  path = system.file("bookdown", package = "mlr3book", mustWork = TRUE)
-  withr::with_dir(path,
-    bookdown::clean_book(clean)
+clean_mlr3book = function() {
+  root = rprojroot::find_package_root_file()
+  withr::with_dir(file.path(root, "bookdown"),
+    bookdown::clean_book(clean = TRUE)
   )
 }
