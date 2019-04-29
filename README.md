@@ -3,6 +3,7 @@
 [![Travis build status](https://travis-ci.org/mlr-org/mlr3book.svg?branch=master)](https://travis-ci.org/mlr-org/mlr3book)
 
 Package to build the mlr3 [bookdown](https://bookdown.org/) book.
+The rendered book can be found [here](https://mlr-org.github.io/mlr3book/).
 
 To install all necessary dependencies for the book, install the this package using [remotes](https://cran.r-project.org/package=remotes):
 ```{r index-1, eval=FALSE}
