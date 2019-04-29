@@ -4,6 +4,11 @@
 
 Package to build the mlr3 [bookdown](https://bookdown.org/) book.
 
+To install all necessary dependencies for the book, install the `r gh_pkg("mlr-org/mlr3book")` package using `r cran_pkg("remotes")`:
+```{r index-1, eval=FALSE}
+remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
+```
+
 To build the book, run the following command in the repository root:
 ```{r}
 pkgload::load_all()
