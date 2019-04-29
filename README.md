@@ -4,7 +4,7 @@
 
 Package to build the mlr3 [bookdown](https://bookdown.org/) book.
 
-To install all necessary dependencies for the book, install the [mlr3book](https://github.com/mlr-org/mlr3book) package using [remotes](https://cran.r-project.org/package=remotes):
+To install all necessary dependencies for the book, install the this package using [remotes](https://cran.r-project.org/package=remotes):
 ```{r index-1, eval=FALSE}
 remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 ```
