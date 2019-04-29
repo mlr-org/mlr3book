@@ -4,11 +4,8 @@
 \alias{clean_mlr3book}
 \title{Clean the mlr3 book}
 \usage{
-clean_mlr3book(clean = FALSE)
-}
-\arguments{
-\item{clean}{Passed down to \code{\link[bookdown:clean_book]{bookdown::clean_book()}}.}
+clean_mlr3book()
 }
 \description{
-Calls \code{\link[bookdown:clean_book]{bookdown::clean_book()}}.
+Calls \link[bookdown:clean_book(TRUE)]{bookdown::clean_book(TRUE)}.
 }
