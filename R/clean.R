@@ -1,7 +1,7 @@
 #' @title Clean the mlr3 book
 #'
 #' @description
-#' Calls [bookdown::clean_book(TRUE)].
+#' Calls [bookdown::clean_book()] with `clean` set to `TRUE`.
 #'
 #' @export
 clean_mlr3book = function() {

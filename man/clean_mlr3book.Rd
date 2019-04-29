@@ -7,5 +7,5 @@
 clean_mlr3book()
 }
 \description{
-Calls \link[bookdown:clean_book(TRUE)]{bookdown::clean_book(TRUE)}.
+Calls \code{\link[bookdown:clean_book]{bookdown::clean_book()}} with \code{clean} set to \code{TRUE}.
 }
