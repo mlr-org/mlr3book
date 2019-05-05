@@ -10,7 +10,8 @@ render_mlr3book = function(...) {
   root = rprojroot::find_package_root_file()
   source_dir = file.path(root, "bookdown")
 
-  withr::with_dir(source_dir,
-    bookdown::render_book(input = "index.Rmd", envir = new.env())
-  )
+  withr::with_dir(source_dir, {
+    bookdown::render_book(input = "index.Rmd", output_format = bookdown::gitbook(), envir = new.env())
+    bookdown::render_book(input = "index.Rmd", output_format = bookdown::pdf_book(), envir = new.env())
+  })
 }
