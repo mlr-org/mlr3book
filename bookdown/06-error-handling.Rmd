@@ -1,25 +1,23 @@
 # Error Handling {#error-handling}
 
-This vignettes demonstrates how to deal with learners which raise exceptions during train or predict.
+To demonstrate how to properly deal with misbehaving learners, `mlr3` ships with the learner `classif.debug`:
 
-## Setup
-
-First, we need a simple learning task and a learner which raises exceptions.
-For this purpose, `mlr3` ships with the learner `classif.debug`:
 ```{r 06-error-handling-1}
 task = mlr_tasks$get("spam")
 learner = mlr_learners$get("classif.debug")
 print(learner)
 ```
-The hyperparameters let us control (a) what conditions should be signaled (message, warning, error), and (b) during which stage (train or predict).
-Additionally, we can tell the learner to provoke a segfault which tears down the complete R session.
-With its default settings, it will do nothing special: it learns a random label and which is used to create constant predictions.
+The hyperparameters let us control
+1. what conditions should be signaled (message, warning, error), and
+2. during which stage the conditions should be signaled (train or predict).
 
+Alternatively, we can tell the learner to provoke a segfault which tears down the complete R session.
+With its default settings, it will do nothing special: it learns a random label which is used to create constant predictions.
 
-## No error handling
+## Conditions
 
-In the defaults, `mlr3` does not handle errors.
-Thus, the exception raised by the unittest learner stops the execution and can be tracebacked:
+In the defaults, `mlr3` does not handle catch conditions.
+Thus, the exception raised by the debug learner stops the execution and can be tracebacked:
 
 ```{r 06-error-handling-2, error = TRUE}
 task = mlr_tasks$get("spam")
@@ -29,10 +27,22 @@ e = Experiment$new(task, learner)
 e$train()
 ```
 
+Note that `mlr3` adds the class "trainError" to the error condition.
+This allows us to differentiate errors thrown by the learner from other errors via `r ref("tryCatch()")`:
+```{r}
+tryCatch(e$train(),
+  trainError = function(e) { message("model failed to fit") }
+)
+```
+Analogously to "trainError", an exception with class "predictError" is raised if the learner is unable to predict,
+and a "scoreError" is raised if the performance measure fails.
+
+
 ## Encapsulation
 
-During parallelization, error messages (as well as normal output or warnings) are often not properly forwarded to the master R session, or they arrive in a confusing order.
-The learner execution can be encapsulated, so its output is logged to the experiment instead of just printed to the console:
+The learner execution can be encapsulated, so that exceptions do not stop the program flow and output is logged to the experiment instead of just printed to the console.
+One way to encapsulate the execution is provided by the package `r cran_pkg("evaluate")`.
+The encapsulation can be enabled via `r ref("mlr_control()")`:
 ```{r 06-error-handling-3}
 task = mlr_tasks$get("spam")
 learner = mlr_learners$get("classif.debug")
@@ -46,18 +56,11 @@ e$log("train") # print train log
 e$log("train")$warnings # get all the warnings
 e$log("train")$errors # get all the errors
 ```
-You can also enable the encapsulation for the *predict* step of an experiment by setting `encapsulate_predict`.
+You can also enable the encapsulation for the *predict* step of an experiment by setting `encapsulate_predict` in `r ref("mlr_control()")`.
 
 Another possibility to encapsulate is execution via package the [`callr`](https://cran.r-project.org/package=callr).
-[`callr`](https://cran.r-project.org/package=callr) spawns a new R process, and thus guards us from segfaults.
+[`callr`](https://cran.r-project.org/package=callr) spawns a new R process, and thus even guards the session from segfaults.
 On the downside, starting new processes comes with a computational overhead.
-```{r 06-error-handling-4}
-ctrl = mlr_control(encapsulate_train = "callr")
-e = Experiment$new(task, learner)
-e$train(ctrl = ctrl)
-e$has_errors
-e$log("train")
-```
 
 ```{r 06-error-handling-5}
 ctrl = mlr_control(encapsulate_train = "callr")
@@ -70,7 +73,7 @@ e$has_errors
 e$log("train")$errors
 ```
 
-Note that, although no exception has been raised with encapsulation, it is impossible to perform the predict step without a model:
+Note that it is still impossible to perform the predict step without a fitted model:
 ```{r 06-error-handling-6, error = TRUE}
 e$predict()
 ```
