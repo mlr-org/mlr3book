@@ -15,8 +15,10 @@ update_db = function() {
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic) {
+ref = function(topic, text = topic) {
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
+  checkmate::assert_string(text, min.chars = 1L)
+
 
   topic = trimws(topic)
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
@@ -36,11 +38,10 @@ ref = function(topic) {
     pkg = matched$Package
   }
 
-
   if (pkg %in% db$hosted) {
-    sprintf("[`%s`](https://%s.mlr-org.com/reference/%s.html)", topic, pkg, name)
+    sprintf("[`%s`](https://%s.mlr-org.com/reference/%s.html)", text, pkg, name)
   } else {
-    sprintf("[`%s`](https://www.rdocumentation.org/packages/%s/topics/%s)", topic, pkg, name)
+    sprintf("[`%s`](https://www.rdocumentation.org/packages/%s/topics/%s)", text, pkg, name)
   }
 }
 

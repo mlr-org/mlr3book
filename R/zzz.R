@@ -5,7 +5,7 @@ NULL
 
 db = new.env()
 db$index = c("base", "utils", "datasets", "data.table")
-db$hosted = c("mlr3", "mlr3db", "mlr3survival", "mlr3ordinal")
+db$hosted = c("mlr3misc", "mlr3", "mlr3db", "mlr3survival", "mlr3ordinal")
 
 .onLoad = function(libname, pkgname) {
   db$base = NULL
