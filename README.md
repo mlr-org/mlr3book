@@ -17,7 +17,7 @@ serve_mlr3book()
 ```
 This starts a service which automatically (re-)compiles the bookdown sources in the background.
 Alternatively, you can run `./serve` if you have `Rscript` in your `PATH`.
-If your browser does not open automatically, go to [http://127.0.0.1:4321/].
+If your browser does not open automatically, go to http://127.0.0.1:4321/.
 
 ## File system structure
 The root directory is a regular R package.
@@ -30,9 +30,9 @@ The book is in the subdirectory "bookdown".
 The package `mlr3book` provides the helpers `cran_pkg()`, `mlr_pkg()`, `gh_pkg()`, and `ref()`
 Example:
 ```
-See the manual for `r ref("Experiment")`
-More learners can be found in `r mlr_pkg("mlr_learners")`
-We heavily use `r cran_pkg("data.table")` inside.
+See the manual for `r ref("Experiment")`.
+More learners can be found in `r mlr_pkg("mlr_learners")`.
+We heavily use `r cran_pkg("data.table")` internally.
 You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
 ```
 
@@ -40,4 +40,5 @@ You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
 * Chunks should be named `[chapter-name]-id`, where id is some short description of what is happening.
 
 ### Blocks
-* Blocks for notes, warnings, ... TODO
+* Blocks for notes, warnings, ...
+  TODO: update preamble
