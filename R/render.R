@@ -12,6 +12,6 @@ render_mlr3book = function(...) {
 
   withr::with_dir(source_dir, {
     bookdown::render_book(input = "index.Rmd", "bookdown::gitbook", envir = new.env())
-    bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())
+    # bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())
   })
 }
