@@ -12,6 +12,7 @@ update_db = function() {
 #' Creates a markdown link to a function reference.
 #'
 #' @param topic Name of the topic to link against.
+#' @param text Text to use for the link. Defaults to the topic name.
 #'
 #' @return (`character(1)`) markdown link.
 #' @export

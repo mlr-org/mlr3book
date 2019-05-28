@@ -10,21 +10,34 @@ To install all necessary dependencies for the book, install the this package usi
 remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 ```
 
-To build the book, run the following command in the repository root:
+To build the book, run the following R command in the repository root:
 ```r
 pkgload::load_all()
 serve_mlr3book()
 ```
 This starts a service which automatically (re-)compiles the bookdown sources in the background.
+Alternatively, you can run `./serve` if you have `Rscript` in your `PATH`.
+If your browser does not open automatically, go to [http://127.0.0.1:4321/].
+
+## File system structure
+The root directory is a regular R package.
+The book is in the subdirectory "bookdown".
 
 
 ## Style Guide
 
+### Links and References
+The package `mlr3book` provides the helpers `cran_pkg()`, `mlr_pkg()`, `gh_pkg()`, and `ref()`
+Example:
+```
+See the manual for `r ref("Experiment")`
+More learners can be found in `r mlr_pkg("mlr_learners")`
+We heavily use `r cran_pkg("data.table")` inside.
+You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
+```
+
 ### Chunk Names
 * Chunks should be named `[chapter-name]-id`, where id is some short description of what is happening.
 
-### Links and References
-* The package `mlr3book` provides the helpers `cran_pkg()`, `mlr_pkg()`, `gh_pkg()`, and `ref()`
-
-### Blocks 
+### Blocks
 * Blocks for notes, warnings, ... TODO

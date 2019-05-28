@@ -4,10 +4,12 @@
 \alias{ref}
 \title{Hyperlink to Function Reference}
 \usage{
-ref(topic)
+ref(topic, text = topic)
 }
 \arguments{
 \item{topic}{Name of the topic to link against.}
+
+\item{text}{Text to use for the link. Defaults to the topic name.}
 }
 \value{
 (\code{character(1)}) markdown link.
