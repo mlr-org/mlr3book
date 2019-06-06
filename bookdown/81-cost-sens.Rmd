@@ -19,10 +19,11 @@ dimnames(costs) = list(response = c("good", "bad"), truth = c("good", "bad"))
 print(costs)
 ```
 
-We will work on the data from the `r ref("mlr_tasks_german_credit", text = "German Credit Data")`:
+We will work on the data from the `r ref("mlr_tasks_german_credit", text = "German Credit Data")` task:
 ```{r}
-data = mlr_tasks$get("german_credit")$data()
-table(data$credit_risk)
+library(mlr3)
+task = mlr_tasks$get("german_credit")
+table(task$truth())
 ```
 The data has 70% good customers and 30% bad customers.
 A manager, who doesn't have any model and who gives everybody the loan would yield the following profit per customer:
@@ -46,12 +47,9 @@ Our goal is to find a model which minimizes the costs (and thereby maximizes the
 For our first model, we choose an ordinary logistic regression (implemented in the add-on package `r mlr_pkg("mlr3learners")`).
 We first create a classification task, then resample the model using a 10-fold cross validation and extract the resulting confusion matrix:
 ```{r}
-task = TaskClassif$new("german_credit", data,
-  target = "credit_risk", positive = "good")
-
 library(mlr3learners)
 learner = mlr_learners$get("classif.log_reg")
-rr = mlr3::resample(task, learner, "cv")
+rr = resample(task, learner, "cv")
 
 confusion = rr$prediction$confusion
 print(confusion)
@@ -85,11 +83,14 @@ We now define this measure as default measure for our task.
 task$measures = list(cost_measure)
 ```
 If we now call `r ref("resample()")` or `r ref("benchmark()")`, the cost-sensitive measures will be evaluated.
-Here, we compare the logistic regression to a simple featureless learner:
+We compare the logistic regression to a simple featureless learner and a random forest from package `r cran_pkg("ranger")` :
 ```{r}
-bmr = benchmark(expand_grid(task, c("classif.log_reg", "classif.featureless"), "cv"))
+learners = mlr_learners$mget(c("classif.log_reg", "classif.featureless", "classif.ranger"))
+bmr = benchmark(expand_grid(task, learners, "cv"))
 print(bmr)
 ```
+As expected, the featureless learner is performing comparably bad.
+The logistic regression and the random forest work equally well.
 
 
 ### Thresholding
@@ -98,14 +99,14 @@ Although we now correctly evaluate the models in a cost-sensitive fashion, the m
 They assume the same costs for both wrong classification decisions.
 Some learners natively support cost-sensitive classification (e.g., XXX).
 However, we will concentrate on a more generic approach which works for all models which can predict probabilities for class labels: thresholding.
-Such learners calculate a probability $p$ for the positive class.
+Most learners can calculate the probability $p$ for the positive class.
 If $p$ exceeds the threshold $0.5$, they predict the positive class, and the negative class otherwise.
 
 For our binary classification case of the credit data, the we primarily want to minimize the errors where the model predicts "good", but truth is "bad" (i.e., the number of false positives) as this is the more expensive error.
 If we now increase the threshold to values $> 0.5$, we reduce the number of false negatives.
 
 ```{r}
-# fit model with probability prediction
+# fit models with probability prediction
 learner = mlr_learners$get("classif.log_reg", predict_type = "prob")
 rr = resample(task, learner, "cv")
 p = rr$prediction
@@ -124,9 +125,9 @@ with_threshold(p, 1.0)
 # TODO: include plot of threshold vs performance
 ```
 
-Instead of manually trying different threshold values, we here use `r ref("optimize()")` to find a good value.
+Instead of manually trying different threshold values, we here use `r ref("optimize()")` to find a good threshold value.
 ```{r}
-# we write a simple wrapper function which takes a single threshold and returns the resulting performance
+# simple wrapper function which takes a threshold and returns the resulting model performance
 # this wrapper is passed to optimize() to find its minimum for thresholds in [0.5, 1]
 f = function(th) {
   with_threshold(p, th)$costs
