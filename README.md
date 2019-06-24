@@ -63,6 +63,11 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 ```
 ````
 
+### Spacing
+
+- Always start a new sentence on a new line.
+- Put an empty line before and after code blocks.
+
 ### Loading Namespaces
 
 All Namespaces of required packages should be loaded in the setup chunk of `bookdown/index.Rmd`.
