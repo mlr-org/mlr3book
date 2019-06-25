@@ -43,7 +43,11 @@ You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
 
 ### Chunk Names
 
-Install `remotes::install_github("pat-s/namer@unname-dir")` and call `namer::name_dir_chunks("bookdown", unname = TRUE)` from the repository root.
+Chunks are named automatically as `[chapter-name]-#` by calling `name_chunks_mlr3book()`:
+
+```r
+mlr3book::name_chunks_mlr3book()
+```
 
 ### Blocks
 
