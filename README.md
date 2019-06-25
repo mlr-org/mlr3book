@@ -43,11 +43,7 @@ You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
 
 ### Chunk Names
 
-Chunks are named automatically as `[chapter-name]-#` by calling `name_chunks_mlr3book()`:
-
-```r
-mlr3book::name_chunks_mlr3book()
-```
+Install `remotes::install_github("pat-s/namer@unname-dir")` and call `namer::name_dir_chunks("bookdown", unname = TRUE)` from the repository root.
 
 ### Blocks
 
@@ -62,5 +58,6 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 
 ### Spacing
 
+- Always start a new sentence on a new line.
 - Always start a new sentence on a new line.
 - Put an empty line before and after code blocks.
