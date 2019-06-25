@@ -1,4 +1,145 @@
-# Parameters (using `paradox`) {#paradox}
+# Technical {#technical}
+
+## Parallelization {#parallelization}
+
+`r gh_pkg("mlr-org/mlr3")` uses the `r cran_pkg("future")` backends for parallelization.
+Make sure you have installed the required packages `r cran_pkg("future")` and
+`r cran_pkg("future.apply")`:
+
+`r gh_pkg("mlr-org/mlr3")` is capable of parallelizing a variety of different scenarios.
+One of the most used cases is to parallelize the `r ref("Resampling")` iterations.
+See [Section Resampling](#resampling) for a detailed introduction to resampling.
+
+In the following, we will use the _spam_ task and a simple classification tree (`"classif.rpart"`) to showcase parallelization.
+
+First, we run the experiment sequentially:
+
+Now, we use the `r cran_pkg("future")` package to parallelize the resampling by selecting a backend via the function `r ref("future::plan()")` and then repeat the resampling.
+We use the `"multiprocess"` backend here which uses threads on UNIX based systems and a "Socket" cluster on Windows.
+
+```{r 06-parallelization-001, eval = FALSE}
+future::plan("multiprocess")
+
+task = mlr_tasks$get("spam")
+learner = mlr_learners$get("classif.rpart")
+resampling = mlr_resamplings$get("subsampling")
+
+time = Sys.time()
+  resample(task, learner, resampling)
+
+Sys.time() - time
+```
+
+```{block, type='caution'}
+By default all CPUs of your machine are used unless you specify argument `workers` in `future::plan()`.
+```
+
+On most systems you should see a decrease in the reported elapsed time.
+On some systems (e.g. Windows), the overhead for parallelization is quite large though.
+Therefore, it is advised to only enable parallelization for experiments which run more than 10s each.
+
+**Choosing the parallelization level**
+
+If you have are transitioning from `r cran_pkg("mlr")` you might be used to selecting different parallelization levels for certain experiments.
+
+In `r gh_pkg("mlr-org/mlr3")` this is no longer needed.
+The `r cran_pkg("future")` package makes it possible that all kind of events are rolled out on the same level.
+This also means that all events are parallelized at the same level - no need anymore to decide whether you want to parallelize the tuning OR the resampling.
+Just lean back and let the machine do the work :-)
+
+## Error Handling {#error-handling}
+
+To demonstrate how to properly deal with misbehaving learners, `r gh_pkg("mlr-org/mlr3")` ships with the learner `classif.debug`:
+
+```{r 08-error-handling-001}
+task = mlr_tasks$get("spam")
+learner = mlr_learners$get("classif.debug")
+print(learner)
+```
+
+This learner comes with special hyperparameters that let us control
+
+1. What conditions should be signaled (message, warning, error), and
+2. during which stage the conditions should be signaled (train or predict).
+
+```{r 08-error-handling-002}
+learner$param_set
+```
+
+Alternatively, we can tell the `r ref("Learner")` to provoke a segfault which tears down the complete R session.
+With its default settings, it will do nothing special: it learns a random label which is used to create constant predictions.
+
+### Conditions
+
+By default,`r gh_pkg("mlr-org/mlr3")` does not handle catch conditions.
+Thus, the exception raised by the debug learner stops the execution and can a `traceback()` can be run:
+
+```{r 08-error-handling-003, error = TRUE}
+task = mlr_tasks$get("spam")
+learner = mlr_learners$get("classif.debug")
+learner$param_set$values = list(error_train = TRUE)
+e = Experiment$new(task, learner)
+e$train()
+```
+
+### Encapsulation
+
+The learner execution can be encapsulated, so that exceptions do not stop the program flow and output is logged to the experiment instead of just printed to the console.
+One way to encapsulate the execution is provided by the package `r cran_pkg("evaluate")`.
+The encapsulation can be enabled via `r ref("mlr_control()")`:
+
+```{r 08-error-handling-004}
+task = mlr_tasks$get("spam")
+learner = mlr_learners$get("classif.debug")
+learner$param_set$values = list(warning_train = TRUE, error_train = TRUE)
+
+ctrl = mlr_control(encapsulate_train = "evaluate")
+e = Experiment$new(task, learner, ctrl = ctrl)
+e$train()
+e$has_errors # any errors recorded?
+e$log("train") # print train log
+e$log("train")$warnings # get all the warnings
+e$log("train")$errors # get all the errors
+```
+
+You can also enable the encapsulation for the **predict** step of an experiment by setting `encapsulate_predict` in `r ref("mlr_control()")`.
+
+Another possibility to encapsulate is by running everything in a `r cran_pkg("callr")` session.
+`r cran_pkg("callr")` spawns a new R process, and thus even guards the session from segfaults.
+On the downside, starting new processes comes with a computational overhead.
+
+```{r 08-error-handling-005}
+ctrl = mlr_control(encapsulate_train = "callr")
+task = mlr_tasks$get("spam")
+learner = mlr_learners$get("classif.debug")
+learner$param_set$values = list(segfault_train = TRUE)
+e = Experiment$new(task, learner)
+e$train(ctrl = ctrl)
+e$has_errors
+e$log("train")$errors
+```
+
+Without a model it is not possible to predict:
+
+```{r 08-error-handling-006, error = TRUE}
+e$predict()
+```
+
+### Fallback learners
+
+Fallback learners have the purpose to continue with an experiment in cases when a `r ref("Learner")` or a `r ref("Measure")` are misbehaving in some sense.
+Some typical examples include:
+
+* The learner fails to fit a model during training.
+  This can happen if some convergence criterion is not met or the learner ran out of memory.
+* The learner fails to predict for some or all observations.
+  A typical case could be new factor levels in the test data which the model cannot handle.
+
+The fallback learner from the package `r mlr_pkg("mlr3pipelines")` can be used for these scenarios.
+
+## Database Backends {#backends}
+
+## Parameters (using `paradox`) {#paradox}
 
 The `r mlr_pkg("paradox")` package offers a language for the description of *parameter spaces*, as well as tools for useful operations on these parameter spaces.
 A parameter space is often useful when describing a set of sensible input values for an R function, the set of possible values that slots of a configuration object can take, or the search space of an optimization process.
@@ -9,7 +150,7 @@ The tools provided by `paradox` therefore relate to
 `r mlr_pkg("paradox")` is, by its nature, an auxiliary package that derives its usefulness from other packages that make use of it.
 It is heavily utilized in other [mlr-org](https://github.com/mlr-org) packages such as `r mlr_pkg("mlr3")`, `r mlr_pkg("mlr3pipelines")`, and `r mlr_pkg("mlr3tuning")`.
 
-## Reference Based Objects
+### Reference Based Objects
 
 `r mlr_pkg("paradox")` is the spiritual successor to the `r cran_pkg("ParamHelpers")` package and was written from scratch using the `r cran_pkg("R6")` class system.
 The most important consequence of this is that all objects created in `paradox` are "reference-based", unlike most other objects in R.
@@ -35,9 +176,9 @@ print(ps2) # contains the same reference as ps
 print(ps3) # is a "clone" of the old (empty) ps
 ```
 
-## Defining a Parameter Space
+### Defining a Parameter Space
 
-### Single Parameters
+#### Single Parameters
 
 The basic building block for describing parameter spaces is the **`Param`** class.
 It represents a single parameter, which usually can take a single atomic value.
@@ -89,7 +230,7 @@ It is also possible to get all information of a `Param` as `data.table` by calli
 as.data.table(parA)
 ```
 
-#### Type / Range Checking
+##### Type / Range Checking
 
 A `Param` object offers the possibility to check whether a value satisfies its condition, i.e. is of the right type, and also falls within the range of allowed values, using the `$test()`, `$check()`, and `$assert()` functions.
 `test()` should be used within conditional checks and returns `TRUE` or `FALSE`, while `check()` returns an error description when a value does not conform to the parameter (and thus plays well with the [`checkmate`](https://github.com/mllg/checkmate)`::assert()` function).
@@ -103,7 +244,7 @@ parA$check("FALSE")
 
 Instead of testing single parameters, it is often more convenient to check a whole set of parameters using a `ParamSet`.
 
-### Parameter Sets
+#### Parameter Sets
 
 The ordered collection of parameters is handled in a `ParamSet`^[Although the name is suggestive of a "Set"-valued `Param`, this is unrelated to the other objects that follow the `ParamXxx` naming scheme.].
 It is initialized using the `$new()` function and optionally takes a list of `Param`s as argument.
@@ -136,7 +277,7 @@ This makes it easy to subset parameters on certain conditions and aggregate info
 as.data.table(ps)
 ```
 
-#### Type / Range Checking
+##### Type / Range Checking
 
 Similar to individual `Param`s, the `ParamSet` provides `$test()`, `$check()` and `$assert()` functions that allow for type and range checking of parameters.
 Their argument must be a named list with values that are checked against the respective parameters.
@@ -148,7 +289,7 @@ ps$check(list(A = 1))
 ps$check(list(Z = 1))
 ```
 
-#### Values in a `ParamSet`
+##### Values in a `ParamSet`
 
 Although a `ParamSet` fundamentally represents a value space, it also has a slot `$values` that can contain a point within that space.
 This is useful because many things that define a parameter space need similar operations (like parameter checking) that can be simplified.
@@ -167,7 +308,7 @@ The parameter constraints are automatically checked:
 ps$values$B = 100
 ```
 
-#### Dependencies
+##### Dependencies
 
 It is often the case that certain parameters are irrelevant or should not be given depending on values of other parameters.
 An example would be a parameter that switches a certain algorithm feature (for example regularization) on or off, combined with another parameter that controls the behavior of that feature (e.g. a regularization parameter).
@@ -207,7 +348,7 @@ There are no sanity checks done when the `$deps` slot is changed this way, so be
 ps$deps
 ```
 
-### Vector Parameters
+#### Vector Parameters
 
 Unlike in the old `ParamHelpers` package, there are no more vectorial parameters in `paradox`.
 Instead, it is now possible to create multiple copies of a single parameter using the `$rep` function.
@@ -234,7 +375,7 @@ ps$tags
 ```
 
 
-## Parameter Sampling
+### Parameter Sampling
 
 It is often useful to have a list of possible parameter values that can be systematically iterated through, for example to find parameter values for which an algorithm performs particularly well (tuning).
 `paradox` offers a variety of functions that allow creating evenly-spaced parameter values in a "grid" design as well as random sampling.
@@ -243,12 +384,12 @@ In the latter case, it is possible to influence the sampling distribution in mor
 A point to always keep in mind while sampling is that only numerical and factorial parameters that are bounded can be sampled from, i.e. not `ParamUty`. 
 Furthermore, for most samplers `ParamInt` and `ParamDbl` must have finite lower and upper bounds.
 
-### Parameter Designs
+#### Parameter Designs
 
 Functions that sample the parameter space fundamentally return an object of the `Design` class. 
 These objects contain the sampled data as a `data.table` under the `$data` slot, and also offer conversion to a list of parameter-values using the **`$transpose()`** function.
 
-### Grid Design
+#### Grid Design
 
 The `generate_design_grid()` function is used to create grid designs that contain all combinations of parameter values: All possible values for `ParamLgl` and `ParamFct`, and values with a given resolution for `ParamInt` and `ParamDbl`.
 The resolution can be given for all numeric parameters, or for specific named parameters through the `param_resolutions` parameter.
@@ -262,7 +403,7 @@ print(design)
 generate_design_grid(psSmall, param_resolutions = c(B = 1, C = 2))
 ```
 
-### Random Sampling
+#### Random Sampling
 
 `paradox` offers different methods for random sampling, which vary in the degree to which they can be configured.
 The easiest way to get a uniformly random sample of parameters is `generate_design_random`.
@@ -280,7 +421,7 @@ plot(pvrand$data, main = "'random' design", xlim = c(0, 1), ylim=c(0, 1))
 plot(pvlhs$data, main = "'lhs' design", xlim = c(0, 1), ylim=c(0, 1))
 ```
 
-### Generalized Sampling: The `Sampler` Class
+#### Generalized Sampling: The `Sampler` Class
 
 It may sometimes be desirable to configure parameter sampling in more detail.
 `paradox` uses the `Sampler` abstract base class for sampling, which has many different subclasses that can be parameterized and combined to control the sampling process.
@@ -288,7 +429,7 @@ It is even possible to create further subclasses of the `Sampler` class (or of a
 
 Every `Sampler` object has a `sample()` function, which takes one argument, the number of instances to sample, and returns a [`Design`](#parameter-designs) object.
 
-#### 1D-Samplers
+##### 1D-Samplers
 
 There is a variety of samplers that sample values for a single parameter.
 These are `Sampler1DUnif` (uniform sampling), `Sampler1DCateg` (sampling for categorical parameters), `Sampler1DNormal` (normally distributed sampling, truncated at parameter bounds), and `Sampler1DRfun` (arbitrary 1D sampling, given a random-function).
@@ -299,7 +440,7 @@ sampA = Sampler1DCateg$new(parA)
 sampA$sample(5)
 ```
 
-#### Hierarchical Sampler
+##### Hierarchical Sampler
 
 The `SamplerHierarchical` sampler is an auxiliary sampler that combines many 1D-Samplers to get a combined distribution.
 Its name "hierarchical" implies that it is able to respect parameter dependencies: Parameters only get sampled when their dependencies are met.
@@ -319,7 +460,7 @@ sampled = sampH$sample(1000)
 table(sampled$data[, c("A", "B")], useNA = "ifany")
 ```
 
-#### Joint Sampler
+##### Joint Sampler
 
 Another way of combining samplers is the `SamplerJointIndep`.
 It also makes it possible to combine `Sampler`s that are not 1D.
@@ -333,11 +474,11 @@ sampJ = SamplerJointIndep$new(
 sampJ$sample(5)
 ```
 
-#### SamplerUnif
+##### SamplerUnif
 
 The `Sampler` used in `generate_design_random` is the `SamplerUnif` sampler, which corresponds to a `HierarchicalSampler` of `Sampler1DUnif` for all parameters.
 
-## Parameter Transformation
+### Parameter Transformation
 
 While the different `Sampler`s allow for a wide specification of parameter distributions, there are cases where the simplest way of getting a desired distribution is to sample parameters from a simple distribution (such as the uniform distribution) and then transform them.
 This can be done by assigning a function to the `$trafo` slot of a `ParamSet`.
@@ -363,7 +504,7 @@ Compare this to `$transpose()` without transformation:
 design$transpose(trafo = FALSE)
 ```
 
-### Transformation between Types
+#### Transformation between Types
 
 Usually the design created with one `ParamSet` is then used to configure other objects that themselves have a `ParamSet` which defines the values they take.
 The `ParamSet`s which can be used for random sampling, however, are restricted in some ways: They must have finite bounds, and they may not contain "untyped" (`ParamUty`) parameters.
@@ -455,4 +596,370 @@ xvals = design$transpose()
 print(xvals[[1]])
 methodPS$check(xvals[[1]])
 xvals[[1]]$fun(1:10)
+```
+
+## Extending mlr3 {#extending}
+
+### Learners {#ext-learner}
+
+Here, we show how to create a custom `r ref("LearnerClassif")` step-by-step.
+
+Preferably, you start by copying over code from an existing `r ref("Learner")`, e.g. from the `"classif.rpart` learner on [GitHub](https://github.com/mlr-org/mlr3/blob/master/R/LearnerClassifRpart.R).
+Alternatively, here is a template for a new classification learner:
+
+```{r 90-extending-001, eval = FALSE}
+LearnerClassifYourLearner = R6::R6Class("LearnerClassifYourLearner",
+  inherit = LearnerClassif,
+  public = list(
+    initialize = function(id = "classif.yourlearner") {
+      super$initialize(
+        id = id,
+        param_set = ParamSet$new(),
+        param_vals = list()
+        predict_types = ,
+        feature_types = ,
+        properties = ,
+        packages = ,
+      )
+    },
+
+    train = function(task) {
+
+    },
+    predict = function(task) {
+
+    }
+  )
+)
+```
+
+In the first line of the template, we create a new `r cran_pkg("R6")` class with class `"LearnerClassifYourLearner"`.
+The next line determines the parent class: As we want to create a classification learner, we obviously want to inherit from `r ref("LearnerClassif")`.
+
+A learner consists of three parts:
+
+1. [Meta information](#learner-meta-information) about the learners
+2. A [`train()` function](#learner-train) which takes a `r ref("TaskClassif")`, fits a model, stores the model in `self$model` and returns the learner itself.
+3. A [`predict()` function](#learner-predict) which operates on the stored model in `self$model` stored during `train()` and a (differently subsetted) `r ref("TaskClassif")` to calculate predictions for each observation in the provided task.
+
+#### Meta-information {#learner-meta-information}
+
+In the constructor function `initialize()` the constructor of the super class `r ref("LearnerClassif")` is called with meta information about the leaner we want to construct.
+This includes:
+
+* `id`: The id of the new learner.
+* `param_set`: A set of hyperparameters and their description, provided as `r ref("paradox::ParamSet")`.
+* `param_vals`: Default hyperparameter settings as named list.
+* `predict_types`: Set of predict types the learner is capable of.
+  For classification, this must be a subset of `r mlr3misc::str_collapse(mlr_reflections$learner_predict_types$classif, quote = "\"")`.
+  See `r ref("mlr_reflections", text = "mlr_reflection$learner_predict_types")` for possible predict types of other tasks.
+* `feature_types`: Set of feature types the learner can handle.
+  See `r ref("mlr_reflections", text = "mlr_reflections$task_feature_types")` for feature types supported by `mlr3`.
+* `properties`: Set of properties of the learner. Possible properties include:
+    * `"twoclass"`: The learner works on binary classification problems.
+    * `"multiclass"`: The learner works on multi-class classification problems.
+    * `"missings"`: The learner can natively handle missing values.
+    * `"weights"`: The learner can work on tasks which have observation weights / case weights.
+    * `"parallel"`: The learner can be parallelized, e.g. via threading.
+    * `"importance"`: The learner supports extracting importance values for features. If this property is set, you must also implement a public method `importance()` to retrieve the importance values from the model.
+    * `"selected features"`: The learner supports extracting the features which where used. If this property is set, you must also implement a public method `selected_features()` to retrieve the set of used features from the model.
+* Set of required packages to run the learner.
+
+For a simplified `r ref("rpart::rpart()")`, the initialization could look like this:
+
+```{r 90-extending-002, eval = FALSE}
+initialize = function(id = "classif.rpart") {
+    super$initialize(
+        id = id,
+        packages = "rpart",
+        feature_types = c("logical", "integer", "numeric", "factor"),
+        predict_types = c("response", "prob"),
+        param_set = ParamSet$new(
+            params = list(
+                ParamDbl$new(id = "cp", default = 0.01, lower = 0, upper = 1, tags = "train"),
+                ParamInt$new(id = "xval", default = 0L, lower = 0L, tags = "train")
+            )
+        ),
+        param_vals = list(xval = 0L),
+        properties = c("twoclass", "multiclass", "weights", "missings")
+    )
+}
+```
+
+We only have specified a small subset of the available hyperparameters:
+
+* The complexity `"cp"` is numeric, its feasible range is `[0,1]`, it defaults to `0.01` and the parameter is used during `"train"`.
+* The complexity `"xval"` is integer, its lower bound `0`, its default is `0` and the parameter is also used during `"train"`. Note that we have changed the default here from `10` to `0` to save some computation time.
+  This is **not** done by setting a different `default` in `ParamInt$new()`, but instead by setting the value implicitly via `param_vals`.
+
+#### Train function {#learner-train}
+
+We continue the to adept the template for a `r ref("rpart::rpart()")` learner, and now tackle the `train()` function.
+The train function takes a `r ref("Task")` as input and must return an arbitrary model.
+First, we write something down that works completely without `mlr3`:
+
+```{r 90-extending-003}
+data = iris
+model = rpart::rpart(Species ~ ., data = iris, xval = 0)
+```
+
+In the next step, we replace the data frame `data` with a `r ref("Task")`:
+
+```{r 90-extending-004}
+task = mlr_tasks$get("iris")
+model = rpart::rpart(Species ~ ., data = task$data(), xval = 0)
+```
+
+The target variable `"Species"` is still hard-coded and specific to the task.
+This is unnecessary, as the information about the target variable is stored in the task:
+
+```{r 90-extending-005}
+task$target_names
+task$formula()
+```
+
+We can adapt our code accordingly:
+
+```{r 90-extending-006}
+model = rpart::rpart(task$formula(), data = task$data(), xval = 0)
+```
+
+The last thing missing is the handling of hyperparameters.
+Instead of the hard-coded `xval`, we query the hyperparameter settings from the `r ref("Learner")` itself.
+
+To illustrate this, we quickly construct the rpart learner from the `mlr3` package, and use the method `params()` to retrieve all actively set hyperparameters with tag `"train"`.
+
+```{r 90-extending-007}
+self = mlr_learners$get("classif.rpart")
+self$params("train")
+```
+
+To pass all hyperparameters returned by the `params()` method to the learner function, we recommend to use either `r ref("do.call")` or the function `r ref("mlr3misc::invoke()")`.
+
+```{r 90-extending-008}
+pars = self$params("train")
+model = mlr3misc::invoke(rpart::rpart, task$formula(),
+    data = task$data(), .args = pars)
+```
+
+In the final learner, `self` will reference the learner itself.
+In the last step, we wrap everything in a function.
+The model is stored in the learner `self` and `self` is returned.
+
+```{r 90-extending-009}
+train = function(task) {
+    pars = self$params("train")
+    self$model = mlr3misc::invoke(rpart::rpart, task$formula(),
+        data = task$data(), .args = pars)
+    self
+}
+```
+
+#### Predict function {#learner-predict}
+
+The predict function also operates on a `r ref("Task")` as well as on the model stored during `train()`.
+The return value is a `r ref("Prediction")` object which can be conveniently constructed with the learner method `$new_prediction()`.
+
+We proceed analogously to the section on the train function: We start with a version without any `mlr3` objects and continue to replace objects until we have reached the desired interface:
+
+```{r 90-extending-010}
+# inputs:
+task = mlr_tasks$get("iris")
+self = list(model = rpart::rpart(task$formula(), data = task$data()))
+
+data = iris
+response = predict(self$model, newdata = data, type = "class")
+prob = predict(self$model, newdata = data, type = "prob")
+```
+
+The `r ref("rpart::predict.rpart()")` function predicts class labels if argument `type` is set to to `"class"`, and class probabilities if set to `"prob"`.
+
+Next, we transition from `data` to a `task` again.
+Additionally, as we do not want to run the prediction twice, we differentiate what type of prediction is requested by querying the set predict type of the learner.
+
+```{r 90-extending-011, eval = FALSE}
+self$predict_type = "response"
+
+if (self$predict_type == "response") {
+  list(response = predict(self$model, newdata = task$data(), type = "class"))
+} else {
+  list(prob = predict(self$model, newdata = task$data(), type = "prob"))
+}
+```
+
+Finally, we replace the call to `list()` with a call to `$new_prediction()`.
+The complete `predict()` function then looks like this:
+
+```{r 90-extending-012, eval = FALSE}
+predict = function(task) {
+  if (self$predict_type == "response") {
+    response = predict(self$model, newdata = task$data(), type = "class")
+    self$new_prediction(task, response = response)
+  } else {
+    prob = predict(self$model, newdata = task$data(), type = "prob")
+    self$new_prediction(task, prob = prob)
+  }
+}
+```
+
+Note that if the learner would need to handle hyperparameters during the predict step, we would proceed accordingly to the `train()` step and use `self$params("predict")` in combination with `r ref("mlr3misc::invoke()")`.
+
+#### Final learner
+
+```{r 90-extending-013}
+LearnerClassifYourRpart = R6::R6Class("LearnerClassifYourRpart",
+  inherit = LearnerClassif,
+  public = list(
+    initialize = function(id = "classif.rpart") {
+      super$initialize(
+        id = id,
+        packages = "rpart",
+        feature_types = c("logical", "integer", "numeric", "factor"),
+        predict_types = c("response", "prob"),
+        param_set = paradox::ParamSet$new(
+          params = list(
+            paradox::ParamDbl$new(id = "cp", default = 0.01, lower = 0, upper = 1, tags = "train"),
+            paradox::ParamInt$new(id = "xval", default = 0L, lower = 0L, tags = "train")
+          )
+          ),
+        param_vals = list(xval = 0L),
+        properties = c("twoclass", "multiclass", "weights", "missings")
+      )
+    },
+
+    train = function(task) {
+      pars = self$params("train")
+      self$model = mlr3misc::invoke(rpart::rpart, task$formula(),
+        data = task$data(), .args = pars)
+      self
+    },
+
+    predict = function(task) {
+      if (self$predict_type == "response") {
+        response = predict(self$model, newdata = task$data(), type = "class")
+        self$new_prediction(task, response = response)
+      } else {
+        prob = predict(self$model, newdata = task$data(), type = "prob")
+        self$new_prediction(task, prob = prob)
+      }
+    }
+  )
+)
+
+lrn = LearnerClassifYourRpart$new()
+print(lrn)
+```
+
+To run some basic tests:
+
+```{r 90-extending-014}
+task = mlr_tasks$get("iris")
+e = Experiment$new(task, lrn)$train()$predict()$score()
+```
+
+To run a bunch of automatic tests, you may source some auxiliary scripts from the unit tests of `mlr3`:
+
+```{r 90-extending-015}
+helper = list.files(system.file("testthat", package = "mlr3"), pattern = "^helper.*\\.[rR]", full.names = TRUE)
+ok = lapply(helper, source)
+stopifnot(run_autotest(lrn))
+```
+
+### Tuners {#ext-tuner}
+
+The exemplary tuner function in this tutorial is called `blackBoxFun`.
+
+A new tuner consists of an **objective function** and settings.
+The first one is the heart of the tuner.
+It must fulfill the following requirements:
+
+- Run the `r ref("mlr3tuning::PerformanceEvaluator")` for the parameter value `x`.
+- Evaluate the `r ref("Learner")` using the given `r ref("Resampling")` object and add the `r ref("ResampleResult")` to the `r ref("BenchmarkResult")` object of the `r ref("mlr3tuning::PerformanceEvaluator")`.
+
+#### Objective function
+
+A possible implementation could look as follows:
+
+```{r 90-extending-016}
+blackBoxFun = function (x, pe) {
+  x = mlr3misc::set_names(x, nm = pe$param_set$ids())
+  pe$eval(x)
+  performance = unlist(pe$bmr$data[.N]$performance)[[1]]
+  if (! pe$task$measures[[1]]$minimize)
+    return (-performance)
+  return (performance)
+}
+```
+
+With `pe` being the `r ref("mlr3tuning::PerformanceEvaluator")` object, `blackBoxFun()` should be able to do the following (similar to `r ref("mlr3tuning::TunerRandom")` or `r ref("mlr3tuning::TunerGenSA")`)
+
+```{r 90-extending-017, eval = FALSE}
+blackBoxFun(c(cp = 0.05), pe)
+pe$bmr$aggregated()
+```
+
+#### Tuner class
+
+Now to actually call the optimizer using a dedicated R6 Tuner class, we add `blackBoxFun()` as a private method.
+This can either be done for an existing class or a new R6 Tuner class can be created.
+
+In this example we replace the private `.$tune_step()` method from `r ref("mlr3tuning::TunerGenSA")` with out new objective function that we defined above.
+
+```{r 90-extending-018}
+TunerGenSA = R6Class("TunerGenSA",
+  inherit = Tuner,
+  public = list(
+    GenSA_res = NULL,
+    initialize = function(pe, evals, ...) {
+      if (any(param_set$storage_type != "numeric")) {
+        stop("Parameter types needs to be numeric")
+      }
+      checkmate::assert_integerish(evals, lower = 1L)
+      super$initialize(id = "GenSA", pe = pe, terminator = TerminatorEvaluations$new(evals),
+        settings = list(max.call = evals, ...))
+    }
+  ),
+  private = list(
+    tune_step = function() {
+      blackBoxFun = function (x, pe) {
+        x = mlr3misc::set_names(x, nm = pe$param_set$ids())
+        pe$eval(x)
+        performance = unlist(pe$bmr$data[.N]$performance)[[1]]
+        if (! pe$task$measures[[1]]$minimize)
+          return (-performance)
+        return (performance)
+      }
+      self$GenSA_res = GenSA(fn = blackBoxFun, lower = self$pe$param_set$lower, upper = self$pe$param_set$upper,
+        control = self$settings, pe = self$pe)
+    }
+  )
+)
+```
+
+Note that the private method needs always be called `.$tune_step()` as it will be called from the `.$tune()` method of the `Tuner` class.
+
+#### Example
+
+Now that the "new" `r ref("mlr3tuning::TunerGenSA")` tuner has been defined, we can test it in a small use case:
+
+```{r 90-extending-019, error = T}
+# does not work currently
+task = mlr3::mlr_tasks$get("spam")
+learner = mlr3::mlr_learners$get("classif.rpart")
+learner$predict_type = "prob"
+resampling = mlr3::mlr_resamplings$get("holdout")
+measures = mlr3::mlr_measures$mget(c("classif.auc", "classif.ce"))
+param_set = paradox::ParamSet$new(
+  params = list(
+    paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)
+  )
+)
+
+pe = PerformanceEvaluator$new(task, learner, resampling, param_set)
+tuner = TunerGenSA$new(pe, 60L)
+tuner$tune()
+
+tuner$pe$bmr$aggregated()
+tuner$tune_result()
+str(tuner$GenSA_res)
 ```
