@@ -1,6 +1,6 @@
 update_db = function() {
   if (is.null(db$base) || is.null(db$aliases)) {
-    hdb = hsearch_db(package = c(db$index, db$hosted), types = "help")
+    hdb = hsearch_db(package = unique(c(db$index, db$hosted)), types = "help")
     db$base = setkeyv(as.data.table(hdb$Base), "ID")
     db$aliases = setkeyv(as.data.table(hdb$Aliases), "Alias")
   }
@@ -17,14 +17,15 @@ update_db = function() {
 #' @return (`character(1)`) markdown link.
 #' @export
 ref = function(topic, text = topic) {
+  strip_parenthesis = function(x) sub("\\(\\)$", "", x)
+
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
   checkmate::assert_string(text, min.chars = 1L)
 
-
   topic = trimws(topic)
-  strip_parenthesis = function(x) sub("\\(\\)$", "", x)
+  text = trimws(text)
 
-  if (grepl("::", topic, fixed = TRUE)) {
+  if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
     topic = parts[2L]
     name = strip_parenthesis(parts[2L])
@@ -85,6 +86,6 @@ mlr_pkg = function(pkg) {
 #' @export
 gh_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
-  parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
+  parts = strsplit(trimws(pkg), "/", fixed = TRUE)[[1L]]
   sprintf("[`%s`](https://github.com/%s)", parts[2L], pkg)
 }

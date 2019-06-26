@@ -43,13 +43,10 @@ You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
 
 ### Chunk Names
 
-Chunks should be named `[chapter-name]-id`, where id is some short description of what is happening.
-A nice helper package for this is [namer](https://github.com/lockedata/namer).
-If you added new chunks, simply run
+Chunks are named automatically as `[chapter-name]-#` by calling `name_chunks_mlr3book()`:
 
 ```r
-namer::unname_all_chunks("bookdown/<.Rmd file>")
-namer::name_chunks()("bookdown/<.Rmd file>")
+mlr3book::name_chunks_mlr3book()
 ```
 
 ### Blocks
@@ -63,6 +60,8 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 ```
 ````
 
-### Loading Namespaces
+### Spacing
 
-All Namespaces of required packages should be loaded in the setup chunk of `bookdown/index.Rmd`.
+- Always start a new sentence on a new line.
+- Always start a new sentence on a new line.
+- Put an empty line before and after code blocks.
