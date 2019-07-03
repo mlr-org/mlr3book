@@ -106,7 +106,7 @@ Tuning will stop as soon as one Terminator signals to be finished.
 In the following example we create two terminators and then combine them into one:
 
 ```{r 02-model-optimization-005}
-tr = TerminatorRuntime$new(max_time = 5, units = "secs")
+tr = TerminatorRuntime$new(5)
 te = TerminatorEvaluations$new(max_evaluations = 50)
 
 tm = TerminatorMultiplexer$new(list(te, tr))
@@ -260,13 +260,14 @@ Filter methods assign an importance value to each feature.
 Based on these values the features can be ranked and a feature subset can be selected.
 There is a list of all implemented filter methods in the [Appendix](#list-filters).
 
-#### Calculating the feature importance {#fs-calc}
+#### Calculating filter values {#fs-calc}
 
 Currently, only classification and regression tasks are supported.
 
 The first step it to create a new R object using the class of the desired filter method.
 Each object of class `Filter` has a `.$calculate()` method which calculates the ranking of the features.
-This function requires a `r ref("Task")` and returns the calculated values of each variable.
+This method can be executed manually but is also run implicitly in the background if the actual filter functions (`.$filter_nfeat()`, `.$filter_frac()`, `.$filter_cutoff()`) are executed.
+All functions require a `r ref("Task")` and return both the calculated filter values for all features and subset the supplied task:
 
 ```{r 02-model-optimization-014}
 library(mlr3featsel)
@@ -274,22 +275,68 @@ filter = FilterJMIM$new()
 
 task = mlr3::mlr_tasks$get("iris")
 filter$calculate(task)
+
 as.data.table(filter)
 ```
 
-The combination of single filter results is not yet supported.
+#### Combining filter values {#fs-comb}
+
+You can also combine multiple results from different algorithms into one filter using `.$combine()`.
+
+```{r 02-model-optimization-015}
+filter2 = FilterDISR$new()
+
+task = mlr3::mlr_tasks$get("iris")
+filter2$calculate(task)
+
+filter2$combine(filter)
+
+as.data.table(filter2)
+```
 
 #### Selecting a feature subset {#filter-subset}
 
-Instead of calculating the raw filter values, you can directly subset the task by using the member functions `.$filter_abs()`, `.$filter_perc()` and `.$filter_thresh()`.
+Instead of calculating the raw filter values, you can directly subset the task by using the member functions `.$filter_nfeat()`, `.$filter_frac()` and `.$filter_cutoff()`.
+These will also call `.$calculate()` implicitly in the background if it was not executed before.
 
-- `.$filter_abs()`: Keep a certain absolute number (abs) of features with highest importance.
-- `.$filter_perc()`: Keep a certain percentage (perc) of features with highest importance.
-- `.$filter_thresh()`: Keep all features whose importance exceeds a certain threshold value (threshold).
+- `.$filter_nfeat()`: Keep a certain absolute number (nfeat) of features with highest importance.
+- `.$filter_frac()`: Keep a certain percentage (frac) of features with highest importance.
+- `.$filter_cutoff()`: Keep all features whose importance exceeds a certain threshold value (cutoff).
 
-```{r 02-model-optimization-015}
-filter$filter_abs(task, 2)
+```{r 02-model-optimization-016}
+filter$filter_nfeat(task, 2)
 task$feature_names
+```
+
+#### Custom construction of filters {#filter-construction}
+
+While `Filter$new()` creates a new R6 object of the respective filter, multiple parameters can be passed during construction.
+There are two types of hyperparameters that can be supplied:
+
+- The parameters of the respective filter (if any)
+- The generic hyperparameters `nfeat`, `frac` and `thresh` that apply to every filter.
+
+To get an overview of which are set by default, take a look at the ParamSet of a filter:
+
+```{r}
+FilterDISR$new()$param_set
+```
+
+To set any of them during construction, use the `param_vals` argument.
+
+```{r}
+filter = FilterDISR$new(param_vals = list(nfeat = 2))
+```
+
+What has changed now? 
+The created `filter` object already knows of the desired value of `nfeat` if its member function `filter_nfeat()` is called on a task.
+
+```{r}
+filter$filter_nfeat(task)
+```
+
+```{block <name>, type='caution'}
+If you still pass a value for `nfeat` to `.$filter_nfeat()` it will be prioritized over the value set during construction.
 ```
 
 ### Wrapper Methods {#fs-wrapper}
@@ -309,7 +356,7 @@ For example, learner `classif.ranger` (in `r mlr_pkg("mlr3learners")` comes with
 See the help page of `r ref("ranger::ranger")`.
 To use method "impurity", you need to set it via the `param_vals` argument:
 
-```{r 02-model-optimization-016}
+```{r 02-model-optimization-017}
 library(mlr3learners)
 lrn = mlr_learners$get("classif.ranger",
   param_vals = list(importance = "impurity"))
@@ -317,7 +364,7 @@ lrn = mlr_learners$get("classif.ranger",
 
 Now you can use the `r ref("mlr3featsel::FilterEmbedded")` class for algorithm-embedded methods to filter a `r ref("Task")`.
 
-```{r 02-model-optimization-017}
+```{r 02-model-optimization-018}
 task = mlr_tasks$get("iris")
 filter = FilterEmbedded$new(learner = lrn)
 filter$calculate(task)
@@ -337,7 +384,7 @@ Work in progress :)
 In order to obtain unbiased performance estimates for a learners, all parts of the model building (preprocessing and model selection steps) should be included in the resampling, i.e., repeated for every pair of training/test data.
 For steps that themselves require resampling like hyperparameter tuning or feature-selection (via the wrapper approach) this results in two nested resampling loops.
 
-```{r 02-model-optimization-018, echo = FALSE}
+```{r 02-model-optimization-019, echo = FALSE}
 knitr::include_graphics("images/nested_resampling.png")
 ```
 
@@ -375,7 +422,7 @@ To optimize hyperparameters or conduct features-selection in a nested resampling
 
 We use the example from section ["Automating the Tuning"](#autotuner) and pipe the resulting learner into a `r ref("resample()")` call.
 
-```{r 02-model-optimization-019}
+```{r 02-model-optimization-020}
 task = mlr3::mlr_tasks$get("iris")
 learner = mlr3::mlr_learners$get("classif.rpart")
 resampling = mlr3::mlr_resamplings$get("holdout")
@@ -390,7 +437,7 @@ at = mlr3tuning::AutoTuner$new(learner, resampling, measures = measures, param_s
 
 Now construct the `r ref("resample()")` call:
 
-```{r 02-model-optimization-020}
+```{r 02-model-optimization-021}
 resampling_outer = mlr3::mlr_resamplings$get("cv3")
 
 rr = resample(task = task, learner = at, resampling = resampling_outer)
@@ -403,18 +450,18 @@ See also section [Resampling](#resampling) for more detailed information about `
 
 For example, we can query the aggregated performance result:
 
-```{r 02-model-optimization-021}
+```{r 02-model-optimization-022}
 rr$aggregate()
 ```
 
 Check for any errors in the folds during execution (if there is not output, warnings or errors recorded, this is an empty `data.table()`:
 
-```{r 02-model-optimization-022}
+```{r 02-model-optimization-023}
 rr$errors
 ```
 
 Or take a look at the confusion matrix of the joined predictions:
 
-```{r 02-model-optimization-023}
+```{r 02-model-optimization-024}
 rr$prediction$confusion
 ```
