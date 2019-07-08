@@ -1,21 +1,261 @@
 # Pipelines {#pipelines}
 
-## The Pipelines Operator {#pipe-operator}
+`r mlr_pkg("mlr3pipelines")` is a dataflow programming toolkit for machine learning in R utilizing the `r mlr_pkg("mlr3pipelines")` package. 
+Machine learning workflows can be written as directed “Graphs” that represent data flows between preprocessing, model fitting, and ensemble learning units in an expressive and intuitive language. 
+Using methods from the `r mlr_pkg("mlr3tuning")`, it is even possible to simultaneously optimize parameters of multiple processing units.
+
+## The Building Blocks: POs
+
+The building blocks of `r mlr_pkg("mlr3pipelines")` are **PipeOp**-objects (PO). 
+They can be constructed directly using `PipeOp<NAME>$new()`, but the recommended way is to retrieve them from the **`mlr_pipeops`** dictionary. 
+See `as.data.table(mlr_pipeops)` for a list and `?mlr_pipeops` for more details.
+
+```{r 03-pipelines-1}
+library("mlr3pipelines")
+as.data.table(mlr_pipeops)
+```
+
+## The Pipeline Operator {#pipe-operator}
+
+Single POs can be created using `mlr_pipeops$get(<name>)`.
+
+```{r 03-pipelines-2}
+pca = mlr_pipeops$get("pca")
+```
+
+Some POs require additional arguments for construction.  
+
+```{r eval = FALSE}
+learner = mlr_pipeops$get("learner")
+
+# Error in cast_from_dict(learner, "Learner", mlr_learners, clone, FALSE) : argument "learner" is missing, with no default
+```
+
+```{r 03-pipelines-3}
+learner = mlr_pipeops$get("learner",
+  learner = mlr3learners::LearnerRegrRanger$new())
+```
+
+Hyperparameters of POs can be set through the `param_vals` argument. 
+Here we set the fraction of features for a filter.
+
+```{r 03-pipelines-4}
+filter = mlr_pipeops$get("filter",
+  filter = mlr3featsel::FilterVariance$new(),
+  param_vals = list(filter.frac = 0.5))
+```
 
 ## Nodes, Edges and Graphs {#pipe-nodes-edges-graphs}
 
-## Graph Operators {#pipe-graph-operators}
+POs are combined into `Graph`s. 
+The manual way (= hard way) to construct a `Graph` is to create an empty one first, fill it with POs, and then connect **edges** between the POs.
+POs are identified by their **`$id`**. 
+Note that the operations all modify the object in-place and return the object itself, so multiple modifications can be chained.
 
-## Preprocessing {#pipe-preprocessing}
+For this example we use the "pca" PO defined above and a new PO named "mutate".
+The latter creates a new feature from existing variables.
+
+```{r 03-pipelines-5}
+mutate = mlr_pipeops$get("mutate")
+```
+
+```{r 03-pipelines-6}
+graph = Graph$new()$
+  add_pipeop(mutate)$
+  add_pipeop(filter)$
+  add_edge("mutate", "variance")  # add connection mutate -> filter
+```
+
+The much quicker way is to use the `%>>%` operator to chain POs or `Graph`s. 
+The same result as above can be achieved by doing
+
+```{r 03-pipelines-7}
+graph = mutate %>>% filter
+```
+
+Now the `Graph` can be inspected using its `$plot()` function:
+
+```{r 03-pipelines-8}
+#graph$plot(html = TRUE)
+```
+
+**Chaining multiple POs of the same kind**
+
+If multiple POs of the same kind should be chained it is necessary to change the id to avoid name clashes.
+This can be done by either accessing the `$id` slot or during construction.
+
+Here we tr is used on data both for processing and to build an internal model of the data (which can be inspected using `graph$pipeops$<PipeOp Name>$state`). 
+This model is used by the `$predict()` functions. 
+For example when doing feature filtering during model training, it is necessary to remove the same features from new prediction data. 
+Most POs handle data in the `mlr3` `Task` format, so the argument to `$train()` and `$predict()` is often a `Task`. 
+The output is always a list with as many elements as there are terminal nodes in the `Graph` (usually just one).
+
+```{r 03-pipelines-9}
+task = mlr_tasks$get("iris")  # the "iris" task
+task_processed = graph$train(task)[[1]]
+```
 
 ### Imputation
 
+### Advanced: Non-Linear Graphs {#pipe-nonlinear}
+
+The Graphs seen so far all have a linear structure. 
+Some POs may have multiple input or output channels.
+These make it possible to create non-linear Graphs with alternative paths taken by the data.
+
+Possible types are 
+
+- [Branching](#pipe-model-ensembles-branching): 
+  Splitting of a node into several paths, useful for example when comparing multiple feature-selection methods (pca, filters). 
+  Only one path will be executed.
+- [Copying](#pipe-model-ensembles-copying): 
+  Splitting of a node into several paths, all paths will be executed (sequentially). 
+  Parallel execution is not yet supported.
+- [Stacking](#pipe-model-ensembles-stacking): 
+  Single graphs are stacked onto each other, i.e. the output of one Graph is the input for another. 
+  In machine learning this means that the prediction of one Graph is used as input for another Graph.
+  
+All of these custom Graph representations are explained in more detail in section [Model Ensembles](#pipe-model-ensembles).
+
+## Modelling {#pipe-modelling}
+
+The main purpose of `Graph`s is to build combined preprocessing and model fitting pipelines that can be used as `mlr3` `Learner`s. 
+In the following we chain two preprocessing tasks 
+
+- mutate (creation of a new feature)
+- filter (filtering the dataset)
+
+and then chain a PO learner to train and predict on the modified dataset.
+
+```{r 03-pipelines-10}
+graph = mutate %>>% filter %>>%
+  mlr_pipeops$get("learner",
+    learner = mlr_learners$get("classif.rpart"))
+```
+
+Until here we defined the main pipeline stored in `graph`.
+Now we can train and predict the pipeline.
+
+```{r 03-pipelines-11}
+graph$train(task)
+graph$predict(task)
+```
+
+Rather than calling `$train()` and `$predict()` manually, we can put the pipeline `graph` into a `GraphLearner` object.
+A `GraphLearner` encapsulates the whole pipeline (including the preprocessing steps) and can be put into `resample()` or `benchmark()`.
+If you are familiar with the old _mlr_ package, this is the equivalent of all the `make*Wrapper()` functions.
+The pipeline being encapsulated (here `graph`) must always produce a `Prediction` with its `$predict()` call, so it will probably contain at least one `PipeOpLearner`.
+
+```{r 03-pipelines-12}
+glrn = GraphLearner$new(graph)
+```
+
+This learner can be used for model fitting, resampling, benchmarking, and tuning.
+
+```{r 03-pipelines-13}
+cv10 = mlr_resamplings$get("cv")
+resample(task, glrn, cv10)
+```
+
+### Setting hyperparameters {#pipe-hyperpars}
+
+Individual POs offer hyperparameters because they contain `$param_set` slots that can be read and written from `$param_set$values` (via the paradox package). 
+The parameters get passed down to the `Graph`, and finally to the `GraphLearner`.
+This makes it not only possible to easily change change the behavior of a `Graph` / `GraphLearner` and try different settings manually, but also to perform tuning using the mlr3tuning package.
+
+```{r 03-pipelines-14}
+glrn$param_set$values$variance.filter.frac = 0.25
+resample(task, glrn, cv10)
+```
+
+If you are unfamiliar with tuning in mlr3 yet, we recommend to take a look at the section about [tuning](#tuning) first.
+Here we define a ParamSet for the "rpart" learner and the "variance" filter which should be optimized during tuning.
+
+```{r 03-pipelines-15}
+library("paradox")
+ps = ParamSet$new(list(
+  ParamDbl$new("classif.rpart.cp", lower = 0, upper = 0.05),
+  ParamDbl$new("variance.filter.frac", lower = 0.25, upper = 1)
+))
+```
+
+After having defined the `PerformanceEvaluator`, a random search with 10 iterations is created.
+
+```{r 03-pipelines-16}
+library("mlr3tuning")
+pe = PerformanceEvaluator$new(task, glrn, cv10, "classif.ce", ps)
+tuner = TunerRandomSearch$new(pe, TerminatorEvaluations$new(10))
+tuner$tune()
+```
+
+The tuning result can be inspected using the `$tune_result()` method.
+
+```{r 03-pipelines-18}
+tuner$tune_result()
+```
+
 ## Model Ensembles {#pipe-model-ensembles}
 
-### Bagging
+The Graphs seen so far all have a linear structure. 
+Some POs may have multiple input or output channels.
+These make it possible to create non-linear Graphs with alternative paths taken by the data.
 
-### Stacking
+Possible types are 
 
-## Branching {#pipe-branching}
+- [Branching](#pipe-model-ensembles-branching): 
+  Splitting of a node into several paths, useful for example when comparing multiple feature-selection methods (pca, filters). 
+  Only one path will be executed.
+- [Copying](#pipe-model-ensembles-copying): 
+  Splitting of a node into several paths, all paths will be executed (sequentially). 
+  Parallel execution is not yet supported.
+- [Stacking](#pipe-model-ensembles-stacking): 
+  Single graphs are stacked onto each other, i.e. the output of one Graph is the input for another. 
+  In machine learning this means that the prediction of one Graph is used as input for another Graph.
+ 
+### Branching & Copying {#pipe-model-ensembles-branching-copying}
+
+The `PipeOpBranch` and `PipeOpUnbranch` POs make it possible to specify multiple alternative paths.
+Only one is actually executed, the others are ignored. 
+The active path is determined by a hyperparameter. 
+This concept makes it possible to tune alternative preprocessing paths (or learner models).
+
+`PipeOp(Un)Branch` is initialized either with the number of branches, or with a `character`-vector indicating the names of the branches. 
+If names are given, the "branch-choosing" hyperparameter becomes more readable.
+In the following, we set three options
+
+1. Doing nothing ("null")
+1. Applying a PCA
+1. Scaling the data
+
+It is important to "unbranch" again after "branching", so that the outputs are merged into one result objects.
+
+In the following we first create the branched graph and then show what happens if the "unbranching" is not applied.
+
+```{r}
+graph = mlr_pipeops$get("branch", c("null", "pca", "scale")) %>>%
+  gunion(list(
+      mlr_pipeops$get("null", id = "null1"),
+      mlr_pipeops$get("pca"),
+      mlr_pipeops$get("scale")
+  ))
+```
+
+Without "unbranching":
+
+```{r}
+graph$plot()
+```
+
+With "unbranching":
+
+```{r}
+(graph %>>%
+  mlr_pipeops$get("unbranch", c("null", "pca", "scale")))$plot()
+```
+
+### Stacking{#pipe-model-ensembles-stacking}
+
+### Bagging {#pipe-model-ensembles-bagging}
+
 
 ## Tuning {#pipe-tuning}
