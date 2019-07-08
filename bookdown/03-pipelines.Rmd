@@ -4,83 +4,294 @@
 knitr::opts_knit$set(root.dir = fs::dir_create(tempfile()))
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 library(visNetwork)
-```
-
-
-```{r}
 library(mlr3pipelines)
 ```
 
-## The Pipelines Operator {#pipe-operator}
+`r mlr_pkg("mlr3pipelines")` is a dataflow programming toolkit for machine learning in R utilizing the `r mlr_pkg("mlr3pipelines")` package. 
+Machine learning workflows can be written as directed “Graphs” that represent data flows between preprocessing, model fitting, and ensemble learning units in an expressive and intuitive language. 
+Using methods from the `r mlr_pkg("mlr3tuning")`, it is even possible to simultaneously optimize parameters of multiple processing units.
+
+## The Building Blocks: POs
+
+The building blocks of `r mlr_pkg("mlr3pipelines")` are **PipeOp**-objects (PO). 
+They can be constructed directly using `PipeOp<NAME>$new()`, but the recommended way is to retrieve them from the **`mlr_pipeops`** dictionary. 
+See `as.data.table(mlr_pipeops)` for a list and `?mlr_pipeops` for more details.
+
+```{r 03-pipelines-1}
+library("mlr3pipelines")
+as.data.table(mlr_pipeops)
+```
+
+## The Pipeline Operator {#pipe-operator}
+
+Single POs can be created using `mlr_pipeops$get(<name>)`.
+
+```{r 03-pipelines-2}
+pca = mlr_pipeops$get("pca")
+```
+
+Some POs require additional arguments for construction.  
+
+```{r eval = FALSE}
+learner = mlr_pipeops$get("learner")
+
+# Error in cast_from_dict(learner, "Learner", mlr_learners, clone, FALSE) : argument "learner" is missing, with no default
+```
+
+```{r 03-pipelines-3}
+learner = mlr_pipeops$get("learner",
+  learner = mlr3learners::LearnerRegrRanger$new())
+```
+
+Hyperparameters of POs can be set through the `param_vals` argument. 
+Here we set the fraction of features for a filter.
+
+```{r 03-pipelines-4}
+filter = mlr_pipeops$get("filter",
+  filter = mlr3featsel::FilterVariance$new(),
+  param_vals = list(filter.frac = 0.5))
+```
 
 ## Nodes, Edges and Graphs {#pipe-nodes-edges-graphs}
 
-## Graph Operators {#pipe-graph-operators}
+POs are combined into `Graph`s. 
+The manual way (= hard way) to construct a `Graph` is to create an empty one first, fill it with POs, and then connect **edges** between the POs.
+POs are identified by their **`$id`**. 
+Note that the operations all modify the object in-place and return the object itself, so multiple modifications can be chained.
 
-## Preprocessing {#pipe-preprocessing}
+For this example we use the "pca" PO defined above and a new PO named "mutate".
+The latter creates a new feature from existing variables.
+
+```{r 03-pipelines-5}
+mutate = mlr_pipeops$get("mutate")
+```
+
+```{r 03-pipelines-6}
+graph = Graph$new()$
+  add_pipeop(mutate)$
+  add_pipeop(filter)$
+  add_edge("mutate", "variance")  # add connection mutate -> filter
+```
+
+The much quicker way is to use the `%>>%` operator to chain POs or `Graph`s. 
+The same result as above can be achieved by doing
+
+```{r 03-pipelines-7}
+graph = mutate %>>% filter
+```
+
+Now the `Graph` can be inspected using its `$plot()` function:
+
+```{r 03-pipelines-8}
+#graph$plot(html = TRUE)
+```
+
+**Chaining multiple POs of the same kind**
+
+If multiple POs of the same kind should be chained it is necessary to change the id to avoid name clashes.
+This can be done by either accessing the `$id` slot or during construction.
+
+Here we tr is used on data both for processing and to build an internal model of the data (which can be inspected using `graph$pipeops$<PipeOp Name>$state`). 
+This model is used by the `$predict()` functions. 
+For example when doing feature filtering during model training, it is necessary to remove the same features from new prediction data. 
+Most POs handle data in the `mlr3` `Task` format, so the argument to `$train()` and `$predict()` is often a `Task`. 
+The output is always a list with as many elements as there are terminal nodes in the `Graph` (usually just one).
+
+```{r 03-pipelines-9}
+task = mlr_tasks$get("iris")  # the "iris" task
+task_processed = graph$train(task)[[1]]
+```
 
 ### Imputation
 
-## Model Ensembles {#pipe-model-ensembles}
+## Modelling {#pipe-modelling}
 
-We can leverage the different operations available to connect `PipeOps` to form very powerful graphs.
-This vignette introduces two such well-known structures, that allow us to enhance single learners
-to more powerful combinations.
+The main purpose of `Graph`s is to build combined preprocessing and model fitting pipelines that can be used as `mlr3` `Learner`s. 
+In the following we chain two preprocessing tasks 
+
+- mutate (creation of a new feature)
+- filter (filtering the dataset)
+
+and then chain a PO learner to train and predict on the modified dataset.
+
+```{r 03-pipelines-10}
+graph = mutate %>>% filter %>>%
+  mlr_pipeops$get("learner",
+    learner = mlr_learners$get("classif.rpart"))
+```
+
+Until here we defined the main pipeline stored in `graph`.
+Now we can train and predict the pipeline.
+
+```{r 03-pipelines-11}
+graph$train(task)
+graph$predict(task)
+```
+
+Rather than calling `$train()` and `$predict()` manually, we can put the pipeline `graph` into a `GraphLearner` object.
+A `GraphLearner` encapsulates the whole pipeline (including the preprocessing steps) and can be put into `resample()` or `benchmark()`.
+If you are familiar with the old _mlr_ package, this is the equivalent of all the `make*Wrapper()` functions.
+The pipeline being encapsulated (here `graph`) must always produce a `Prediction` with its `$predict()` call, so it will probably contain at least one `PipeOpLearner`.
+
+```{r 03-pipelines-12}
+glrn = GraphLearner$new(graph)
+```
+
+This learner can be used for model fitting, resampling, benchmarking, and tuning.
+
+```{r 03-pipelines-13}
+cv10 = mlr_resamplings$get("cv")
+resample(task, glrn, cv10)
+```
+
+### Setting hyperparameters {#pipe-hyperpars}
+
+Individual POs offer hyperparameters because they contain `$param_set` slots that can be read and written from `$param_set$values` (via the paradox package). 
+The parameters get passed down to the `Graph`, and finally to the `GraphLearner`.
+This makes it not only possible to easily change change the behavior of a `Graph` / `GraphLearner` and try different settings manually, but also to perform tuning using the mlr3tuning package.
+
+```{r 03-pipelines-14}
+glrn$param_set$values$variance.filter.frac = 0.25
+resample(task, glrn, cv10)
+```
+
+If you are unfamiliar with tuning in mlr3 yet, we recommend to take a look at the section about [tuning](#tuning) first.
+Here we define a ParamSet for the "rpart" learner and the "variance" filter which should be optimized during tuning.
+
+```{r 03-pipelines-15}
+library("paradox")
+ps = ParamSet$new(list(
+  ParamDbl$new("classif.rpart.cp", lower = 0, upper = 0.05),
+  ParamDbl$new("variance.filter.frac", lower = 0.25, upper = 1)
+))
+```
+
+After having defined the `PerformanceEvaluator`, a random search with 10 iterations is created.
+
+```{r 03-pipelines-16}
+library("mlr3tuning")
+pe = PerformanceEvaluator$new(task, glrn, cv10, "classif.ce", ps)
+tuner = TunerRandomSearch$new(pe, TerminatorEvaluations$new(10))
+tuner$tune()
+```
+
+The tuning result can be inspected using the `$tune_result()` method.
+
+```{r 03-pipelines-18}
+tuner$tune_result()
+```
+
+## Non-linear Graphs {#pipe-nonlinear}
+
+The Graphs seen so far all have a linear structure. 
+Some POs may have multiple input or output channels.
+These make it possible to create non-linear Graphs with alternative paths taken by the data.
+
+Possible types are 
+
+- [Branching](#pipe-model-ensembles-branching): 
+  Splitting of a node into several paths, useful for example when comparing multiple feature-selection methods (pca, filters). 
+  Only one path will be executed.
+- [Copying](#pipe-model-ensembles-copying): 
+  Splitting of a node into several paths, all paths will be executed (sequentially). 
+  Parallel execution is not yet supported.
+- [Stacking](#pipe-model-ensembles-stacking): 
+  Single graphs are stacked onto each other, i.e. the output of one Graph is the input for another. 
+  In machine learning this means that the prediction of one Graph is used as input for another Graph.
+ 
+### Branching & Copying {#pipe-model-ensembles-branching-copying}
+
+The `PipeOpBranch` and `PipeOpUnbranch` POs make it possible to specify multiple alternative paths.
+Only one is actually executed, the others are ignored. 
+The active path is determined by a hyperparameter. 
+This concept makes it possible to tune alternative preprocessing paths (or learner models).
+
+`PipeOp(Un)Branch` is initialized either with the number of branches, or with a `character`-vector indicating the names of the branches. 
+If names are given, the "branch-choosing" hyperparameter becomes more readable.
+In the following, we set three options
+
+1. Doing nothing ("null")
+1. Applying a PCA
+1. Scaling the data
+
+It is important to "unbranch" again after "branching", so that the outputs are merged into one result objects.
+
+In the following we first create the branched graph and then show what happens if the "unbranching" is not applied.
+
+```{r}
+graph = mlr_pipeops$get("branch", c("null", "pca", "scale")) %>>%
+  gunion(list(
+      mlr_pipeops$get("null", id = "null1"),
+      mlr_pipeops$get("pca"),
+      mlr_pipeops$get("scale")
+  ))
+```
+
+Without "unbranching":
+
+```{r}
+graph$plot()
+```
+
+With "unbranching":
+
+```{r}
+(graph %>>%
+  mlr_pipeops$get("unbranch", c("null", "pca", "scale")))$plot()
+```
+
+### Model Ensembles {#pipe-model-ensembles}
+
+We can leverage the different operations presented to connect POs to form powerful graphs.
 
 Before we go into details, we split the task into train
 and test indices.
 
 ```{r}
-  library(mlr3)
-  library(mlr3pipelines)
-  task = mlr_tasks$get("iris")
-  train.idx = sample(seq_len(task$nrow), 120)
-  test.idx = setdiff(seq_len(task$nrow), train.idx)
+task = mlr_tasks$get("iris")
+train.idx = sample(seq_len(task$nrow), 120)
+test.idx = setdiff(seq_len(task$nrow), train.idx)
 ```
 
+#### Bagging {#pipe-model-ensembles-bagging}
 
-### Bagging
-
-We first examine Bagging introduced by Breimann (1994).
-The basic idea is to create multiple predictors and then aggregate those to a single, more powerfull predictor.
+We first examine Bagging introduced by Breiman (1994).
+The basic idea is to create multiple predictors and then aggregate those to a single, more powerful predictor.
 
 > "... multiple versions are formed
 > by making bootstrap replicates of the learning set
 > and using these as new learning sets" (Breimann 1994)
 
 Bagging then aggregates a set of predictors by averaging (regression) or majority vote (classification).
-The idea behind bagging is, that a set of weak, but different predictors can be combined in order to arrive
-at a single, better predictor.
+The idea behind bagging is, that a set of weak, but different predictors can be combined in order to arrive at a single, better predictor.
 
 We can achieve this by downsampling our data before training a learner, repeating this for say $10$ times and then performing a majority vote on the predictions.
 
-
-First, we create a simple pipeline, that uses
-`PipeOpSubsample` before a `PipeOpLearner` is trained:
+First, we create a simple pipeline, that uses `PipeOpSubsample` before a `PipeOpLearner` is trained:
 
 ```{r}
-  single_pred = PipeOpSubsample$new(param_vals = list(frac = 0.7)) %>>%
-    PipeOpLearner$new(mlr_learners$get("classif.rpart"))
+single_pred = PipeOpSubsample$new(param_vals = list(frac = 0.7)) %>>%
+  PipeOpLearner$new(mlr_learners$get("classif.rpart"))
 ```
 
 We can now copy this operation $10$ times using `greplicate`.
 
 ```{r}
-  pred_set = greplicate(single_pred, 10L)
+pred_set = greplicate(single_pred, 10L)
 ```
 
 Afterwards we need to aggregate the 10 pipelines
 to form a single model:
 
 ```{r}
-  bagging = pred_set %>>%
-    PipeOpMajorityVote$new(innum = 10L)
+bagging = pred_set %>>%
+  PipeOpMajorityVote$new(innum = 10L)
 ```
 
 and plot again to see what happens:
 
 ```{r, fig.width=7.5}
-  bagging$plot(html = TRUE)
+bagging$plot(html = TRUE)
 ```
 
 This pipeline can again be used in conjunction with
@@ -88,214 +299,119 @@ This pipeline can again be used in conjunction with
 [mlr3::Learner].
 
 ```{r}
-  baglrn = GraphLearner$new(bagging)
-  baglrn$train(task, train.idx)
-  baglrn$predict(task, test.idx)
+baglrn = GraphLearner$new(bagging)
+baglrn$train(task, train.idx)
+baglrn$predict(task, test.idx)
 ```
 
-In conjunction with different `Backends`, this can be a very powerful tool, as in cases, where the data does not fully fit in memory, we can easily just obtain a fraction of the data for each learner from a `DataBaseBackend` and then aggregate predictions from all learners.
+In conjunction with different `Backends`, this can be a very powerful tool.
+In cases when the data does not fully fit in memory, we can obtain a fraction of the data for each learner from a `DataBaseBackend` and then aggregate predictions over all learners.
 
+#### Stacking {#pipe-model-ensembles-stacking}
 
-### Stacking
+Stacking (Wolpert, 1992) is another technique that can improve model performance. 
+The basic idea behind stacking is the use of predictions from one model as features for a subsequent model to possibly improve performance. 
 
-Stacking (Wolpert, 1992) is another technique that can improve model performance. The basic idea behind stacking is, that
-using predictions from one model as features of a subsequent model can possibly improve performance. 
+As an example we can train a decision tree and use the predictions from this model in conjunction with the original features in order to train an additional model on top.
 
-A very simple possibility would be to train a
-decision tree and use the predictions from this
-model in conjunction with the original features in order to train an additional model on top.
-The basic idea behind this is, that patterns a model detected in the data can be used by a higher level model, and thus result in a better performance.
+In order to limit overfitting, we additionally do not predict on the original predictions of the learner, but instead on out-of-bag predictions. 
+To do all this, we can use `PipeOpLearnerCV`.
 
-In order to limit overfitting, we additionally do not predict on
-the original predictions of the learner, but instead on out-of-bag predictions. This is implemented in `PipeOpLearnerCV`.
+`PipeOpLearnerCV` performs nested cross-validation on the training data, fitting a model in each fold. 
+Each of the models is then used to predict on the out-of-fold data. 
+As a result, we obtain predictions for every data point in our input data.
 
-`PipeOpLearnerCV` performs nested cross-validation on the training data, fitting
-a model in each fold. Each of the models is then used to predict on the out-of-fold
-data. As a result, we obtain predictions for every data point in our input data.
-
-We first create a level $0$ learner, which is used to
-extract a lower level prediction.
-We additionally `clone()` the learner object to obtain a copy
-of the learner, and set a custom id for the `PipeOp`.
+We first create a "level 0" learner, which is used to extract a lower level prediction.
+We additionally `clone()` the learner object to obtain a copy of the learner, and set a custom id for the `PipeOp`.
 
 ```{r}
-  lrn = mlr_learners$get("classif.rpart")
-  lrn_0 = PipeOpLearnerCV$new(lrn$clone())
-  lrn_0$id = "rpart_cv"
+lrn = mlr_learners$get("classif.rpart")
+lrn_0 = PipeOpLearnerCV$new(lrn$clone())
+lrn_0$id = "rpart_cv"
 ```
 
-Additionally, we use a `PipeOpNULL` in parallel to
-the level 0 learner, in order to send the unchanged
-Task to the next level, where it is then combined with the 
-predictions from our decision tree learner.
+Additionally, we use a `PipeOpNULL` in parallel to the "level 0" learner, in order to send the unchanged Task to the next level, where it is then combined with the predictions from our decision tree learner.
 
 ```{r}
-  level_0 = gunion(list(lrn_0, PipeOpNULL$new()))
+level_0 = gunion(list(lrn_0, PipeOpNULL$new()))
 ```
 
-Afterwards, we want to concatenate the predictions from
-`PipeOpLearnerCV` and the original Task using `PipeOpFeatureUnion`.
+Afterwards, we want to concatenate the predictions from `PipeOpLearnerCV` and the original Task using `PipeOpFeatureUnion`.
 
 ```{r}
-  combined = level_0 %>>% PipeOpFeatureUnion$new(2)
+combined = level_0 %>>% PipeOpFeatureUnion$new(2)
 ```
 
-We can now train another learner on top of the combined
-features.
+We can now train another learner on top of the combined features.
 
 ```{r, fig.width=7.5}
-  stack = combined %>>% PipeOpLearner$new(lrn$clone())
-  stack$plot(html = TRUE)
+stack = combined %>>% PipeOpLearner$new(lrn$clone())
+stack$plot(html = TRUE)
 ```
 
 ```{r}
-  stacklrn = GraphLearner$new(stack)
-  stacklrn$train(task, train.idx)
-  stacklrn$predict(task, test.idx)
+stacklrn = GraphLearner$new(stack)
+stacklrn$train(task, train.idx)
+stacklrn$predict(task, test.idx)
 ```
 
-In this vignette, we only showcase a very simple usecase for stacking.
-In many real-world applications, stacking is done for multiple levels and on multiple representations of the dataset. On a lower level, different preprocessing methods can for example
-be defined in conjunction with several learners. On a higher level, we can then combine
-those predictions in order to form a very powerfull model.
-
-
+In this vignette, we showed a very simple usecase for stacking.
+In many real-world applications, stacking is done for multiple levels and on multiple representations of the dataset. 
+On a lower level, different preprocessing methods can be defined in conjunction with several learners. 
+On a higher level, we can then combine those predictions in order to form a very powerful model.
 
 #### Multilevel Stacking
 
-In order to showcase the power of `mlr3pipelines`, we will quickly introduce a more complicated
-stacking example.
+In order to showcase the power of `mlr3pipelines`, we will show a more complicated stacking example.
 
-In this case, we train a **glmnet** and 2 different *rpart* models (some transform its inputs using `PipeOpPCA`) on our task in the level 0 and concatenate them with the original features (via `PipeOpNull`).
-This is then passed on to level 1, where we copy the concatenated features
-$3$ times and put this task into a **rpart** and a **glmnet** model.
-Additionally, we also keep a version of the level 0 output (via `PipeOpNull`) and pass this on to level 2. In level 2 we simply concatenate all level 1 outputs and train a final decision tree.
-
+In this case, we train a _glmnet_ and 2 different _rpart_ models (some transform its inputs using `PipeOpPCA`) on our task in the "level 0" and concatenate them with the original features (via `PipeOpNull`).
+The result is then passed on to "level 1", where we copy the concatenated features 3 times and put this task into a _rpart_ and a _glmnet_ model.
+Additionally, we keep a version of the "level 0" output (via `PipeOpNull`) and pass this on to "level 2". 
+In "level 2" we simply concatenate all "level 1" outputs and train a final decision tree.
 
 ```{r, eval = FALSE}
-  library(mlr3learners)
-  rprt = mlr_learners$get("classif.rpart")
-  rprt$predict_type = "prob"
-  glmn = mlr_learners$get("classif.glmnet")
-  glmn$predict_type = "prob"
+rprt = mlr_learners$get("classif.rpart")
+rprt$predict_type = "prob"
+glmn = mlr_learners$get("classif.glmnet")
+glmn$predict_type = "prob"
 
-  #  Create Learner CV Operators
-  lrn_0 = PipeOpLearnerCV$new(rprt, id = "rpart_cv_1")
-  lrn_0$values$maxdepth = 5L
-  lrn_1 = PipeOpPCA$new(id = "pca1") %>>% PipeOpLearnerCV$new(rprt, id = "rpart_cv_2")
-  lrn_1$values$maxdepth = 1L
-  lrn_2 = PipeOpPCA$new(id = "pca2") %>>% PipeOpLearnerCV$new(glmn)
+#  Create Learner CV Operators
+lrn_0 = PipeOpLearnerCV$new(rprt, id = "rpart_cv_1")
+lrn_0$values$maxdepth = 5L
+lrn_1 = PipeOpPCA$new(id = "pca1") %>>% PipeOpLearnerCV$new(rprt, id = "rpart_cv_2")
+lrn_1$values$maxdepth = 1L
+lrn_2 = PipeOpPCA$new(id = "pca2") %>>% PipeOpLearnerCV$new(glmn)
 
-  # Union them with a PipeOpNULL to keep original features
-  level_0 = gunion(list(lrn_0, lrn_1,lrn_2, PipeOpNULL$new(id = "NULL1")))
+# Union them with a PipeOpNULL to keep original features
+level_0 = gunion(list(lrn_0, lrn_1,lrn_2, PipeOpNULL$new(id = "NULL1")))
 
-  # Cbind the output 3 times, train 2 learners but also keep level
-  # 0 predictions
-  level_1 = level_0 %>>%
-    PipeOpFeatureUnion$new(4) %>>%
-    PipeOpCopy$new(3) %>>%
-    gunion(list(
-      PipeOpLearnerCV$new(rprt, id = "rpart_cv_l1"),
-      PipeOpLearnerCV$new(glmn, id = "glmnt_cv_l1"),
-      PipeOpNULL$new(id = "NULL_l1")
-    ))
+# Cbind the output 3 times, train 2 learners but also keep level
+# 0 predictions
+level_1 = level_0 %>>%
+  PipeOpFeatureUnion$new(4) %>>%
+  PipeOpCopy$new(3) %>>%
+  gunion(list(
+    PipeOpLearnerCV$new(rprt, id = "rpart_cv_l1"),
+    PipeOpLearnerCV$new(glmn, id = "glmnt_cv_l1"),
+    PipeOpNULL$new(id = "NULL_l1")
+  ))
 
-  # Cbind predicitions, train a final learner.
-  level_2 = level_1 %>>%
-    PipeOpFeatureUnion$new(3, id = "u2") %>>%
-    PipeOpLearner$new(rprt,
-      id = "rpart_l2")
+# Cbind predicitions, train a final learner.
+level_2 = level_1 %>>%
+  PipeOpFeatureUnion$new(3, id = "u2") %>>%
+  PipeOpLearner$new(rprt,
+    id = "rpart_l2")
 
-  # Plot the resulting graph
-  level_2$plot(html = TRUE)
+# Plot the resulting graph
+level_2$plot(html = TRUE)
 
-  task = mlr_tasks$get("iris"),
-  lrn = GraphLearner$new(level_2)
+task = mlr_tasks$get("iris"),
+lrn = GraphLearner$new(level_2)
 
-  lrn$
-    train(task, train.idx)$
-    predict(task, test.idx)$
-    score()
-```
-
-## Branching {#pipe-branching}
-
-Consider a scenario, in which there are different options for a given modeling step.
-A researcher might, in an initial step want to try different options for this.
-This can be done by specifying **branching** and **unbranching** operators.
-In the long term, this also allows to tune over a conditional space, i.e. to learn which preprocessing options make sense
-for our data.
-
-We will investigate the inner workings of a Graph containing conditional operations in this chapter.
-
-In this example we consider three options for preprocessing our data before we train a model. In a first step we define the different preprocessing steps:
-We will consider scaling the data, transforming it using PCA, or not transforming the data at all (using `PipeOpNULL`).
-
-The `gunion` function puts PO's in parallel to each other. This means they are currently not connected to each other, but will
-instead all be connected to a preceding operator.
-
-```{r}
-op1 = PipeOpScale$new()
-op2 = PipeOpPCA$new()
-op3 = PipeOpNULL$new()
-opts = gunion(list(op1, op2, op3))
-```
-
-Additionally, we create the learner `PipeOp`, we want to use after transformation.
-
-```{r}
-polrn = PipeOpLearner$new(mlr_learners$get("classif.rpart"))
-```
-
-In order to create a mental image of our Pipeline, we have to consider, how the data flows through our
-computational graph. In case we simply want  to do scaling, our pipeline would look like this:
-
-```{r}
-(op1 %>>% polrn)$plot(html=TRUE)
-```
-
-If we want to actively select one `PipeOp` in a set, we need to add a `PipeOp` that orchestrates the selection of
-the following `PipeOp` using `PipeOpBranch`. 
-
-After choosing one `PipeOp`, all not-selected operators simply recieve a `NO_OP` object.
-We can now collect the activated/deactivated `PipeOp`s again using `PipeOpUnBranch`.
-This will become clearer in a short example.
-
-### PipeOpBranch
-
-We create a `PipeOpBranch` that let's us select one of
-the following $3$ operators. We have to initialize
-this `PipeOp` with the number of output branches.
-
-```{r}
-po_b = PipeOpBranch$new(3)
-```
-
-This can be connected to the different preprocessing features.
-
-```{r}
-g = po_b %>>% opts
-```
-
-### PipeOpUnbranch
-
-In order to collect the different inputs again, we use the
-`PipeOpUnbranch` operator. Again, we have to initialize this
-operator with the number of inputs it expects.
-
-```{r}
-po_ub = PipeOpUnbranch$new(3)
-```
-
-```{r}
-g = g %>>% po_ub
-```
-
-We can visualize the resulting graph before diving into a
-more detailed explanation.
-
-```{r}
-g$plot(html = TRUE)
+lrn$
+  train(task, train.idx)$
+  predict(task, test.idx)$
+  score()
 ```
 
 ## Tuning {#pipe-tuning}
