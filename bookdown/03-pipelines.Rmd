@@ -31,6 +31,9 @@ Additionally, we implement several meta operators that can be used to construct 
 knitr::include_graphics("images/mlr3pipelines.png")
 ```
 
+
+An extensive introduction to creating custom **PipeOps** (PO's) can be found in the [technical introduction](#extending-pipes).
+
 Using methods from `r mlr_pkg("mlr3tuning")`, it is even possible to simultaneously optimize parameters of multiple processing units.
 
 A predecessor to this package is the [mlrCPO](https://github.com/mlr-org/mlrCPO) package, which works with mlr 2.x.
@@ -47,8 +50,6 @@ library("mlr3pipelines")
 as.data.table(mlr_pipeops)
 ```
 
-## The Pipeline Operator {#pipe-operator}
-
 Single POs can be created using `mlr_pipeops$get(<name>)`.
 
 ```{r 03-pipelines-004}
@@ -63,9 +64,8 @@ learner = mlr_pipeops$get("learner")
 # Error in cast_from_dict(learner, "Learner", mlr_learners, clone, FALSE) : argument "learner" is missing, with no default
 ```
 
-```{r 03-pipelines-006}
-learner = mlr_pipeops$get("learner",
-  learner = mlr3learners::LearnerRegrRanger$new())
+```{r 03-pipelines-005}
+learner = mlr_pipeops$get("learner", mlr_learners$get("classif.ranger"))
 ```
 
 Hyperparameters of POs can be set through the `param_vals` argument.
@@ -75,6 +75,17 @@ Here we set the fraction of features for a filter.
 filter = mlr_pipeops$get("filter",
   filter = mlr3featsel::FilterVariance$new(),
   param_vals = list(filter.frac = 0.5))
+```
+
+## The Pipeline Operator: `%>>%` {#pipe-operator}
+
+Although it is possible to create intricate `Graphs` with edges going all over the place (as long as no loops are introduced), there is usually a clear direction of flow between "layers" in the `Graph`.
+It is therefore convenient to build up a `Graph` from layers, which can be done using the **`%>>%`** ("double-arrow") operator.
+It takes either a `PipeOp` or a `Graph` on each of its sides and connects all of the outputs of its left-hand side to one of the inputs each of its right-hand side--the number of inputs therefore must match the number of outputs.
+
+```{r}
+gr = mlr_pipeops$get("scale") %>>% mlr_pipeops$get("pca")
+gr$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 ## Nodes, Edges and Graphs {#pipe-nodes-edges-graphs}
@@ -107,8 +118,8 @@ graph = mutate %>>% filter
 
 Now the `r ref("Graph")`  can be inspected using its `$plot()` function:
 
-```{r 03-pipelines-011}
-graph$plot(html = TRUE)
+```{r 03-pipelines-010}
+graph$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 **Chaining multiple POs of the same kind**
@@ -252,15 +263,16 @@ graph = mlr_pipeops$get("branch", c("null", "pca", "scale")) %>>%
 
 Without "unbranching":
 
-```{r 03-pipelines-023}
-graph$plot(html = TRUE)
+```{r 03-pipelines-022}
+graph$plot(html = TRUE) %>%
+  visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 With "unbranching":
 
-```{r 03-pipelines-024}
-(graph %>>%
-  mlr_pipeops$get("unbranch", c("null", "pca", "scale")))$plot(html = TRUE)
+```{r 03-pipelines-023}
+(graph %>>% mlr_pipeops$get("unbranch", c("null", "pca", "scale")))$plot(html = TRUE) %>%
+  visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 ### Model Ensembles {#pipe-model-ensembles}
@@ -313,8 +325,9 @@ bagging = pred_set %>>%
 
 and plot again to see what happens:
 
-```{r 03-pipelines-029, fig.width=7.5}
-bagging$plot(html = TRUE)
+```{r 03-pipelines-028, fig.width=7.5}
+bagging$plot(html = TRUE) %>%
+  visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 This pipeline can again be used in conjunction with
@@ -368,7 +381,7 @@ We can now train another learner on top of the combined features.
 
 ```{r 03-pipelines-034, fig.width=7.5}
 stack = combined %>>% PipeOpLearner$new(lrn$clone())
-stack$plot(html = TRUE)
+stack$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 ```{r 03-pipelines-035}
@@ -425,7 +438,7 @@ level_2 = level_1 %>>%
     id = "rpart_l2")
 
 # Plot the resulting graph
-level_2$plot(html = TRUE)
+level_2$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
 
 task = mlr_tasks$get("iris"),
 lrn = GraphLearner$new(level_2)
@@ -452,11 +465,11 @@ poi = PipeOpImpute$new(param_vals =
   list(method_num = "hist", method_fct = "sample", add_dummy = "all"))
 ```
 
-We can then add a learner to the PipeOp to obtain a learner equipped with automatic
-imputation.
+A learner can thus be equipped with automatic imputation of missing values by adding an imputation Pipeop.
 
-```{r 03-pipelines-038}
-lrn = GraphLearner$new(poi %>% PipeOpLearner$new(mlr_learners$get("rpart")))
+```{r}
+polrn = PipeOpLearner$new(mlr_learners$get("classif.rpart"))
+lrn = GraphLearner$new(graph = poi %>>% polrn)
 ```
 
 ### Feature Engineering: `r ref("PipeOpMutate")`
@@ -467,6 +480,8 @@ In this example, we compute some new features on top of the `iris` task and add 
 
 ```{r 03-pipelines-039}
 pom = PipeOpMutate$new()
+
+# Define a set of mutations
 mutations = alist(
   Sepal.Sum = Sepal.Length + Sepal.Width,
   Petal.Sum = Petal.Length + Petal.Width,
@@ -498,7 +513,7 @@ We can now connect the different operators and visualize the full graph:
 
 ```{r 03-pipelines-042, fig.width=7.5, fig.height = 9}
 pipeline = chks %>>% lrns %>>% mjv
-pipeline$plot(html = TRUE)
+pipeline$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
 ```
 
 ```{r 03-pipelines-043}
