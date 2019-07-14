@@ -54,6 +54,7 @@ Afterwards, we convert the zipcode to a factor:
 house_sales_prediction$zipcode = as.factor(house_sales_prediction$zipcode)
 ```
 
+
 Add a new column **renovated** indicating whether a house was renovated at some point.
 
 ```{r}
@@ -67,6 +68,14 @@ Additionaly, we convert the price from Dollar to 1000 Dollar to improve readabil
 ```{r}
 house_sales_prediction$price = house_sales_prediction$price / 1000
 ```
+
+We can now plot the density of the **price** to get some impression on its distribution.
+
+```{r}
+library(ggplot2)
+ggplot(house_sales_prediction, aes(x = price)) + geom_density()
+```
+
 
 Feature engineering often allows us to incorporate additional knowledge about the data
 and underlying processes. This can often greatly enhance predictive performance. Knowledge about the data, for example that if a house has `yr_renovated == 0` means that the house has not been renovated can thus be incorporated. Additionally we want to
@@ -118,12 +127,12 @@ The task is cloned before we select features in order to keep the original task 
 
 ```{r}
 # Variables associated with quality
-autoplot(tsk$clone()$select(tmptsk$feature_names[c(3, 17)]),
+autoplot(tsk$clone()$select(tsk$feature_names[c(3, 17)]),
   type = "pairs")
 ```
 
 ```{r}
-autoplot(tsk$clone()$select(tmptsk$feature_names[c(9:12)]),
+autoplot(tsk$clone()$select(tsk$feature_names[c(9:12)]),
   type = "pairs")
 ```
 
@@ -134,6 +143,7 @@ In `mlr3`, we do not create `train` and `test` data sets, but instead keep only
 a vector of train and test indices.
 
 ```{r}
+set.seed(4411)
 train.idx = sample(seq_len(tsk$nrow), 0.7 * tsk$nrow)
 test.idx = setdiff(seq_len(tsk$nrow), train.idx)
 ```
@@ -184,32 +194,57 @@ two plots.
 As a result, we might want to indeed use the **zipcode** column in our future endeavours.
 
 
-### A first baseline:  Decision Tree
+### A first baseline: Decision Tree
 
 After getting an initial idea for our data, we might want to construct a first 
 well-performing baseline, in order to see what a simple model already can achieve.
 
-We use `resample` with `10-fold Cross-Validation` on our training data in order to get a reliable estimate of the algorithm's performance on future data.
+We use `resample` with `3-fold Cross-Validation` on our training data in order to get a reliable estimate of the algorithm's performance on future data.
 
-We first load the `mlr3learners` package, where **rpart** is stored. Afterwards we get the learner. For the cross-validation we only use the **training data** by cloning the task and selecting only observations from the training set.
+
+Before we start with defining and training learners, we create a `r ref("Resmapling")`
+in order to make sure that we always compare on exactly the same data.
 
 ```{r}
 library(mlr3learners)
-lrn_ranger = mlr_learners$get("regr.rpart")
-res = resample(task = tsk$clone()$filter(train.idx), lrn_ranger, "cv3")
+cv3 = mlr_resamplings$get("cv3")
+cv3$instantiate(tsk$clone()$filter(train.idx))
+```
+
+For the cross-validation we only use the **training data** by cloning the task and selecting only observations from the training set.
+
+```{r}
+lrn_rpart = mlr_learners$get("regr.rpart")
+res = resample(task = tsk$clone()$filter(train.idx), lrn_rpart, cv3)
+res$performance("regr.mse")
+sprintf("RMSE of the simple rpart: %s", round(sqrt(res$aggregate()), 2))
+```
+
+### Many Trees: Random Forest
+
+We might be able to improve upon the **RMSE**.
+We first load the `mlr3learners` package, which contains **ranger**.
+
+```{r}
+lrn_ranger = mlr_learners$get("regr.ranger")
+res = resample(task = tsk$clone()$filter(train.idx), lrn_ranger, cv3)
 res$performance("regr.mse")
 sprintf("RMSE of the simple ranger: %s", round(sqrt(res$aggregate()), 2))
 ```
+
+Oftentimes tuning **RandomForest** methods does not increase predictive performances drastically. If time permits, it can nonetheless lead to improvements and should thus be tried out. In this case, we resort to tune a different kind of model: **Gradient Boosted Decision Trees** from the package `r pkg("xgboost")` instead.
+Those models often outperform **Random Forests** but on the other hand require extensive tuning.
 
 ### A better baseline: `AutoTuner`
 
 Tuning can often further improve the performance. In this case, we test a *tuned* xgboost model and check whether this can improve performance.
 For the `AutoTuner` we have to specify a **Termination Criterion** (how long the tuning should run) a **Tuner** (which tuning method to use) and a **ParamSet** (which space we might want to search through).
-For now we do not use the **zipcode** column, as **xgboost** can not naturally
+For now we do not use the **zipcode** column, as `r pkg("xgboost")` can not naturally
 deal with categorical features. 
 The **AutoTuner** automatically performs nested Cross-Validation.
 
 ```{r}
+set.seed(444L)
 library(mlr3tuning)
 library(paradox)
 lrn_xgb = mlr_learners$get("regr.xgboost")
@@ -217,12 +252,12 @@ lrn_xgb = mlr_learners$get("regr.xgboost")
 # Define the ParamSet
 ps = ParamSet$new(
   params = list(
-    ParamDbl$new(id = "eta", lower = 0, upper = .8),
-    ParamDbl$new(id = "min_child_weight", lower = 0, upper = 100),
-    ParamDbl$new(id = "subsample", lower = .5, upper = 1),
-    ParamDbl$new(id = "colsample_bytree",  lower = .6, upper = 1),
-    ParamDbl$new(id = "colsample_bylevel", lower = .6, upper = 1),
-    ParamInt$new(id = "nrounds", lower = 1L, upper = 10)
+    ParamDbl$new(id = "eta", lower = 0.2, upper = .4),
+    ParamDbl$new(id = "min_child_weight", lower = 1, upper = 20),
+    ParamDbl$new(id = "subsample", lower = .7, upper = .8),
+    ParamDbl$new(id = "colsample_bytree",  lower = .9, upper = 1),
+    ParamDbl$new(id = "colsample_bylevel", lower = .5, upper = .7),
+    ParamInt$new(id = "nrounds", lower = 1L, upper = 50)
 ))
 
 # Define the Terminator
@@ -230,20 +265,86 @@ terminator = TerminatorEvaluations$new(20)
 at = AutoTuner$new(lrn_xgb, "cv3", measures = "regr.mse", ps,
   terminator, tuner = TunerRandomSearch, tuner_settings = list())
 
-res = resample(tsk_nozip$clone()$filter(train.idx), at, "cv3")
+res = resample(tsk_nozip$clone()$filter(train.idx), at, cv3)
 res$performance("regr.mse")
 sprintf("RMSE of the tuned xgboost: %s", round(sqrt(res$aggregate()), 2))
 ```
 
-### Constructing a Pipeline for Encoding
+We can obtain the resulting params in the respective splits by accessing the 
+`r ref("ResampleResult")`.
 
-In order to transform categorical features for **xgboost**, we construct **Pipelines** that solve this problem for us. **PipeOpEncode** replaces categorical features with its One-Hot encoded counterpart before passing the data on to the learner.
-For more information on Pipelines, consider the respective sections in the book.
+```{r}
+sapply(res$learners, function(x) x$param_set$values)
+```
+
+In order to get fast results, we decide to tune only parts of the hyperparameter space that can be adjusted for `r pkg("xgboost")`. Additionally, we only allow for 
+$20$ iterations of random search, which is usually to little for real-world applications. Nonetheless, we are able to obtain an improved performance when comparing to the `r pkg("ranger")` model.
+
+In order to further improve our results we have several options:
+
+- Find or Engineer better features
+- Obtain additional data (often prohbitive)
+- Try more models
+- Removing Features to avoid overfitting
+- Improve the tuning
+  - Increase the tuning budget
+  - Enlarge the tuning search space
+- Stacking and Ensembleing (See Pipelines!)
+
+Below we will investigate some of those possibilities and investigate whether this improves performance.
+
+### Engineer better Features: Deal with ZIP-Codes
+
+In order to better cluster the zip codes, we compute a new feature: **med_price**:
+It computes the median price in each zip-code.
+
+```{r}
+# Create a new feature and append it to the task
+zip_price = house_sales_prediction[, .(med_price = median(price)),by = zipcode]
+
+# Join on the original data to match with original columns, then cbind to the task
+tsk$cbind(house_sales_prediction[zip_price, on="zipcode"][,"med_price"])
+```
+
+```{r}
+lrn_ranger = mlr_learners$get("regr.ranger")
+res = resample(task = tsk$clone()$filter(train.idx), lrn_ranger, cv3)
+res$performance("regr.mse")
+sprintf("RMSE of ranger with med_price: %s", round(sqrt(res$aggregate()), 2))
+```
+
+### Obtaining a sparser model
+
+```{r}
+library(mlr3featsel)
+filter = FilterMRMR$new()
+tsk_ftsel = filter$filter_nfeat(tsk$clone(), nfeat = 14)
+```
+
+```{r}
+lrn_ranger = mlr_learners$get("regr.ranger")
+res = resample(task = tsk_ftsel$clone()$filter(train.idx), lrn_ranger, cv3)
+res$performance("regr.mse")
+sprintf("RMSE of ranger with zip_status: %s", round(sqrt(res$aggregate()), 2))
+```
+
+
+<!--
+#### Constructing a Pipeline for Encoding
+
+**FIXME: This currently breaks due to a Bug in AutoTune()**
+
+Below we will use a **Pipeline** from the `r mlr_pkg("mlr3pipelines")` package to 
+equip our xgboost learner with a `PipeOpEncode`. This allows the learner to automatically transform categorical features before training an **xgboost** 
+mode.
+**PipeOpEncode** replaces categorical features with its One-Hot encoded counterpart before passing the data on to the learner.
+For more information on Pipelines, consider the sections on  **Pipelines** in the book.
 
 ```{r}
 library(mlr3pipelines)
-lrn_pipe = GraphLearner$new(PipeOpEncode$new(param_vals = list(method = "one-hot"))
-  %>>% PipeOpLearner$new(lrn_xgb),
+lrn_pipe = GraphLearner$new(
+  PipeOpEncode$new(param_vals = list(method = "one-hot")) %>>%
+  PipeOpLearner$new(lrn_xgb),
   task_type = "regr")
 ```
 
@@ -252,18 +353,18 @@ lrn_pipe = GraphLearner$new(PipeOpEncode$new(param_vals = list(method = "one-hot
 # Define the ParamSet
 ps = ParamSet$new(
   params = list(
-    ParamDbl$new(id = "regr.xgboost.eta", lower = 0, upper = .8),
-    ParamDbl$new(id = "regr.xgboost.min_child_weight", lower = 0, upper = 100),
-    ParamDbl$new(id = "regr.xgboost.subsample", lower = .5, upper = 1),
-    ParamDbl$new(id = "regr.xgboost.colsample_bytree",  lower = .6, upper = 1),
-    ParamDbl$new(id = "regr.xgboost.colsample_bylevel", lower = .6, upper = 1),
-    ParamInt$new(id = "regr.xgboost.nrounds", lower = 1L, upper = 10)
+    ParamDbl$new(id = "regr.xgboost.eta", lower = .2, upper = .4),
+    ParamDbl$new(id = "regr.xgboost.min_child_weight", lower = 1, upper = 20),
+    ParamDbl$new(id = "regr.xgboost.subsample", lower = .7, upper = .8),
+    ParamDbl$new(id = "regr.xgboost.colsample_bytree",  lower = .9, upper = 1),
+    ParamDbl$new(id = "regr.xgboost.colsample_bylevel", lower = .5, upper = .7),
+    ParamInt$new(id = "regr.xgboost.nrounds", lower = 1L, upper = 50)
 ))
 
 at = AutoTuner$new(lrn_pipe, "cv3", measures = "regr.mse", ps,
   terminator, tuner = TunerRandomSearch, tuner_settings = list())
 
-res = resample(tsk$clone()$filter(train.idx), at, "cv3")
+res = resample(tsk$clone()$filter(train.idx), at, cv3)
 res$performance("regr.mse")
 sprintf("RMSE of the tuned xgboost: %s", round(sqrt(res$aggregate()), 2))
 ```
@@ -277,3 +378,14 @@ at = AutoTuner$new(lrn, "cv3", measures = "classif.acc", ps,
   terminator, tuner = TunerRandomSearch, tuner_settings = list())
 at$train("iris")
 ```
+-->
+
+
+<!--
+### IML
+After obtaining good models, we can also inspect the models in order to find out what 
+they have learned. The package `r pkg("iml")` has many useful post-hoc interpretation methods, such as Partial Dependency Plots, Ale Plots, ICE Curves and many more.
+
+
+**FIXME: When IML is connected to mlr3 we can write this chapter**
+-->
