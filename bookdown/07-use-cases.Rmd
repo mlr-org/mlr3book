@@ -1,3 +1,279 @@
 # Use Cases {#use-cases}
 
 This chapter is a collection of use cases to showcase `r mlr_pkg("mlr3")`.
+
+
+## Using `mlr3` for House Price Prediction in King County
+
+We use the `house_sales_prediction` dataset contained in this book in order to provide a use-case for the application of `mlr3` on real-world data.
+
+```{r}
+library(mlr3book)
+data("house_sales_prediction", package = "mlr3book")
+```
+
+
+### Exploratory Data Analysis
+
+In order to get a quick impression of our data, we perform 
+some initial *Exploratory Data Analysis*. This helps us to get a first impression of our data and might help us arrive at additional features that 
+can help with the prediction of the house prices. 
+
+We can get a quick overview using R's summary function: 
+
+```{r}
+summary(house_sales_prediction)
+dim(house_sales_prediction)
+```
+
+
+Our dataset has `r nrow(house_sales_prediction)` observations and `r ncol(house_sales_prediction)` columns. 
+The variable we want to predict is the `price` column. In addition to the 
+price column, we have several other columns:
+- `id:` A unique identifier for every house.
+- `date`: A date column, indicating when the house was sold. 
+  This column is currently not encoded as a `date` and needs some further attention.
+- `zipcode`: A column indicating the zipcode. This should be a categorical variable with potentially many factor levels.
+- `long, lat` The longitude and latitude of the house
+- `...` several other numeric columns indicating information about the house, such as number of rooms, square feet etc.
+
+Before we continue with the analysis, we convert the respective columns, so we can make better use of it.
+
+First we convert the `date` column to a numeric we can work with:
+
+```{r}
+library(lubridate)
+house_sales_prediction$date = ymd(substr(house_sales_prediction$date, 1, 8))
+house_sales_prediction$date = as.numeric(as.Date(house_sales_prediction$date, origin = "1900-01-01"))
+house_sales_prediction$date = house_sales_prediction$date
+```
+
+Afterwards, we convert the zipcode to a factor:
+
+```{r}
+house_sales_prediction$zipcode = as.factor(house_sales_prediction$zipcode)
+```
+
+Add a new column **renovated** indicating whether a house was renovated at some point.
+
+```{r}
+house_sales_prediction$renovated = as.numeric(house_sales_prediction$yr_renovated > 0)
+# And drop the id column:
+house_sales_prediction$id = NULL
+```
+
+Additionaly, we convert the price from Dollar to 1000 Dollar to improve readability.
+
+```{r}
+house_sales_prediction$price = house_sales_prediction$price / 1000
+```
+
+Feature engineering often allows us to incorporate additional knowledge about the data
+and underlying processes. This can often greatly enhance predictive performance. Knowledge about the data, for example that if a house has `yr_renovated == 0` means that the house has not been renovated can thus be incorporated. Additionally we want to
+drop features which should not have any influence (`id column`).
+
+After a few initial manipulations, we load all required packages and create a Task containing  our data.
+
+```{r}
+library(mlr3)
+library(mlr3viz)
+tsk = TaskRegr$new("sales", house_sales_prediction, target = "price")
+```
+
+
+We can inspect associations between variables using `mlr3viz`'s `autoplot` function in order to get some good first impressions for our data. Note, that this does in no way
+prevent us from using other powerful plot functions of our choice on the original data.
+
+#### Distribution of the price: 
+
+The outcome we want to predict is the **price** variable. The autoplot function
+provides a good first glimpse on our data. As the resulting object is a `ggplot2` 
+object, we can use `faceting` and other functions from **ggplot2** in order to 
+enhance plots.
+
+```{r}
+library(ggplot2)
+autoplot(tsk) + facet_wrap(~renovated)
+```
+
+We can observe that `renovated` flats seem to achieve higher sales values, 
+and this might thus be a relevant feature.
+
+Additionally, we can for example look at the condition of the house.
+Again, we clearly can see that the price rises with increasing condition.
+
+```{r}
+autoplot(tsk) + facet_wrap(~condition)
+```
+
+
+#### Association between variables
+
+In addition to the association with the target variable, the association between
+the features can also lead to interesting insights.
+We investigate using variables associated with the quality and size of the house.
+Note that we use `.$clone()` and `.$select()` to clone the task and select only
+a subset of the features for the autoplot, as `autoplot` per default uses all features.
+The task is cloned before we select features in order to keep the original task intact.
+
+```{r}
+# Variables associated with quality
+autoplot(tsk$clone()$select(tmptsk$feature_names[c(3, 17)]),
+  type = "pairs")
+```
+
+```{r}
+autoplot(tsk$clone()$select(tmptsk$feature_names[c(9:12)]),
+  type = "pairs")
+```
+
+
+### Splitting into train and test data
+
+In `mlr3`, we do not create `train` and `test` data sets, but instead keep only 
+a vector of train and test indices.
+
+```{r}
+train.idx = sample(seq_len(tsk$nrow), 0.7 * tsk$nrow)
+test.idx = setdiff(seq_len(tsk$nrow), train.idx)
+```
+
+### A first model: Decision Tree
+
+Decision tree's can not only be used as powerful predictive models, but they
+can also be used as a powerful tool for exploratory data analysis.
+In order to fit a decision tree, we first get the `regr.rpart` learner from the 
+`mlr_learners` dictionary.
+
+For now we leave out the  `zipcode` variable, as we also have the `latitude` and `longitude` of each house. 
+
+```{r}
+tsk_nozip = tsk$clone()$select(tsk$feature_names[1:19])
+# Get the learner
+lrn = mlr_learners$get("regr.rpart")
+# And train on the task
+lrn$train(tsk_nozip, row_ids = train.idx)
+```
+
+```{r}
+plot(lrn$model)
+text(lrn$model)
+```
+
+The learned tree relies on several variables in order to distinguish between cheaper
+and pricier houses. The features we split along seem to be **grade**, **sqft_living**, but also some features related to the area (longitude and latitude).
+
+We can visualize the price across different regions in order to get more info:
+
+```{r}
+# Load the ggmap package in order to visualize on a map
+library(ggmap)
+
+# And create a quick plot for the price
+qmplot(long, lat, maptype = "watercolor", color = log(price),
+  data = house_sales_prediction[train.idx[1:3000],]) +
+  scale_colour_viridis_c()
+
+# And the zipcode
+qmplot(long, lat, maptype = "watercolor", color = zipcode,
+  data = house_sales_prediction[train.idx[1:3000],])
+```
+
+We can see that the price is clearly associated with the zipcode when comparing the
+two plots. 
+As a result, we might want to indeed use the **zipcode** column in our future endeavours.
+
+
+### A first baseline:  Decision Tree
+
+After getting an initial idea for our data, we might want to construct a first 
+well-performing baseline, in order to see what a simple model already can achieve.
+
+We use `resample` with `10-fold Cross-Validation` on our training data in order to get a reliable estimate of the algorithm's performance on future data.
+
+We first load the `mlr3learners` package, where **rpart** is stored. Afterwards we get the learner. For the cross-validation we only use the **training data** by cloning the task and selecting only observations from the training set.
+
+```{r}
+library(mlr3learners)
+lrn_ranger = mlr_learners$get("regr.rpart")
+res = resample(task = tsk$clone()$filter(train.idx), lrn_ranger, "cv3")
+res$performance("regr.mse")
+sprintf("RMSE of the simple ranger: %s", round(sqrt(res$aggregate()), 2))
+```
+
+### A better baseline: `AutoTuner`
+
+Tuning can often further improve the performance. In this case, we test a *tuned* xgboost model and check whether this can improve performance.
+For the `AutoTuner` we have to specify a **Termination Criterion** (how long the tuning should run) a **Tuner** (which tuning method to use) and a **ParamSet** (which space we might want to search through).
+For now we do not use the **zipcode** column, as **xgboost** can not naturally
+deal with categorical features. 
+The **AutoTuner** automatically performs nested Cross-Validation.
+
+```{r}
+library(mlr3tuning)
+library(paradox)
+lrn_xgb = mlr_learners$get("regr.xgboost")
+
+# Define the ParamSet
+ps = ParamSet$new(
+  params = list(
+    ParamDbl$new(id = "eta", lower = 0, upper = .8),
+    ParamDbl$new(id = "min_child_weight", lower = 0, upper = 100),
+    ParamDbl$new(id = "subsample", lower = .5, upper = 1),
+    ParamDbl$new(id = "colsample_bytree",  lower = .6, upper = 1),
+    ParamDbl$new(id = "colsample_bylevel", lower = .6, upper = 1),
+    ParamInt$new(id = "nrounds", lower = 1L, upper = 10)
+))
+
+# Define the Terminator
+terminator = TerminatorEvaluations$new(20)
+at = AutoTuner$new(lrn_xgb, "cv3", measures = "regr.mse", ps,
+  terminator, tuner = TunerRandomSearch, tuner_settings = list())
+
+res = resample(tsk_nozip$clone()$filter(train.idx), at, "cv3")
+res$performance("regr.mse")
+sprintf("RMSE of the tuned xgboost: %s", round(sqrt(res$aggregate()), 2))
+```
+
+### Constructing a Pipeline for Encoding
+
+In order to transform categorical features for **xgboost**, we construct **Pipelines** that solve this problem for us. **PipeOpEncode** replaces categorical features with its One-Hot encoded counterpart before passing the data on to the learner.
+For more information on Pipelines, consider the respective sections in the book.
+
+```{r}
+library(mlr3pipelines)
+lrn_pipe = GraphLearner$new(PipeOpEncode$new(param_vals = list(method = "one-hot"))
+  %>>% PipeOpLearner$new(lrn_xgb),
+  task_type = "regr")
+```
+
+
+```{r, eval = FALSE}
+# Define the ParamSet
+ps = ParamSet$new(
+  params = list(
+    ParamDbl$new(id = "regr.xgboost.eta", lower = 0, upper = .8),
+    ParamDbl$new(id = "regr.xgboost.min_child_weight", lower = 0, upper = 100),
+    ParamDbl$new(id = "regr.xgboost.subsample", lower = .5, upper = 1),
+    ParamDbl$new(id = "regr.xgboost.colsample_bytree",  lower = .6, upper = 1),
+    ParamDbl$new(id = "regr.xgboost.colsample_bylevel", lower = .6, upper = 1),
+    ParamInt$new(id = "regr.xgboost.nrounds", lower = 1L, upper = 10)
+))
+
+at = AutoTuner$new(lrn_pipe, "cv3", measures = "regr.mse", ps,
+  terminator, tuner = TunerRandomSearch, tuner_settings = list())
+
+res = resample(tsk$clone()$filter(train.idx), at, "cv3")
+res$performance("regr.mse")
+sprintf("RMSE of the tuned xgboost: %s", round(sqrt(res$aggregate()), 2))
+```
+
+
+```{r}
+# Define the ParamSet
+ps = ParamSet$new(params = list(ParamDbl$new(id = "cp", lower = 0, upper = .8)))
+lrn = mlr_learners$get("classif.rpart", param_vals = list(minsplit = 2))
+at = AutoTuner$new(lrn, "cv3", measures = "classif.acc", ps,
+  terminator, tuner = TunerRandomSearch, tuner_settings = list())
+at$train("iris")
+```
