@@ -65,3 +65,21 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 - Always start a new sentence on a new line.
 - Always start a new sentence on a new line.
 - Put an empty line before and after code blocks.
+
+### PDF version
+
+If you use RStudio, you can click on "Build Website" in the "Build pane" of RStudio to build both the HTML and the PDF version.
+Settings will be taken from `bookdown/_output.yml`.
+
+To format code in the PDF nicely, please install _formatR_ via `pak::pkg_install("pablo14/formatR")`.
+
+To build the PDF manually, call 
+
+```r
+rmarkdown::render_site("bookdown/", 
+  output_format = bookdown::pdf_book(includes = list("bookdown/preamble.tex"),
+    toc_depth = 4, highlight = "haddock", latex_engine = "xelatex", 
+    citation_package = "natbib"))
+```
+
+(this call does sometimes not work. It is recommended to use RStudio.)
