@@ -9,5 +9,5 @@
 #' @format A data.table with 19 house features plus the price and the id columns, 21613 observations.
 #''
 #' @examples
-#' house_sales_prediction
+#' data("house_sales_prediction", package = "mlr3book")
 "house_sales_prediction"

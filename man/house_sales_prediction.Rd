@@ -19,6 +19,6 @@ It includes homes sold between May 2014 and May 2015.
 It's a great dataset for evaluating simple regression models.
 }
 \examples{
-house_sales_prediction
+data("house_sales_prediction", package = "mlr3book")
 }
 \keyword{datasets}
