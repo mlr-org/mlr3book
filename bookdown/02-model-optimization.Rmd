@@ -23,11 +23,10 @@ An exemplary definition could looks as follows:
 ```{r 02-model-optimization-001}
 library(mlr3tuning)
 
-task = mlr3::mlr_tasks$get("iris")
-learner = mlr3::mlr_learners$get("classif.rpart")
-resampling = mlr3::mlr_resamplings$get("holdout")
-measures = mlr3::mlr_measures$mget("classif.ce")
-task$measures = measures
+task = mlr_tasks$get("iris")
+learner = mlr_learners$get("classif.rpart")
+resampling = mlr_resamplings$get("holdout")
+measures = mlr_measures$mget("classif.ce")
 param_set = paradox::ParamSet$new(params = list(
   paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1),
   paradox::ParamInt$new("minsplit", lower = 1, upper = 10)))
@@ -36,6 +35,7 @@ pe = PerformanceEvaluator$new(
   task = task,
   learner = learner,
   resampling = resampling,
+  measures = measures,
   param_set = param_set
 )
 ```
@@ -106,7 +106,7 @@ Tuning will stop as soon as one Terminator signals to be finished.
 In the following example we create two terminators and then combine them into one:
 
 ```{r 02-model-optimization-005}
-tr = TerminatorRuntime$new(max_time = 5, units = "secs")
+tr = TerminatorRuntime$new(5)
 te = TerminatorEvaluations$new(max_evaluations = 50)
 
 tm = TerminatorMultiplexer$new(list(te, tr))
@@ -153,30 +153,29 @@ tuner_gs$tune_result()
 ```
 
 It returns the scored performance and the values of the optimized hyperparameters.
-Note that each measure “knows” if it was minimized or maximized during tuning:
+Note that each measure "knows" if it was minimized or maximized during tuning:
 
 ```{r 02-model-optimization-010}
-task$measures$classif.ce$minimize
+measures$classif.ce$minimize
 ```
 
-A summary of the `r ref("BenchmarkResult")` created by the tuning can be queried using the `.$aggregated()` function of the `Tuner` class.
+A summary of the `r ref("BenchmarkResult")` created by the tuning can be queried using the `.$aggregate()` function of the `Tuner` class.
 
 ```{r 02-model-optimization-011}
-tuner_gs$aggregated()
+tuner_gs$aggregate()
 ```
 
-Now the optimized hyperparameters can be used to create a new `ref("Learner")` and [train](#train-predict) it on the full dataset.
+Now the optimized hyperparameters can be used to create a new `r ref("Learner")` and [train](#train-predict) it on the full dataset.
 
 ```{r 02-model-optimization-012}
-task = mlr3::mlr_tasks$get("iris")
-learner = mlr3::mlr_learners$get("classif.rpart",
+task = mlr_tasks$get("iris")
+learner = mlr_learners$get("classif.rpart",
   param_vals = list(
     xval = tuner_gs$tune_result()$values$xval,
     cp = tuner_gs$tune_result()$values$cp)
 )
 
-e = Experiment$new(task = task, learner = learner)
-e$train()
+learner$train(task)
 ```
 
 ### Automating the Tuning {#autotuner}
@@ -197,21 +196,30 @@ Requirements:
 - Tuning settings (optional)
 
 ```{r 02-model-optimization-013}
-task = mlr3::mlr_tasks$get("iris")
-learner = mlr3::mlr_learners$get("classif.rpart")
-resampling = mlr3::mlr_resamplings$get("holdout")
-measures = mlr3::mlr_measures$mget("classif.ce")
-task$measures = measures
+task = mlr_tasks$get("iris")
+learner = mlr_learners$get("classif.rpart")
+resampling = mlr_resamplings$get("holdout")
+measures = mlr_measures$mget("classif.ce")
 param_set = paradox::ParamSet$new(
   params = list(paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)))
 terminator = TerminatorEvaluations$new(5)
 
-at = mlr3tuning::AutoTuner$new(learner, resampling, param_set, terminator,
+at = mlr3tuning::AutoTuner$new(learner, resampling, measures = measures, param_set, terminator,
   tuner = TunerGridSearch, tuner_settings = list(resolution = 10L))
 
 at$train(task)
 at$learner
 ```
+Note that you can also pass the `r ref("AutoTuner")` to `r ref("resample()")` or `r ref("benchmark()")`.
+By doing so, the AutoTuner will do its resampling for tuning on the training set of the respective split of the outer resampling.
+This is called nested resampling.
+
+To compare the tuned learner with the learner using its default, we can use `benchmark()`.
+```{r 02-model-optimization-014}
+bmr = benchmark(expand_grid("iris", list(at, "classif.rpart"), "cv3"))
+bmr$aggregate(measures)
+```
+
 
 ### Summary
 
@@ -223,7 +231,7 @@ at$learner
   - `r ref("paradox::ParamSet")`
   - `r ref("mlr3tuning::Terminator")`
 - Inspect the tuning result using `Tuner*$tune_result()`
-- Get a summary view of all runs based on the `r ref("BenchmarkResult")` object created during tuning using `Tuner*$aggregated()`
+- Get a summary view of all runs based on the `r ref("BenchmarkResult")` object created during tuning using `Tuner*$aggregate()`
 - The `AutoTuner` class is a convenience wrapper that gathers all steps into one function
 
 ## Feature Selection / Filtering {#fs}
@@ -262,36 +270,83 @@ Filter methods assign an importance value to each feature.
 Based on these values the features can be ranked and a feature subset can be selected.
 There is a list of all implemented filter methods in the [Appendix](#list-filters).
 
-#### Calculating the feature importance {#fs-calc}
+#### Calculating filter values {#fs-calc}
 
 Currently, only classification and regression tasks are supported.
 
 The first step it to create a new R object using the class of the desired filter method.
 Each object of class `Filter` has a `.$calculate()` method which calculates the ranking of the features.
-This function requires a `r ref("Task")` and returns the calculated values of each variable.
+This method can be executed manually but is also run implicitly in the background if the actual filter functions (`.$filter_nfeat()`, `.$filter_frac()`, `.$filter_cutoff()`) are executed.
+All functions require a `r ref("Task")` and return both the calculated filter values for all features and subset the supplied task:
 
-```{r 02-model-optimization-014}
+```{r 02-model-optimization-015}
 library(mlr3featsel)
 filter = FilterJMIM$new()
 
-task = mlr3::mlr_tasks$get("iris")
+task = mlr_tasks$get("iris")
 filter$calculate(task)
+
 as.data.table(filter)
 ```
 
-The combination of single filter results is not yet supported.
+#### Combining filter values {#fs-comb}
+
+You can also combine multiple results from different algorithms into one filter using `.$combine()`.
+
+```{r 02-model-optimization-016}
+filter2 = FilterDISR$new()
+
+task = mlr_tasks$get("iris")
+filter2$calculate(task)
+
+filter2$combine(filter)
+
+as.data.table(filter2)
+```
 
 #### Selecting a feature subset {#filter-subset}
 
-Instead of calculating the raw filter values, you can directly subset the task by using the member functions `.$filter_abs()`, `.$filter_perc()` and `.$filter_thresh()`.
+Instead of calculating the raw filter values, you can directly subset the task by using the member functions `.$filter_nfeat()`, `.$filter_frac()` and `.$filter_cutoff()`.
+These will also call `.$calculate()` implicitly in the background if it was not executed before.
 
-- `.$filter_abs()`: Keep a certain absolute number (abs) of features with highest importance.
-- `.$filter_perc()`: Keep a certain percentage (perc) of features with highest importance.
-- `.$filter_thresh()`: Keep all features whose importance exceeds a certain threshold value (threshold).
+- `.$filter_nfeat()`: Keep a certain absolute number (nfeat) of features with highest importance.
+- `.$filter_frac()`: Keep a certain percentage (frac) of features with highest importance.
+- `.$filter_cutoff()`: Keep all features whose importance exceeds a certain threshold value (cutoff).
 
-```{r 02-model-optimization-015}
-filter$filter_abs(task, 2)
+```{r 02-model-optimization-017}
+filter$filter_nfeat(task, 2)
 task$feature_names
+```
+
+#### Custom construction of filters {#filter-construction}
+
+While `Filter$new()` creates a new R6 object of the respective filter, multiple parameters can be passed during construction.
+There are two types of hyperparameters that can be supplied:
+
+- The parameters of the respective filter (if any)
+- The generic hyperparameters `nfeat`, `frac` and `thresh` that apply to every filter.
+
+To get an overview of which are set by default, take a look at the ParamSet of a filter:
+
+```{r 02-model-optimization-018}
+FilterDISR$new()$param_set
+```
+
+To set any of them during construction, use the `param_vals` argument.
+
+```{r 02-model-optimization-019}
+filter = FilterDISR$new(param_vals = list(nfeat = 2))
+```
+
+What has changed now?
+The created `filter` object already knows of the desired value of `nfeat` if its member function `filter_nfeat()` is called on a task.
+
+```{r 02-model-optimization-020}
+filter$filter_nfeat(task)
+```
+
+```{block <name>, type='caution'}
+If you still pass a value for `nfeat` to `.$filter_nfeat()` it will be prioritized over the value set during construction.
 ```
 
 ### Wrapper Methods {#fs-wrapper}
@@ -311,7 +366,7 @@ For example, learner `classif.ranger` (in `r mlr_pkg("mlr3learners")` comes with
 See the help page of `r ref("ranger::ranger")`.
 To use method "impurity", you need to set it via the `param_vals` argument:
 
-```{r 02-model-optimization-016}
+```{r 02-model-optimization-021}
 library(mlr3learners)
 lrn = mlr_learners$get("classif.ranger",
   param_vals = list(importance = "impurity"))
@@ -319,7 +374,7 @@ lrn = mlr_learners$get("classif.ranger",
 
 Now you can use the `r ref("mlr3featsel::FilterEmbedded")` class for algorithm-embedded methods to filter a `r ref("Task")`.
 
-```{r 02-model-optimization-017}
+```{r 02-model-optimization-022}
 task = mlr_tasks$get("iris")
 filter = FilterEmbedded$new(learner = lrn)
 filter$calculate(task)
@@ -339,7 +394,7 @@ Work in progress :)
 In order to obtain unbiased performance estimates for a learners, all parts of the model building (preprocessing and model selection steps) should be included in the resampling, i.e., repeated for every pair of training/test data.
 For steps that themselves require resampling like hyperparameter tuning or feature-selection (via the wrapper approach) this results in two nested resampling loops.
 
-```{r 02-model-optimization-018, echo = FALSE}
+```{r 02-model-optimization-023, echo = FALSE}
 knitr::include_graphics("images/nested_resampling.png")
 ```
 
@@ -372,56 +427,63 @@ As this is computationally intensive you might want to have a look at section pa
 
 To optimize hyperparameters or conduct features-selection in a nested resampling you need to create learners using either
 
-- the `r ref("mlr3tuning::AutoTuner")`
-- the `mlr3featsel::AutoSelect` (not yet implemented)
-
-class.
+- the `r ref("mlr3tuning::AutoTuner")` class, or
+- the `mlr3featsel::AutoSelect` class (not yet implemented).
 
 We use the example from section ["Automating the Tuning"](#autotuner) and pipe the resulting learner into a `r ref("resample()")` call.
 
-```{r 02-model-optimization-019}
-task = mlr3::mlr_tasks$get("iris")
-learner = mlr3::mlr_learners$get("classif.rpart")
-resampling = mlr3::mlr_resamplings$get("holdout")
-measures = mlr3::mlr_measures$mget("classif.ce")
-task$measures = measures
+```{r 02-model-optimization-024}
+task = mlr_tasks$get("iris")
+learner = mlr_learners$get("classif.rpart")
+resampling = mlr_resamplings$get("holdout")
+measures = mlr_measures$mget("classif.ce")
 param_set = paradox::ParamSet$new(
   params = list(paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)))
 terminator = TerminatorEvaluations$new(5)
 
-at = mlr3tuning::AutoTuner$new(learner, resampling, param_set, terminator,
-  tuner = TunerGridSearch, tuner_settings = list(resolution = 10L))
+at = mlr3tuning::AutoTuner$new(learner, resampling, measures = measures,
+  param_set, terminator, tuner = TunerGridSearch,
+  tuner_settings = list(resolution = 10L))
+at$store_bmr = TRUE
 ```
 
 Now construct the `r ref("resample()")` call:
 
-```{r 02-model-optimization-020}
-resampling_outer = mlr3::mlr_resamplings$get("cv3")
+```{r 02-model-optimization-025}
+resampling_outer = mlr_resamplings$get("cv3")
 
-rr = resample(task = task, learner = at, resampling = resampling_outer,
-  measures = task$measures)
+rr = resample(task = task, learner = at, resampling = resampling_outer)
 ```
 
 ### Evaluation {#rr-eval}
 
-With the created `r ref("ResampleResult")` we can now inspect the executed Experiment more closely.
+With the created `r ref("ResampleResult")` we can now inspect the executed resampling iterations more closely.
 See also section [Resampling](#resampling) for more detailed information about `r ref("ResampleResult")` objects.
 
 For example, we can query the aggregated performance result:
 
-```{r 02-model-optimization-021}
-rr$aggregated
+```{r 02-model-optimization-026}
+rr$aggregate()
 ```
 
-Check for any errors in the folds during execution:
+We can also query the tuning result of any learner using the `$tune_path` field of the `r ref("AutoTuner")` class stored in the `r ref("ResampleResult")` container `rr`.
 
-```{r 02-model-optimization-022}
+```{block, type="caution"}
+Note: This only works if `store_bmr` was set to `TRUE` in the `AutoTuner` object.
+```
+
+```{r 02-model-optimization-027}
+rr$learners[[1]]$tune_path
+```
+
+Check for any errors in the folds during execution (if there is not output, warnings or errors recorded, this is an empty `data.table()`:
+
+```{r 02-model-optimization-028}
 rr$errors
 ```
 
-Or take a look at the predictions:
+Or take a look at the confusion matrix of the joined predictions:
 
-```{r 02-model-optimization-023}
-rr$prediction
+```{r 02-model-optimization-029}
+rr$prediction$confusion
 ```
-

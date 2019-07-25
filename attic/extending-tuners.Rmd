@@ -1,0 +1,122 @@
+## Tuners {#ext-tuner}
+
+The dummy tuner function in this tutorial is called `blackBoxFun`.
+
+A new tuner consists of an **objective function** and settings.
+The former is the heart of the `r ref("Tuner")`.
+It must fulfill the following requirements:
+
+- Run the `r ref("PerformanceEvaluator")` for the parameter value `x`.
+- Evaluate the `r ref("Learner")` using the given `r ref("Resampling")` object and add the `r ref("ResampleResult")` to the `r ref("BenchmarkResult")` object of the `r ref("PerformanceEvaluator")`.
+
+### Objective function
+
+In the following we describe how a possible implementation of a new objective function could look like: 
+
+```{r 90-extending-16 }
+blackBoxFun = function (x, pe) {
+  # set measure
+  measure = pe$measures[[1L]]
+  hashes = pe$bmr$data$hash
+  # convert ParamSet to data.table
+  x = setDT(as.list(x))
+  pe$eval(x)
+  new_hash = setdiff(pe$bmr$data$hash, hashes)
+  # calculate performance
+  perf = pe$bmr$resample_result(new_hash)$aggregate(measure)
+  if (measure$minimize) perf else -perf
+  return (perf)
+}
+```
+
+With `pe` being the `r ref("PerformanceEvaluator")` object, `blackBoxFun()` should be able to do the following (you can also take a look at [TunerRandomSearch](https://github.com/mlr-org/mlr3tuning/blob/991d11ab70ce99f200f19e570f0d362f4910828a/R/TunerRandomSearch.R) or [TunerGenSA](https://github.com/mlr-org/mlr3tuning/blob/991d11ab70ce99f200f19e570f0d362f4910828a/R/TunerGenSA.R).
+
+```{r 90-extending-17, eval = TRUE}
+library("mlr3tuning")
+task = mlr3::mlr_tasks$get("iris")
+learner = mlr3::mlr_learners$get("classif.rpart")
+resampling = mlr3::mlr_resamplings$get("cv")
+resampling$param_set$values$folds = 2
+measures = mlr3::mlr_measures$mget("classif.ce")
+param_set = paradox::ParamSet$new(
+  params = list(
+    paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)
+  )
+)
+pe = PerformanceEvaluator$new(task, learner, resampling, measures, param_set)
+blackBoxFun(c(cp = 0.05), pe)
+pe$bmr$aggregate()
+```
+
+### Tuner class
+
+To actually call the optimizer using a dedicated R6 Tuner class, we add `blackBoxFun()` as a private method.
+This can either be done for an existing class or a new R6 Tuner class can be created.
+
+In this example we replace the private `.$tune_step()` method from `r ref("mlr3tuning::TunerGenSA")` with our new objective function which we defined above.
+
+```{r 90-extending-18 }
+TunerGenSA = R6Class("TunerGenSA",
+  inherit = Tuner,
+  public = list(
+    initialize = function(pe, terminator, ...) {
+      if (any(pe$param_set$storage_type != "numeric")) {
+        err_msg = "Parameter types needs to be numeric"
+        lg$error(err_msg)
+        stopf(err_msg)
+      }
+      
+      # Default settings:
+      settings = list(smooth = FALSE, acceptance.param = -15, 
+        simple.function = FALSE, temperature = 250)
+      super$initialize(id = "GenSA", pe = pe, terminator = terminator, 
+        settings = insert_named(settings, list(...)))
+    }
+  ),
+  private = list(
+    tune_step = function() {
+      blackBoxFun = function (x, pe) {
+        # set measure
+        measure = pe$measures[[1L]]
+        hashes = pe$bmr$data$hash
+        # convert ParamSet to data.table
+        x = setDT(as.list(x))
+        pe$eval(x)
+        new_hash = setdiff(pe$bmr$data$hash, hashes)
+        # calculate performance
+        perf = pe$bmr$resample_result(new_hash)$aggregate(measure)
+        if (measure$minimize) perf else -perf
+        return (perf)
+      }
+      self$GenSA_res = GenSA(fn = blackBoxFun, lower = self$pe$param_set$lower, upper = self$pe$param_set$upper,
+        control = self$settings, pe = self$pe)
+    }
+  )
+)
+```
+
+Note that the private method needs always be called `.$tune_step()` as it will be called from the `.$tune()` method of the `Tuner` class.
+
+### Example
+
+Now that the "new" `r ref("mlr3tuning::TunerGenSA")` tuner has been defined, we can test it in a small use case:
+
+```{r 90-extending-19}
+# does not work currently
+task = mlr3::mlr_tasks$get("spam")
+learner = mlr3::mlr_learners$get("classif.rpart")
+learner$predict_type = "prob"
+resampling = mlr3::mlr_resamplings$get("holdout")
+measures = mlr3::mlr_measures$mget(c("classif.auc", "classif.ce"))
+param_set = paradox::ParamSet$new(
+  params = list(
+    paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)
+  )
+)
+pe = PerformanceEvaluator$new(task, learner, resampling, measures, param_set)
+tuner = TunerGenSA$new(pe, TerminatorEvaluations$new(3L))
+tuner$tune()
+tuner$pe$bmr$aggregate()
+tuner$tune_result()
+str(tuner$GenSA_res)
+```

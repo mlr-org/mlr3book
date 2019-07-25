@@ -22,5 +22,4 @@ name_chunks_mlr3book = function() {
   }
 
   invisible(TRUE)
-  invisible(TRUE)
 }

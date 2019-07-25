@@ -32,12 +32,18 @@ ref = function(topic, text = topic) {
     pkg = parts[1L]
   } else {
     update_db()
-    matched = head(db$base[db$aliases[list(strip_parenthesis(topic)), on = "Alias", nomatch = 0L], on = "ID", nomatch = 0L], 1L)
-    if (nrow(matched) == 0L)
+    matched = db$base[db$aliases[list(strip_parenthesis(topic)), c("Alias", "ID"), on = "Alias", nomatch = 0L], on = "ID", nomatch = 0L]
+    if (nrow(matched) == 0L) {
       stop(sprintf("Could not find help page for topic '%s'", topic))
+    }
+    if (nrow(matched) >= 2L) {
+      lgr$warn("Ambiguous link to '%s': %s", topic, paste0(paste(matched$Package, matched$Name, sep = "::"), collapse = " | "))
+      matched = head(matched, 1L)
+    }
 
-    name = matched$Name
     pkg = matched$Package
+    name = matched$Name
+    lgr$debug("Resolved '%s' to '%s::%s'", topic, pkg, name)
   }
 
   if (pkg %in% db$hosted) {
