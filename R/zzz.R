@@ -5,7 +5,7 @@ NULL
 
 db = new.env()
 db$index = c("base", "utils", "datasets", "data.table", "stats")
-db$hosted = c("paradox", "mlr3misc", "mlr3", "mlr3db", "mlr3survival", "mlr3ordinal", "mlr3pipelines", "mlr3learners", "mlr3featsel", "mlr3tuning", "mlr3viz")
+db$hosted = c("paradox", "mlr3misc", "mlr3", "mlr3db", "mlr3survival", "mlr3ordinal", "mlr3pipelines", "mlr3learners", "mlr3filters", "mlr3tuning", "mlr3viz")
 
 lgr = NULL
 
