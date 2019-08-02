@@ -1,6 +1,7 @@
 # mlr3book
 
 [![Travis build status](https://travis-ci.org/mlr-org/mlr3book.svg?branch=master)](https://travis-ci.org/mlr-org/mlr3book)
+[![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 
 Package to build the mlr3 [bookdown](https://bookdown.org/) book.
 The rendered book can be found [here](https://mlr-org.github.io/mlr3book/).
@@ -73,12 +74,12 @@ Settings will be taken from `bookdown/_output.yml`.
 
 To format code in the PDF nicely, please install _formatR_ via `pak::pkg_install("pablo14/formatR")`.
 
-To build the PDF manually, call 
+To build the PDF manually, call
 
 ```r
-rmarkdown::render_site("bookdown/", 
+rmarkdown::render_site("bookdown/",
   output_format = bookdown::pdf_book(includes = list("bookdown/preamble.tex"),
-    toc_depth = 4, highlight = "haddock", latex_engine = "xelatex", 
+    toc_depth = 4, highlight = "haddock", latex_engine = "xelatex",
     citation_package = "natbib"))
 ```
 
