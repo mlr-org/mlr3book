@@ -2,7 +2,7 @@
 #'
 list_mlr3verse_stable = function() {
 
-  pkgs = map_chr(mlr3verse::mlr3verse_packages(include_self = FALSE), function(.x) {
+  pkgs = mlr3misc::map_chr(mlr3verse::mlr3verse_packages(include_self = FALSE), function(.x) {
 
     sessioninfo::package_info(.x) %>%
       dplyr::filter(package == .x) %>%
