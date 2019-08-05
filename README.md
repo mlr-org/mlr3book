@@ -3,8 +3,8 @@
 [![Travis build status](https://travis-ci.org/mlr-org/mlr3book.svg?branch=master)](https://travis-ci.org/mlr-org/mlr3book)
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 
-Package to build the mlr3 [bookdown](https://bookdown.org/) book.
-The rendered book can be found [here](https://mlr-org.github.io/mlr3book/).
+Package to build the [mlr3](https://mlr3.mlr-org.com) [bookdown](https://bookdown.org/) book.
+The rendered book can be found [here](https://mlr3book.mlr-org.com).
 
 To install all necessary dependencies for the book, install this package using [remotes](https://cran.r-project.org/package=remotes):
 
