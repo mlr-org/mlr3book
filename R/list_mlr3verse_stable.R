@@ -16,6 +16,6 @@ list_mlr3verse_stable = function() {
 
   pkgs = na.omit(pkgs)
 
-  print(sprintf("remotes::install_github(c(%s), force = TRUE)", str_collapse(pkgs, quote = "'")), quote = FALSE)
+  print(sprintf("remotes::install_github(c(%s), force = TRUE)", mlr3misc::str_collapse(pkgs, quote = "'")), quote = FALSE)
 
 }
