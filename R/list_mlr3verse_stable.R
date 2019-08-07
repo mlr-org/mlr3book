@@ -1,5 +1,6 @@
 #' @title Lists the mlr3verse pkg states of last successful mlr3book build
 #'
+#' @export
 list_mlr3verse_stable = function() {
 
   pkgs = mlr3misc::map_chr(mlr3verse::mlr3verse_packages(include_self = FALSE), function(.x) {
