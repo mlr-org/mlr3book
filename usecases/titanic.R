@@ -40,7 +40,7 @@ e$model
 lrns = mlr_learners$mget(c("classif.featureless", "classif.rpart", "classif.ranger", "classif.log_reg"), predict_type = "prob")
 measures = mlr_measures$mget(c("classif.auc", "classif.ce"))
 
-bmr = benchmark(expand_grid(task, lrns, "cv"), measures = measures)
+bmr = benchmark(benchmark_grid(task, lrns, "cv"), measures = measures)
 
 e = Experiment$new(task, "classif.ranger")$train()$predict()
 e$prediction
