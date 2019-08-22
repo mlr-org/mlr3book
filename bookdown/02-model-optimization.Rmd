@@ -3,239 +3,183 @@
 ## Hyperparameter Tuning {#tuning}
 
 Hyperparameter tuning is supported via the extension package `r gh_pkg("mlr-org/mlr3tuning")`.
-The heart of `r gh_pkg("mlr-org/mlr3tuning")` are the R6 classes `r ref("mlr3tuning::PerformanceEvaluator")` and the `Tuner*` classes.
-They store the settings, perform the tuning and save the results.
+The heart of `r gh_pkg("mlr-org/mlr3tuning")` are the R6 classes
 
-### The `Performance Evaluator` class
+* `r ref("TuningInstance")`: Describes the tuning problem and stores results.
+* `r ref("Tuner")`: Base class for implementations of tuning algorithms.
 
-The `r ref("mlr3tuning::PerformanceEvaluator")` class requires the following inputs from the user:
+### The `TuningInstance` Class
 
-- `r ref("Task")`
-- `r ref("Learner")`
-- `r ref("Resampling")`
-- `r ref("Measure")`
-- `r ref("paradox::ParamSet")`
 
-It is similar to `r ref("resample")` and `r ref("benchmark")` with the additional requirement of a "Parameter Set" (`r ref("paradox::ParamSet")` ) specifying the Hyperparameters of the given learner which should be optimized.
+In the following, we will look into optimizing a simple classification tree on the `r ref("mlr_tasks_pima", text = "Pima Indian Diabetes")` data set.
+```{r}
+task = tsk("pima")
+print(task)
+```
 
-An exemplary definition could looks as follows:
-
-```{r 02-model-optimization-001, eval = FALSE}
-library(mlr3tuning)
-
-task = tsk("iris")
+We use the classification tree from `r cran_pkg("rpart")` and choose a subset of the hyperparameters we want to tune. This is often referred to as the tuning space.
+```{r}
 learner = lrn("classif.rpart")
-resampling = rsmp("holdout")
-measures = msr("classif.ce")
-param_set = paradox::ParamSet$new(params = list(
-  paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1),
-  paradox::ParamInt$new("minsplit", lower = 1, upper = 10)))
-terminator = TerminatorEvals$new(10)
+learner$param_set
+```
+Here, we opt to tune two parameters: the complexity `cp` and the termination criterion `minsplit`.
+As tuning spaces has to be bound, we have to set lower and upper bounds:
+```{r}
+library(paradox)
+tune_ps = ParamSet$new(list(
+  ParamDbl$new("cp", lower = 0.001, upper = 0.1),
+  ParamInt$new("minsplit", lower = 1, upper = 10)
+))
+tune_ps
+```
+Next, we need to define how we want to evaluate the performance.
+For this, we need to choose a `r ref("Resampling", text = "resampling strategy")` and a `r ref("Measure", text = "performance measure")`.
+```{r}
+hout = rsmp("holdout")
+measure = msr("classif.ce")
+```
 
-pe = TuningInstance$new(
+Finally, we have to decide the budget available to solve this tuning instance.
+This is done by selecting one of the available `r ref("Terminator", text = "Terminators")`:
+
+- Terminate after a given time (`r ref("TerminatorClockTime")`)
+- Terminate after a given amount of iterations (`r ref("TerminatorEvals")`)
+- Terminate after a specific performance is reached (`r ref("TerminatorPerfReached")`)
+- A combination of the above in an *ALL* or *ANY* fashion, using `r ref("TerminatorCombo")`
+
+For this short introduction, we grant a budget of 50 evaluations:
+```{r}
+evals20 = TerminatorEvals$new(20)
+```
+
+We can now put everything together to construct a `r ref("TuningInstance")`:
+```{r}
+instance = TuningInstance$new(
   task = task,
   learner = learner,
-  resampling = resampling,
-  measures = measures,
-  param_set = param_set,
-  terminator = terminator
+  resampling = hout,
+  measures = measure,
+  param_set = tune_ps,
+  terminator = evals20
 )
+print(instance)
 ```
 
-**Evaluation of Single Parameter Settings**
 
-Using the method `.$eval()`, the `r ref("mlr3tuning::PerformanceEvaluator")` is able to tune a specific set of hyperparameters on the given inputs.
-The parameters have to be handed over wrapped in a `r ref("data.table")`:
+To start the tuning, we still need to select how the optimization should take place - in other words, we need to choose the **optimization algorithm** via the `r ref("Tuner")` class.
 
-```{r 02-model-optimization-002, eval = FALSE}
-pe$eval(data.table::data.table(cp = 0.05, minsplit = 5))
+### The `Tuner` Class
+
+The following algorithms are currently implemented in `r gh_pkg("mlr-org/mlr3tuning")`:
+
+- Grid Search (`r ref("TunerGridSearch")`)
+- Random Search (`r ref("TunerRandomSearch")`) [@bergstra2012]
+- Generalized Simulated Annealing (`r ref("TunerGenSA")`)
+
+In this example we will use a simple grid search with a grid resolution of 10:
+```{r}
+tuner = TunerGridSearch$new(resolution = 5)
+```
+Since we have only numeric parameters, `r ref("TunerGridSearch")` will create a grid of equally-sized steps between the respective upper and lower bounds.
+As we have two hyperparameters with a resolution of 5, the two-dimensional grid consists of $5^2 = 25$ configurations.
+Each configuration serves as hyperparameter setting for the classification tree and triggers a 3-fold cross validation on the task.
+All configurations will be examined by the tuner (in a random order), until either all configurations are evaluated or the `r ref("Terminator")` signals that the budget is exhausted.
+
+### Triggering the Tuning
+
+To start the tuning, we simply pass the `r ref("TuningInstance")` to the `$tune()` method of the initialized `r ref("Tuner")`.
+The tuner proceeds as follow:
+
+1. The `r ref("Tuner")` proposes at least one hyperparameter configuration (the `r ref("Tuner")` may propose multiple points to improve parallelization, this can be controlled via the setting `batch_size`).
+2. For each configuration, a `r ref("Learner")` is fitted on `r ref("Task")` using the provided `r ref("Resampling")`.
+   The results are combined with other results from previous iterations to a single `r ref("BenchmarkResult")`.
+3. The `r ref("Terminator")` is queried if the budget is exhausted. If the budget is not exhausted, go to 1.
+4. Determine the configuration with the best observed performance.
+5. Return a named list with the hyperparameter settings (`"values"`) and the corresponding measured performance (`"performance"`).
+
+
+```{r 02-model-optimization-007}
+result = tuner$tune(instance)
+print(result)
 ```
 
-The results are stored in a `r ref("BenchmarkResult")` class within the `pe` object.
-Note that this is the "bare bone" concept of using hyperparameters during `r ref("Resampling")`.
-Usually you want to [optimize the parameters in an automated fashion](#tuning-spaces).
-
-### Tuning Hyperparameter Spaces {#tuning-spaces}
-
-Most often you do not want to only check the performance of fixed hyperparameter settings sequentially but optimize the outcome using different hyperparameter choices in an automated way.
-
-To achieve this, we need a definition of the search spaced that should be optimized.
-Let's use again the space we defined in the [introduction](#tuning-intro).
-
-```{r 02-model-optimization-003, eval = FALSE}
-paradox::ParamSet$new(params = list(
-  paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1),
-  paradox::ParamInt$new("minsplit", lower = 1, upper = 10)))
+We can investigate all resamplings which where conducted by calling the `$archive()` method of the `r ref("TuningInstance")`.
+Here, we just extract the performance values and the hyperparameters:
+```{r}
+instance$archive()[, c("cp", "minsplit", "classif.ce")]
 ```
+In total, the grid search evaluated 20/25 different configurations of the grid in a random order before the `r ref("Terminator")` stopped the tuning.
 
-To start the tuning, we still need to select how the optimization should take place - in other words, we need to choose the **optimization algorithm**.
 
-The following algorithms are currently implemented in `r gh_pkg("mlr-org/mlr3")`:
-
-- Grid Search (`r ref("mlr3tuning::TunerGridSearch")`)
-- Random Search (`r ref("mlr3tuning::TunerRandomSearch")`) [@bergstra2012]
-- Generalized Simulated Annealing (`r ref("mlr3tuning::TunerGenSA")`)
-
-In this example we will use a simple "Grid Search".
-Since we have only numeric parameters and specified the upper and lower bounds for the search space, `r ref("mlr3tuning::TunerGridSearch")` will create a grid of equally-sized steps.
-By default, `r ref("mlr3tuning::TunerGridSearch")` creates ten equal-sized steps.
-The number of steps can be changed with the `resolution` argument.
-In this example we use 15 steps and create a new class `r ref("mlr3tuning::TunerGridSearch")` using the `r ref("mlr3tuning::PerformanceEvaluator")` `pe` and the resolution.
-
-```{r 02-model-optimization-004, error=TRUE, eval = FALSE}
-tuner_gs = TunerGridSearch$new(pe, resolution = 15)
-```
-
-Oh! The error message tells us that we need to specify an addition argument called `terminator`.
-
-### Defining the Terminator
-
-What is a "Terminator"?
-The `r ref("mlr3tuning::Terminator")` defines when the tuning should be stopped.
-This setting can have various instances:
-
-- Terminate after a given time (`r ref("mlr3tuning::TerminatorRuntime")`)
-- Terminate after a given amount of iterations (`r ref("mlr3tuning::TerminatorEvaluations")`)
-- Terminate after a specific performance is reached (`r ref("mlr3tuning::Performance")`)
-
-Often enough one termination criterion is not enough.
-For example, you will not know beforehand if all of your given evaluations will finish within a given amount of time.
-This highly depends on the `r ref("Learner")` and the `r ref("paradox::ParamSet")` given.
-However, you might not want to exceed a certain tuning time for each learner.
-In this case, it makes sense to combine both criteria using `r ref("mlr3tuning::TerminatorMultiplexer")`.
-Tuning will stop as soon as one Terminator signals to be finished.
-
-In the following example we create two terminators and then combine them into one:
-
-```{r 02-model-optimization-005, eval = FALSE}
-tr = TerminatorRuntime$new(5)
-te = TerminatorEvaluations$new(max_evaluations = 50)
-
-tm = TerminatorMultiplexer$new(list(te, tr))
-tm
-```
-
-### Executing the Tuning
-
-Now that we have all required inputs (`r ref("paradox::ParamSet")`, `r ref("mlr3tuning::Terminator")` and the optimization algorithm), we can perform the hyperparameter tuning.
-
-The first step is to create the respective "Tuner" class, here `r ref("mlr3tuning::TunerGridSearch")`.
-
-```{r 02-model-optimization-006, eval = FALSE}
-tuner_gs = TunerGridSearch$new(pe = pe, terminator = tm,
-  resolution = 15)
-```
-
-After it has been initialized, we can call its member function `.$tune()` to run the tuning.
-
-```{r 02-model-optimization-007, eval = FALSE}
-tuner_gs$tune()
-```
-
-`.$tune()` simply performs a `r ref("benchmark")` on the parameter values generated by the tuner and writes the results into a `r ref("BenchmarkResult")` object which is stored in field `.$bmr` of the `r ref("mlr3tuning::PerformanceEvaluator")` object that we passed to it.
-
-### Inspecting Results
-
-During the `.$tune()` call not only the `r ref("BenchmarkResult")` output was written to the `.$bmr` slot of the `r ref("mlr3tuning::PerformanceEvaluator")` but also the `r ref("mlr3tuning::Terminator")` got updated.
-
-We can take a look by directly printing the `r ref("mlr3tuning::Terminator")` object:
-
-```{r 02-model-optimization-008, eval = FALSE}
-print(tm)
-```
-
-We can easily see that all evaluations were executed before the time limit kicked in.
-
-Now let's take a closer look at the actual tuning result.
-It can be queried using `.$tune_result()` from the respective `r ref("mlr3tuning::Tuner")` class that generated it.
-Internally, the function scrapes the data from the `r ref("BenchmarkResult")` that was generated during tuning and stored in `.$pe$bmr`.
-
-```{r 02-model-optimization-009, eval = FALSE}
-tuner_gs$tune_result()
-```
-
-It returns the scored performance and the values of the optimized hyperparameters.
-Note that each measure "knows" if it was minimized or maximized during tuning:
-
-```{r 02-model-optimization-010, eval = FALSE}
-measures$classif.ce$minimize
-```
-
-A summary of the `r ref("BenchmarkResult")` created by the tuning can be queried using the `.$aggregate()` function of the `Tuner` class.
-
-```{r 02-model-optimization-011, eval = FALSE}
-tuner_gs$aggregate()
-```
-
-Now the optimized hyperparameters can be used to create a new `r ref("Learner")` and [train](#train-predict) it on the full dataset.
+Now the optimized hyperparameters can take the previously created `r ref("Learner")`, set the returned hyperparameters and [train](#train-predict) it on the full dataset.
 
 ```{r 02-model-optimization-012, eval = FALSE}
-task = mlr_tasks$get("iris")
-learner = mlr_learners$get("classif.rpart",
-  param_vals = list(
-    xval = tuner_gs$tune_result()$values$xval,
-    cp = tuner_gs$tune_result()$values$cp)
-)
-
+learner$param_set$values = result$values
 learner$train(task)
 ```
+The trained model could now be used to predict on independent, external data.
+Note that predicting on observations present in the `task` is not statistically sound as these has been used for tuning.
+The resulting performance measure would be over-optimistic.
+Instead, to get unbiased performances for the current task, nested resampling is required.
+In `mlr3` this is done via the `r ref("AutoTuner")`.
+
 
 ### Automating the Tuning {#autotuner}
 
-The steps shown above can be executed in a more convenient way using the `r ref("mlr3tuning::AutoTuner")` class.
+The `r ref("AutoTuner")` wraps a learner and augments it with an automatic tuning for a given set of hyperparameters.
+Because the `r ref("AutoTuner")` itself inherits from the `r ref("Learner")` base class, it can be used like any other learner.
+Analogously to the previous subsection, we create a new classification tree learner which automatically tunes the parameters `cp` and `minsplit` using an inner resampling (holdout).
+We create a terminator which allows 10 evaluations, and use a simple random search as tuning algorithm:
+```{r 02-model-optimization-013}
+library(paradox)
+library(mlr3tuning)
 
-This class gathers all the steps from above into a single call and uses the optimized hyperparameters from the tuning to create a new learner.
+learner = lrn("classif.rpart")
+resampling = rsmp("holdout")
+measures = msr("classif.ce")
+tune_ps = ParamSet$new(list(
+  ParamDbl$new("cp", lower = 0.001, upper = 0.1),
+  ParamInt$new("minsplit", lower = 1, upper = 10)
+))
+terminator = TerminatorEvals$new(10)
+tuner = TunerRandomSearch$new()
 
-Requirements:
-
-- Task
-- Learner
-- Resampling
-- Measure
-- Parameter Set
-- Terminator
-- Tuning method
-- Tuning settings (optional)
-
-```{r 02-model-optimization-013, eval = FALSE}
-task = mlr_tasks$get("iris")
-learner = mlr_learners$get("classif.rpart")
-resampling = mlr_resamplings$get("holdout")
-measures = mlr_measures$mget("classif.ce")
-param_set = paradox::ParamSet$new(
-  params = list(paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)))
-terminator = TerminatorEvaluations$new(5)
-
-at = mlr3tuning::AutoTuner$new(learner, resampling, measures = measures, param_set, terminator,
-  tuner = TunerGridSearch, tuner_settings = list(resolution = 10L))
-
-at$train(task)
-at$learner
+at = AutoTuner$new(
+  learner = learner,
+  resampling = resampling,
+  measures = measures,
+  tune_ps = tune_ps,
+  terminator = terminator,
+  tuner = tuner
+)
+at
 ```
-Note that you can also pass the `r ref("AutoTuner")` to `r ref("resample()")` or `r ref("benchmark()")`.
-By doing so, the AutoTuner will do its resampling for tuning on the training set of the respective split of the outer resampling.
+
+We can now use the learner like any other learner, calling its `$train()` and `$predict()` method.
+Instead, we pass it to `r ref("benchmark()")` to compare the tuner to a classification tree without tuning.
+By doing so, the `r ref("AutoTuner")` will do its resampling for tuning on the training set of the respective split of the outer resampling.
+The learner then predicts on the test set of the outer resampling.
+This yields unbiased performance measures, as the observations in the test set have not been used during tuning or fitting of the respective learner.
 This is called nested resampling.
 
-To compare the tuned learner with the learner using its default, we can use `benchmark()`.
-```{r 02-model-optimization-014, eval = FALSE}
-cv3 = rsmp("cv", folds = 3)
-bmr = benchmark(benchmark_grid("iris", list(at, "classif.rpart"), cv3))
+
+To compare the tuned learner with the learner using its default, we can use `r ref("benchmark()")`:
+```{r 02-model-optimization-014}
+grid = benchmark_grid(
+  task = tsk("pima"),
+  learner = list(at, lrn("classif.rpart")),
+  resampling = rsmp("cv", folds = 3)
+)
+bmr = benchmark(grid)
 bmr$aggregate(measures)
 ```
+Note that we do not expect to any differences here, for multiple reasons:
 
+* the task is too easy
+* the task is rather small, and thus prone to overfitting
+* the tuning budget (10 evaluations) is small
+* `r cran_pkg("rpart")` does not benefit that much from tuning
 
-### Summary
-
-- Use `PerformanceEvaluator$eval()` for manual execution of parameters in `r ref("Resampling")`
-- Define a `Tuner` of your choice using a `r ref("mlr3tuning::PerformanceEvaluator")` with the following inputs
-  - `r ref("Learner")`
-  - `r ref("Task")`
-  - `r ref("Resampling")`
-  - `r ref("paradox::ParamSet")`
-  - `r ref("mlr3tuning::Terminator")`
-- Inspect the tuning result using `Tuner*$tune_result()`
-- Get a summary view of all runs based on the `r ref("BenchmarkResult")` object created during tuning using `Tuner*$aggregate()`
-- The `AutoTuner` class is a convenience wrapper that gathers all steps into one function
 
 ## Feature Selection / Filtering {#fs}
 
@@ -370,31 +314,31 @@ As this is computationally intensive you might want to have a look at section pa
 
 To optimize hyperparameters or conduct features-selection in a nested resampling you need to create learners using either
 
-- the `r ref("mlr3tuning::AutoTuner")` class, or
+- the `r ref("AutoTuner")` class, or
 - the `mlr3filters::AutoSelect` class (not yet implemented).
 
 We use the example from section ["Automating the Tuning"](#autotuner) and pipe the resulting learner into a `r ref("resample()")` call.
 
-```{r 02-model-optimization-019, eval = FALSE}
-task = mlr_tasks$get("iris")
-learner = mlr_learners$get("classif.rpart")
-resampling = mlr_resamplings$get("holdout")
-measures = mlr_measures$mget("classif.ce")
+```{r 02-model-optimization-019}
+library(mlr3tuning)
+task = tsk("iris")
+learner = lrn("classif.rpart")
+resampling = rsmp("holdout")
+measures = msr("classif.ce")
 param_set = paradox::ParamSet$new(
   params = list(paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)))
-terminator = TerminatorEvaluations$new(5)
+terminator = TerminatorEvals$new(5)
+tuner = TunerGridSearch$new(resolution = 10)
 
-at = mlr3tuning::AutoTuner$new(learner, resampling, measures = measures,
-  param_set, terminator, tuner = TunerGridSearch,
-  tuner_settings = list(resolution = 10L))
+at = AutoTuner$new(learner, resampling, measures = measures,
+  param_set, terminator, tuner = tuner)
 at$store_bmr = TRUE
 ```
 
 Now construct the `r ref("resample()")` call:
 
-```{r 02-model-optimization-020, eval = FALSE}
+```{r 02-model-optimization-020}
 resampling_outer = rsmp("cv", folds = 3)
-
 rr = resample(task = task, learner = at, resampling = resampling_outer)
 ```
 
@@ -405,7 +349,7 @@ See also section [Resampling](#resampling) for more detailed information about `
 
 For example, we can query the aggregated performance result:
 
-```{r 02-model-optimization-021, eval = FALSE}
+```{r 02-model-optimization-021}
 rr$aggregate()
 ```
 
@@ -416,6 +360,7 @@ Note: This only works if `store_bmr` was set to `TRUE` in the `AutoTuner` object
 ```
 
 ```{r 02-model-optimization-022, eval = FALSE}
+# FIXME: not yet done
 rr$learners[[1]]$tune_path
 ```
 
