@@ -208,7 +208,7 @@ This makes it not only possible to easily change change the behavior of a `r ref
 ```{r 03-pipelines-020}
 glrn$param_set$values$variance.filter.frac = 0.25
 cv3 = rsmp("cv", folds = 3)
-resample(task, glrn, "cv3")
+resample(task, glrn, cv3)
 ```
 
 ### Tuning {#pipe-tuning}
@@ -345,14 +345,14 @@ to form a single model:
 
 ```{r 03-pipelines-030}
 bagging = pred_set %>>%
-  PipeOpMajorityVote$new(innum = 10L)
+  PipeOpClassifAvg$new(innum = 10L)
 ```
 
 and plot again to see what happens:
 
 ```{r 03-pipelines-031, fig.width=7.5}
-bagging$plot(html = TRUE) %>%
-  visInteraction(zoomView = FALSE) # disable zoom
+vn = bagging$plot(html = TRUE)
+visNetwork::visInteraction(vn, zoomView = FALSE) # disable zoom
 ```
 
 This pipeline can again be used in conjunction with
@@ -393,7 +393,7 @@ lrn_0$id = "rpart_cv"
 Additionally, we use a FIXME  in parallel to the "level 0" learner, in order to send the unchanged Task to the next level, where it is then combined with the predictions from our decision tree learner.
 
 ```{r 03-pipelines-034, eval = FALSE}
-level_0 = gunion(list(lrn_0, PipeOpNULL$new()))
+level_0 = gunion(list(lrn_0, PipeOpNOP$new()))
 ```
 
 Afterwards, we want to concatenate the predictions from `r ref("PipeOpLearnerCV")`  and the original Task using `r ref("PipeOpFeatureUnion")` .
@@ -406,7 +406,8 @@ We can now train another learner on top of the combined features.
 
 ```{r 03-pipelines-036, fig.width=7.5, eval = FALSE}
 stack = combined %>>% PipeOpLearner$new(lrn$clone())
-stack$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
+vn = stack$plot(html = TRUE)
+visNetwork::visInteraction(vn, zoomView = FALSE) # disable zoom
 ```
 
 ```{r 03-pipelines-037, eval = FALSE}
@@ -430,20 +431,19 @@ Additionally, we keep a version of the "level 0" output (via FIXME) and pass thi
 In "level 2" we simply concatenate all "level 1" outputs and train a final decision tree.
 
 ```{r 03-pipelines-038, eval = FALSE}
-rprt = mlr_learners$get("classif.rpart")
-rprt$predict_type = "prob"
-glmn = mlr_learners$get("classif.glmnet")
-glmn$predict_type = "prob"
+library(mlr3learners) # for classif.glmnet
+rprt = lrn("classif.rpart", predict_type = "prob")
+glmn = lrn("classif.glmnet", predict_type = "prob")
 
 #  Create Learner CV Operators
 lrn_0 = PipeOpLearnerCV$new(rprt, id = "rpart_cv_1")
 lrn_0$values$maxdepth = 5L
 lrn_1 = PipeOpPCA$new(id = "pca1") %>>% PipeOpLearnerCV$new(rprt, id = "rpart_cv_2")
-lrn_1$values$maxdepth = 1L
+lrn_1$values$rpart_cv_2.maxdepth = 1L
 lrn_2 = PipeOpPCA$new(id = "pca2") %>>% PipeOpLearnerCV$new(glmn)
 
 # Union them with a PipeOpNULL to keep original features
-level_0 = gunion(list(lrn_0, lrn_1,lrn_2, PipeOpNULL$new(id = "NULL1")))
+level_0 = gunion(list(lrn_0, lrn_1,lrn_2, PipeOpNOP$new(id = "NOP1")))
 
 # Cbind the output 3 times, train 2 learners but also keep level
 # 0 predictions
@@ -453,7 +453,7 @@ level_1 = level_0 %>>%
   gunion(list(
     PipeOpLearnerCV$new(rprt, id = "rpart_cv_l1"),
     PipeOpLearnerCV$new(glmn, id = "glmnt_cv_l1"),
-    PipeOpNULL$new(id = "NULL_l1")
+    PipeOpNOP$new(id = "NOP_l1")
   ))
 
 # Cbind predicitions, train a final learner.
@@ -463,9 +463,10 @@ level_2 = level_1 %>>%
     id = "rpart_l2")
 
 # Plot the resulting graph
-level_2$plot(html = TRUE) %>% visInteraction(zoomView = FALSE) # disable zoom
+vn = level_2$plot(html = TRUE)
+visNetwork::visInteraction(vn, zoomView = FALSE) # disable zoom
 
-task = mlr_tasks$get("iris"),
+task = tsk("iris")
 lrn = GraphLearner$new(level_2)
 
 lrn$
@@ -507,10 +508,10 @@ In this example, we compute some new features on top of the `iris` task and add 
 pom = PipeOpMutate$new()
 
 # Define a set of mutations
-mutations = alist(
-  Sepal.Sum = Sepal.Length + Sepal.Width,
-  Petal.Sum = Petal.Length + Petal.Width,
-  Sepal.Petal.Ratio = (Sepal.Length / Petal.Length)
+mutations = list(
+  Sepal.Sum = ~ Sepal.Length + Sepal.Width,
+  Petal.Sum = ~ Petal.Length + Petal.Width,
+  Sepal.Petal.Ratio = ~ (Sepal.Length / Petal.Length)
 )
 pom$param_set$values$mutation = mutations
 ```
@@ -528,10 +529,10 @@ chks = PipeOpChunk$new(4)
 lrns = greplicate(PipeOpLearner$new(mlr_learners$get("classif.rpart")), 4)
 ```
 
-Afterwards we can use `r ref("PipeOpMajorityVote")`  to aggregate the predictions from the 4 different models into a new one.
+Afterwards we can use `r ref("PipeOpClassifAvg")`  to aggregate the predictions from the 4 different models into a new one.
 
 ```{r 03-pipelines-043}
-mjv = PipeOpMajorityVote$new(4)
+mjv = PipeOpClassifAvg$new(4)
 ```
 
 We can now connect the different operators and visualize the full graph:
