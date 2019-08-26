@@ -1,0 +1,123 @@
+## Benchmarking {#benchmarking}
+
+Comparing the performance of different learners on multiple tasks and/or different resampling schemes is a recurrent task.
+This operation is usually referred to as "benchmarking" in the field of machine-learning.
+`r mlr_pkg("mlr3")` offers the `r ref("benchmark()")` function for convenience.
+
+### Design Creation {#bm-design}
+
+In _mlr3_ we require you to supply a "design" of your benchmark experiment.
+By "design" we essentially mean the matrix of settings you want to execute.
+A "design" consists of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")`.
+Additionally, you can supply different `r ref("Measure")` along side.
+
+Here, we call `r ref("benchmark()")` to perform a single holdout split on a single task and two learners.
+We use the `r ref("benchmark_grid()")` function to create an exhaustive design and properly instantiate the resampling:
+
+```{r 01-mlr3-basics-050}
+library(data.table)
+design = benchmark_grid(
+  tasks = tsk("iris"),
+  learners = list(lrn("classif.rpart"), lrn("classif.featureless")),
+  resamplings = rsmp("holdout")
+)
+print(design)
+bmr = benchmark(design)
+```
+
+Note that the holdout splits have been automatically instantiated for each row of the design.
+As a result, the `rpart` learner used a different training set than the `featureless` learner.
+However, for comparison of learners you usually want the learners to see the same splits into train and test sets.
+To overcome this issue, the resampling strategy needs to be [**manually instantiated**](#resamp-inst) before creating the design.
+
+While the interface of `benchmark()` allows full flexibility, the creation of such design tables can be tedious.
+Therefore, `r mlr_pkg("mlr3")` provides a convenience function to quickly generate design tables and instantiate resampling strategies in an exhaustive grid fashion: `r ref("benchmark_grid()")`.
+
+```{r 01-mlr3-basics-051}
+# get some example tasks
+tasks = mlr_tasks$mget(c("pima", "sonar", "spam"))
+
+# get some measures: accuracy (acc) and area under the curve (auc)
+measures = mlr_measures$mget(c("classif.acc", "classif.auc"))
+
+# get a featureless learner and a classification tree
+# let both learners predict probabilities
+learners = list(
+  lrn("classif.featureless", predict_type = "prob"),
+  lrn("classif.rpart", predict_type = "prob")
+)
+
+# compare via 3-fold cross validation
+resamplings = rsmp("cv", folds = 3)
+
+# create a BenchmarkDesign object
+design = benchmark_grid(tasks, learners, resamplings)
+print(design)
+```
+
+### Execution and Aggregation of Results {#bm-exec}
+
+After the [benchmark design](#bm-design) is ready, we can directly call `r ref("benchmark()")`
+
+```{r 01-mlr3-basics-052}
+# execute the benchmark
+bmr = benchmark(design)
+```
+
+Note that we did not instantiate the resampling instance, but `r ref("benchmark_grid()")` took care of it for us:
+each resampling strategy is instantiated for each task during the construction of the exhaustive grid.
+
+After the benchmark, we can calculate and aggregate the performance with `.$aggregate()`:
+
+```{r 01-mlr3-basics-053}
+bmr$aggregate(measures)
+```
+
+We can aggregate the results further.
+For example, we might be interested which learner performed best over all tasks.
+Since we have `r ref("data.table")` object here, we could do the following:
+
+```{r 01-mlr3-basics-054}
+bmr$aggregate(measures)[, list(acc = mean(classif.acc), auc = mean(classif.auc)), by = "learner_id"]
+```
+
+Alternatively, we can also use the `r cran_pkg("tidyverse")` approach:
+
+```{r 01-mlr3-basics-055}
+library("magrittr")
+requireNamespace("dplyr")
+requireNamespace("tibble")
+
+bmr$aggregate(measures) %>%
+  tibble::as_tibble() %>%
+  dplyr::group_by(learner_id) %>%
+  dplyr::summarise(acc = mean(classif.acc), auc = mean(classif.auc))
+```
+
+Unsurprisingly, the classification tree outperformed the featureless learner.
+
+### Converting specific benchmark objects to resample objects
+
+A `r ref("BenchmarkResult")` object is essentially a collection of multiple `r ref("ResampleResult")` objects.
+As these are stored in a column of the aggregated `data.table()`, we can easily extract them:
+
+```{r 01-mlr3-basics-056}
+tab = bmr$aggregate(measures)
+rr = tab[task_id == "spam" & learner_id == "classif.rpart"]$resample_result[[1]]
+print(rr)
+```
+
+We can now investigate this resampling and even single resampling iterations using one of the approach shown in [the previous section](#bm-exec):
+
+```{r 01-mlr3-basics-057}
+measure = msr("classif.auc")
+rr$aggregate(measure)
+
+# get the iteration with worst AUC
+perf = rr$performance(measure)
+i = which.min(perf$classif.auc)
+
+# get the corresponding learner and train set
+print(rr$learners[[i]])
+head(rr$resampling$train_set(i))
+```
