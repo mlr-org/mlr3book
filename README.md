@@ -19,7 +19,8 @@ pkgload::load_all()
 serve_mlr3book()
 ```
 
-This starts a service which automatically (re-)compiles the bookdown sources in the background.
+(Note that you need to have a recent R version installed as some parts of the book cannot be built with R < 3.6.0).
+The command above starts a service which automatically (re-)compiles the bookdown sources in the background.
 Alternatively, you can run `./serve` if you have `Rscript` in your `PATH`.
 If your browser does not open automatically, go to http://127.0.0.1:4321/.
 
