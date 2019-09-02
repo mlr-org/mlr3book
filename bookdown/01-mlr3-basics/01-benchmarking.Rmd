@@ -9,7 +9,6 @@ This operation is usually referred to as "benchmarking" in the field of machine-
 In _mlr3_ we require you to supply a "design" of your benchmark experiment.
 By "design" we essentially mean the matrix of settings you want to execute.
 A "design" consists of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")`.
-Additionally, you can supply different `r ref("Measure")` along side.
 
 Here, we call `r ref("benchmark()")` to perform a single holdout split on a single task and two learners.
 We use the `r ref("benchmark_grid()")` function to create an exhaustive design and properly instantiate the resampling:
@@ -30,22 +29,20 @@ As a result, the `rpart` learner used a different training set than the `feature
 However, for comparison of learners you usually want the learners to see the same splits into train and test sets.
 To overcome this issue, the resampling strategy needs to be [**manually instantiated**](#resamp-inst) before creating the design.
 
-While the interface of `benchmark()` allows full flexibility, the creation of such design tables can be tedious.
+While the interface of `r ref("benchmark()")` allows full flexibility, the creation of such design tables can be tedious.
 Therefore, `r mlr_pkg("mlr3")` provides a convenience function to quickly generate design tables and instantiate resampling strategies in an exhaustive grid fashion: `r ref("benchmark_grid()")`.
 
 ```{r 01-benchmarking-002}
 # get some example tasks
-tasks = mlr_tasks$mget(c("pima", "sonar", "spam"))
+tasks = lapply(c("german_credit", "sonar"), tsk)
 
-# get some measures: accuracy (acc) and area under the curve (auc)
-measures = mlr_measures$mget(c("classif.acc", "classif.auc"))
-
-# get a featureless learner and a classification tree
-# let both learners predict probabilities
-learners = list(
-  lrn("classif.featureless", predict_type = "prob"),
-  lrn("classif.rpart", predict_type = "prob")
-)
+# get some learners and for all learners ...
+# * predict probabilities
+# * predict also on the training set
+library(mlr3learners)
+learners = c("classif.featureless", "classif.rpart", "classif.ranger", "classif.kknn")
+learners = lapply(learners, lrn,
+  predict_type = "prob", predict_sets = c("train", "test"))
 
 # compare via 3-fold cross validation
 resamplings = rsmp("cv", folds = 3)
@@ -70,31 +67,31 @@ each resampling strategy is instantiated for each task during the construction o
 After the benchmark, we can calculate and aggregate the performance with `.$aggregate()`:
 
 ```{r 01-benchmarking-004}
+# measures:
+# * area under the curve (auc) on training
+# * area under the curve (auc) on test
+measures = list(
+  msr("classif.auc", id = "auc_train", predict_sets = "train"),
+  msr("classif.auc", id = "auc_test")
+)
 bmr$aggregate(measures)
 ```
 
 We can aggregate the results further.
-For example, we might be interested which learner performed best over all tasks.
-Since we have `r ref("data.table")` object here, we could do the following:
+For example, we might be interested which learner performed best over all tasks simultaneously.
+Simply aggregating the performances with the mean is usually not statistically sound.
+Instead, we calculate the rank statistic for each learner grouped by task, and then aggregate the calculated ranks grouped by learner.
+Since the AUC needs to be maximized, we multiply with $-1$ so that the best learner gets a rank of 1.
 
 ```{r 01-benchmarking-005}
-bmr$aggregate(measures)[, list(acc = mean(classif.acc), auc = mean(classif.auc)), by = "learner_id"]
+tab = bmr$aggregate(measures)
+ranks = tab[, .(learner_id, rank_train = rank(-auc_train), rank_test = rank(-auc_test)), by = task_id]
+print(ranks)
+
+ranks[, .(mrank_train = mean(rank_train), mrank_test = mean(rank_test)), by = learner_id][order(mrank_test)]
 ```
 
-Alternatively, we can also use the `r cran_pkg("tidyverse")` approach:
-
-```{r 01-benchmarking-006}
-library("magrittr")
-requireNamespace("dplyr")
-requireNamespace("tibble")
-
-bmr$aggregate(measures) %>%
-  tibble::as_tibble() %>%
-  dplyr::group_by(learner_id) %>%
-  dplyr::summarise(acc = mean(classif.acc), auc = mean(classif.auc))
-```
-
-Unsurprisingly, the classification tree outperformed the featureless learner.
+Unsurprisingly, the featureless learner is outperformed.
 
 ### Converting specific benchmark objects to resample objects
 
