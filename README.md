@@ -42,6 +42,9 @@ More learners can be found in `r mlr_pkg("mlr_learners")`.
 We heavily use `r cran_pkg("data.table")` internally.
 You need the development version of `r gh_pkg("mlr-org/mlr3")` for this.
 ```
+### Lists
+
+For lists please use `*` and not `-`.
 
 ### Chunk Names
 
