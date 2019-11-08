@@ -6,7 +6,7 @@
 Package to build the [mlr3](https://mlr3.mlr-org.com) [bookdown](https://bookdown.org/) book.
 The rendered book can be found [here](https://mlr3book.mlr-org.com).
 
-To install all necessary dependencies for the book, install this package using [remotes](https://cran.r-project.org/package=remotes):
+To install all necessary dependencies for the book, install the this R package using [remotes](https://cran.r-project.org/package=remotes):
 
 ```r
 remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
@@ -19,7 +19,6 @@ pkgload::load_all()
 serve_mlr3book()
 ```
 
-(Note that you need to have a recent R version installed as some parts of the book cannot be built with R < 3.6.0).
 The command above starts a service which automatically (re-)compiles the bookdown sources in the background.
 Alternatively, you can run `./serve` if you have `Rscript` in your `PATH`.
 If your browser does not open automatically, go to http://127.0.0.1:4321/.
@@ -27,13 +26,13 @@ If your browser does not open automatically, go to http://127.0.0.1:4321/.
 ## File system structure
 
 The root directory is a regular R package.
-The book is in the subdirectory "bookdown".
+The book itself is in the subdirectory "bookdown".
 
 ## Style Guide
 
 ### Links and References
 
-The package `mlr3book` provides the helpers `cran_pkg()`, `mlr_pkg()`, `gh_pkg()`, and `ref()`
+The package `mlr3book` provides the helpers `cran_pkg()`, `mlr_pkg()`, `gh_pkg()`, and `ref()`.
 Example:
 
 ```
@@ -76,8 +75,7 @@ Always store images also in a vector format (like .svg), even if you do not use 
 
 ### Spacing
 
-- Always start a new sentence on a new line.
-- Always start a new sentence on a new line.
+- Always start a new sentence on a new line, this keeps the diff readable.
 - Put an empty line before and after code blocks.
 
 ### PDF version
