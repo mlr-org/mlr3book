@@ -15,12 +15,11 @@ remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 To build the book, run the following R command in the repository root:
 
 ```r
-pkgload::load_all()
-serve_mlr3book()
+bookdown::serve_book("bookdown"f
 ```
 
-The command above starts a service which automatically (re-)compiles the bookdown sources in the background.
-Alternatively, you can run `./serve` if you have `Rscript` in your `PATH`.
+The command above starts a service which automatically (re-)compiles the bookdown sources in the background whenever a file is modified.
+Alternatively, you can use the provided `Makefile` (c.f. see `make help`).
 If your browser does not open automatically, go to http://127.0.0.1:4321/.
 
 ## File system structure
@@ -66,7 +65,7 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 
 ### Figures
 
-Please use `knitr::include_graphics()` to add figures. 
+Please use `knitr::include_graphics()` to add figures.
 This way works for the HTML and PDF output.
 In addtion, one can control the width + height of the figure.
 This is not the case for the common markdown syntax `[](<figure>)`.
