@@ -65,6 +65,15 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 ```
 ````
 
+### Figures
+
+Please use `knitr::include_graphics()` to add figures. 
+This way works for the HTML and PDF output.
+In addtion, one can control the width + height of the figure.
+This is not the case for the common markdown syntax `[](<figure>)`.
+
+Always store images also in a vector format (like .svg), even if you do not use them in vector format in the book. Otherwise, we cannot re-use or modify images in the future.
+
 ### Spacing
 
 - Always start a new sentence on a new line.
