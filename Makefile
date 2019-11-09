@@ -10,7 +10,7 @@ help :
 install:
 	Rscript -e 'if (length(find.package("devtools", quiet = TRUE)) == 0) install.packages("devtools")' ;\
 	Rscript -e 'devtools::document()' ;\
-	Rscript -e 'devtools::install(dependencies = TRUE)'
+	Rscript -e 'devtools::install(dependencies = TRUE, upgrade = "always")'
 
 serve:
 	Rscript -e 'bookdown::serve_book("bookdown")'
