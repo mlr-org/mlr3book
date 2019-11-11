@@ -1,0 +1,895 @@
+# Basics {#basics}
+
+This chapter will teach you the essential building blocks, R6 classes, and operations of `r mlr_pkg("mlr3")`.
+This includes creating supervised machine learning tasks like:
+
+[**classification**](#tasks)
+[**regression**](#tasks)
+[**training**](#train-predict) models
+[**prediction**](#train-predict) on new data
+evaluating and comparing different models through [**cross-validation**](#benchmarking) and [**benchmarking**](#benchmarking).
+
+A typical machine learning workflow looks like this:
+
+```{r 02-basics-001, echo = FALSE}
+knitr::include_graphics("images/ml_abstraction.png")
+```
+
+The data, which `r mlr_pkg("mlr3")` encapsulates in tasks, is split into non-overlapping train and test sets.
+This is done to be able to evaluate models objectively.
+We are interested in models that generalize to new data rather than just memorizing the training data.
+The training data is given to a machine learning algorithm.
+This algorithm is called a [learner](#learners) in `r mlr_pkg("mlr3")`.
+The [learner](#learners) uses the training to build a model of how the features of the data relate to the target values.
+This model is then used to produce predictions on the test data.
+These predictions are compared to the ground truth values to assess the quality of the model.
+`r mlr_pkg("mlr3")` offers a number of different measures to quantify this quality.
+Usually this measure is a numeric score.
+This process may be repeated several times.
+Each time the process is repated, different train and test sets are resampled from the original data set.
+Multiple resampling iterations allow us to get a better generalization performance estimate for a particular type of model.
+This is done by quantifying its performance on different data.
+
+The `r mlr_pkg("mlr3")` package provides R6 classes for the essential building blocks of this machine learning workflow:
+
+* A [task](#tasks) encapsulates the data along with additional information, such as what the prediction target is.
+* A [learners](#learners) encapsulates one of R's many machine learning algorithms and allows to train models and make predictions.
+  Most learners have hyperparameters that affect their operation.
+* A [measure](#measures) computes a numeric score based on predicted and ground-truth values and their difference.
+* A [resampling](#resampling) specifies a series of train and test sets.
+
+In many cases, this simple workflow is not sufficient to deal with real-world data, which may require normalization, imputation of missing values, or [feature selection](#fs).
+We will cover more complex workflows that allow to do this and even more later in the book.
+For now, we restrict ourselves to simple workflows like the one above for the sake of clarity.
+
+
+## Quick R6 Intro for Beginners
+
+R6 is one of R's more recent dialects for object-oriented programming (OO).
+It addresses shortcomings of earlier OO implementations in R, such as S3, which we used in `r mlr_pkg("mlr")`.
+If you are not familiar with OO programming, it might take a bit to find your way around.
+If you have done OO in another language, R6 should feel familiar.
+We focus on the parts of R6 that you need to know to use `r mlr_pkg("mlr3")` here without going into further detail.
+
+* Objects are created by calling the constructor of an `R6Class()` object.
+  For example `foo = Foo$new(bar = 1)` creates a new object of class `Foo`, setting the `bar` argument of the constructor to `1`.
+* Classes have mutable state which is encapsulated in their fields.
+  Continuing with the previous example, assuming that the constructor sets the public field `bar` to `1`, we can access its value through the dollar operator: `foo$bar` or `foo$bar = 2`.
+* In addition to fields, objects expose methods that may allow to inspect the object's state or retrieve information and perform an action that may change the internal state of the object.
+  As an example, the `$train` method of a learner changes the internal state by producing and storing a trained model.
+* Objects can have public and private fields and methods.
+  As a user of `r mlr_pkg("mlr3")`, you can only access the public variables and methods -- the private are only relevant if you want to change or extend `r mlr_pkg("mlr3")`.
+* R6 variables are references to the actual object in the environment; they do not hold the object itself.
+  For example `foo2 = foo` does not create a copy of `foo` and store it in `foo2`, but only the reference to the actual object.
+  `foo` and `foo2` refer to the same object, and setting `foo$bar = 3` will also change `foo2$bar` to `3`.
+* To copy an object, use the `$clone()` method; use the `deep = TRUE` argument for nested objects, for example `foo2 = foo$clone(deep = TRUE)`.
+
+For more details on R6, have a look at the [R6 vignettes](https://r6.r-lib.org/).
+
+
+## Tasks {#tasks}
+
+**Tasks** are objects for the data and additional meta-data for a machine learning problem.
+The meta-data is for example the name of the target variable (the prediction) for supervised machine learning problems, or the type of the dataset (e.g. a _spatial_ or _survival_).
+This information is used for specific operations that can be performed on a task.
+
+### Task Types
+
+To create a task from a `r ref("data.frame()")` or `r ref("data.table()")` object, the task type needs to be specified:
+
+[Classification Task](#special-tasks): The target is a label (stored as `character()`or`factor()`) with only few distinct values.
+<br/>→ `r ref("mlr3::TaskClassif")`
+
+[Regression Task](#special-tasks): The target is a numeric quantity (stored as `integer()` or `double()`).
+<br/>→ `r ref("mlr3::TaskRegr")`
+
+[Survival Task](#survival): The target is the (right-censored) time to an event.
+<br/>→ `r ref("mlr3survival::TaskSurv")` in add-on package `r mlr_pkg("mlr3survival")`
+
+[Ordinal Regression Task](#ordinal): The target is ordinal.
+<br/>→ `r ref("mlr3ordinal::TaskOrdinal")` in add-on package `r mlr_pkg("mlr3ordinal")`
+
+[Cluster Task](#multilabel): An unsupervised task type; there is no target and the aim is to identify similar groups within the feature space.
+<br/>→ Not yet implemented
+
+[Spatial Task](#spatial): Observations in the task have spatio-temporal information (e.g. coordinates).
+<br/>→ Not yet implemented, but started in add-on package `r mlr_pkg("mlr3spatiotemporal")`
+
+### Task Creation
+
+As an example, we will create a regression task using the `mtcars` data set from the package `datasets` and predict the target `"mpg"` (miles per gallon).
+We only consider the first two features in the dataset for brevity.
+
+First, we load and prepare the data.
+
+```{r 02-basics-002}
+data("mtcars", package = "datasets")
+data = mtcars[, 1:3]
+str(data)
+```
+
+Next, we create the task using the constructor for a regression task object (`TaskRegr$new`) and give the following information:
+
+1. `id`: An arbitrary identifier for the task, used in plots and summaries.
+2. `backend`: This parameter allows fine-grained control over how data is accessed.
+   Here, we simply provide the dataset which is automatically converted to a `r ref("DataBackendDataTable")`.
+   We could also construct a `r ref("DataBackend")` manually.
+3. `target`: The name of the target column for the regression problem.
+
+```{r 02-basics-003}
+library(mlr3)
+
+task_mtcars = TaskRegr$new(id = "cars", backend = data, target = "mpg")
+print(task_mtcars)
+```
+
+The `print()` method gives a short summary of the task:
+It has `r task_mtcars$nrow` observations and `r task_mtcars$ncol` columns, of which `r length(task_mtcars$feature_names)` are features.
+
+We can also plot the task using the `r mlr_pkg("mlr3viz")` package, which gives a graphical summary of its properties:
+
+```{r 02-basics-004}
+library(mlr3viz)
+autoplot(task_mtcars, type = "pairs")
+```
+
+### Predefined tasks
+
+`r mlr_pkg("mlr3")` ships with a few predefined machine learning tasks.
+All tasks are stored in an R6 `r ref("Dictionary")` (a key-value store) named `r ref("mlr_tasks")`.
+Printing it gives the keys (the names of the datasets):
+
+```{r 02-basics-005}
+mlr_tasks
+```
+
+We can get a more informative summary of the example tasks by converting the dictionary to a `data.table()` object:
+
+```{r 02-basics-006}
+library(data.table)
+as.data.table(mlr_tasks)
+```
+
+To get a task from the dictionary, one can use the `$get()` method from the `mlr_tasks` class and assign the return value to a new object.
+For example, to use the [iris data set](https://en.wikipedia.org/wiki/Iris_flower_data_set) for classification:
+
+```{r 02-basics-007}
+task_iris = mlr_tasks$get("iris")
+print(task_iris)
+```
+
+Alternatively, you can also use the convenience function `r ref("tsk()")`, which also constructs a task from the dictionary.
+
+```{r 02-basics-008}
+tsk("iris")
+```
+
+### Task API
+
+All task properties and characteristics can be queried using the task's public fields and methods (see `r ref("Task")`).
+Methods are also used to change the behavior of the task.
+
+#### Retrieving Data
+
+The data stored in a task can be retrieved directly from fields, for example:
+
+```{r 02-basics-009}
+task_iris$nrow
+task_iris$ncol
+```
+
+More information can be obtained through methods of the object, for example:
+
+```{r 02-basics-010}
+task_iris$data()
+```
+
+In `r mlr_pkg("mlr3")`, each row (observation) has a unique identifier is either an `integer` or `character`.
+These can be passed as arguments to the `$data()` method to select specific rows.
+
+The _iris_ task uses integer `row_ids`:
+
+```{r 02-basics-011}
+# iris uses integer row_ids
+head(task_iris$row_ids)
+
+# retrieve data for rows with ids 1, 51, and 101
+task_iris$data(rows = c(1, 51, 101))
+```
+
+The _mtcars_ task on the other hand uses names for its `row_ids`, encoded as `character`:
+
+```{r 02-basics-012}
+task_mtcars = tsk("mtcars")
+head(task_mtcars$row_ids)
+
+# retrieve data for rows with id "Datsun 710"
+task_mtcars$data(rows = "Datsun 710")
+```
+
+Note that the method `$data()` only allows to read the data and does not modify it.
+
+Similarly, each column has an identifier or name.
+These names are stored in the public slots `feature_names` and `target_names`.
+Here "target" refers to the variable we want to predict and "feature" to the predictors for the task.
+
+```{r 02-basics-013}
+task_iris$feature_names
+task_iris$target_names
+```
+
+The `row_id`s and column names can be combined when selecting a subset of the data:
+
+```{r 02-basics-014}
+# retrieve data for rows 1, 51, and 101 and only select column "Species"
+task_iris$data(rows = c(1, 51, 101), cols = "Species")
+```
+
+To extract the complete data from the task, one can simply convert it to a `data.table`:
+
+```{r 02-basics-015}
+summary(as.data.table(task_iris))
+```
+
+#### Roles (Rows and Columns)
+
+It is possible to assign roles to rows and columns.
+These roles affect the behavior of the task for different operations.
+Furthermore, these roles provide additional meta-data for it.
+
+For example, the previously-constructed _mtcars_ task has the following column roles:
+
+```{r 02-basics-016}
+print(task_mtcars$col_roles)
+```
+
+To add the row names of `mtcars` as an additional feature, we first add them to the data table and then recreate the task.
+
+```{r 02-basics-017}
+# with `keep.rownames`, data.table stores the row names in an extra column "rn"
+data = as.data.table(mtcars[, 1:3], keep.rownames = TRUE)
+task = TaskRegr$new(id = "cars", backend = data, target = "mpg")
+
+# we now have integer row_ids
+task$row_ids
+
+# there is a new feature called "rn"
+task$feature_names
+```
+
+The row names are now a feature whose values are stored in the column "rn".
+We include this column here for educational purposes only.
+Generally speaking, there is no point in having a feature that uniquely identifies each row.
+Furthermore, the character data type will cause problems with many types of machine learning algorithms.
+The identifier may be useful to label points in plots and identify outliers however.
+To use the new column for only this purpose, we will change the role of the "rn" column and remove it from the set of active features.
+
+```{r 02-basics-018}
+task$feature_names
+
+# working with a list of column vectors
+task$col_roles$name = "rn"
+task$col_roles$feature = setdiff(task$col_roles$feature, "rn")
+
+# "rn" not listed as feature anymore
+task$feature_names
+
+# does also not appear when we access the data anymore
+task$data(rows = 1:2)
+task$head(2)
+```
+
+Changing the role does not change the underlying data.
+Changing the role only changes the view on it.
+The data is not copied in the code above.
+The view is changed in-place though, i.e. the task object itself is modified.
+
+Just like columns, it is also possible to assign different roles to rows.
+Rows can have two different roles:
+
+1. Role `use`
+Rows that are generally available for model fitting (although they may also be used as test set in resampling).
+This role is the default role.
+
+2. Role `validation`
+Rows that are not used for training.
+Rows that have missing values in the target column during task creation are automatically set to the validation role.
+
+There are several reasons to hold some observations back or treat them differently:
+
+1. It is often good practice to validate the final model on an external validation set to identify possible overfitting.
+2. Some observations may be unlabeled, e.g. in competitions like [Kaggle](https://www.kaggle.com/).
+
+These observations cannot be used for training a model, but can be used to get predictions.
+
+#### Task Mutators
+
+As shown above, modifying `$col_roles` or `$row_roles` changes the view on the data.
+The additional convenience method `$filter()` subsets the current view based on row ids and `$select()` subsets the view based on feature names.
+
+```{r 02-basics-019}
+task = tsk("iris")
+task$select(c("Sepal.Width", "Sepal.Length")) # keep only these features
+task$filter(1:3) # keep only these rows
+task$head()
+```
+
+While the methods discussed above allow to subset the data, the methods `$rbind()` and `$cbind()` allow to add extra rows and columns to a task.
+Again, the original data is not changed.
+The additional rows or columns are only added to the view of the data.
+
+```{r 02-basics-020}
+task$cbind(data.table(foo = letters[1:3])) # add column foo
+task$head()
+```
+
+## Learners {#learners}
+
+Objects of class `r ref("mlr3::Learner")` provide a unified interface to many popular machine learning algorithms in R.
+They consist of methods to train and predict a model for a `r ref("mlr3::Task")` and provide meta-information about the learners, such as the hyperparameters you can set.
+
+The package ships with a minimal set of classification and regression learners to avoid lots of dependencies:
+
+* `r ref("mlr_learners_classif.featureless")`: Simple baseline classification learner, constantly predicts the label most most frequent label.
+* `r ref("mlr_learners_classif.rpart")`: Single classification tree from `r cran_pkg("rpart")`.
+* `r ref("mlr_learners_regr.featureless")`: Simple baseline regression learner, constantly predicts with the mean.
+* `r ref("mlr_learners_regr.rpart")`: Single regression tree from `r cran_pkg("rpart")`.
+
+Some of the most popular learners are connected via the `r mlr_pkg("mlr3learners")` package:
+
+* (penalized) linear and logistic regression
+* $k$-Nearest Neighbors regression and classification
+* Linear and Quadratic Discriminant Analysis
+* Naive Bayes
+* Support-Vector machines
+* Gradient Boosting
+* Random Regression Forests and Random Classification Forests
+* Kriging
+
+The base class of learners is `r ref("Learner")`, specialized for regression as `r ref("LearnerRegr")` and for classification as `r ref("LearnerClassif")`.
+In contrast to the `r ref("Task")`, the creation of a custom Learner is usually not required and a more advanced topic.
+Hence, we refer the reader to Section \@ref(ext-learner) and proceed with an overview of the interface of already implemented learners.
+
+### Predefined Learners
+
+Similar to `r ref("mlr_tasks")`, the `r ref("Dictionary")` `r ref("mlr_learners")` can be queried for available learners:
+
+```{r 02-basics-021}
+library(mlr3learners)
+mlr_learners
+```
+
+Each learner has the following information:
+
+* `feature_types`: the type of features the learner can deal with.
+* `packages`: the packages required to train a model with this learner and make predictions.
+* `properties`: additional properties and capabilities.
+  For example, a learner has the property "missings" if it is able to handle missing feature values, and "importance" if it computes and allows to extract data on the relative importance of the features. A complete list of these is available in the mlr3 reference on [regression learners](https://mlr3.mlr-org.com/reference/LearnerRegr.html#construction) and [classification learners](https://mlr3.mlr-org.com/reference/LearnerClassif.html#construction).
+* `predict_types`: possible prediction types. For example, a classification learner can predict labels ("response") or probabilities ("prob"). For a complete list of possible predict types see the [mlr3 reference](https://mlr3.mlr-org.com/reference/Learner.html#construction).
+
+For a tabular overview of integrated learners, see Section \@ref(list-learners).
+
+
+You can get a specific learner using its `id`, listed under `key` in the dictionary:
+
+```{r 02-basics-022}
+learner = mlr_learners$get("classif.rpart")
+print(learner)
+```
+
+The field `param_set` stores a description of the hyperparameters the learner has, their ranges, defaults, and current values:
+
+```{r 02-basics-023}
+learner$param_set
+```
+
+The set of current hyperparameter values is stored in the `values` field of the `param_set` field.
+You can change the current hyperparameter values by assigning a named list to this field:
+
+```{r 02-basics-024}
+learner$param_set$values = list(cp = 0.01, xval = 0)
+learner
+```
+Note that this operation just overwrites all previously set parameters.
+If you just want to add or update hyperparameters, you can use `r ref("mlr3misc::insert_named()")`:
+
+```{r 02-basics-025}
+learner$param_set$values = mlr3misc::insert_named(
+  learner$param_set$values,
+  list(cp = 0.02, minsplit = 2)
+)
+learner
+```
+
+This updates `cp` to `0.02`, sets `minsplit` to `2` and keeps the previously set parameter `xval`.
+
+Again, there is an alternative to writing down the lengthy `mlr_learners$get()` part: `r ref("lrn()")`.
+This function additionally allows to construct learners with specific hyperparameters or settings of a different identifier in one go:
+
+```{r 02-basics-026}
+lrn("classif.rpart", id = "rp", cp = 0.001)
+```
+
+If you pass hyperparameters here, it is added to the default parameters in a `r ref("mlr3misc::insert_named()", text = "insert_named")`-fashion.
+
+For further information on how to customize learners using mlr3, see the section on [extending learners](#ext-learner) in the [extending](#extending)-chapter.
+Here one can find additional information on how to:
+
+* Create a new classification learner
+* Customize meta information
+* Train the internal function
+* Predict the internal function
+
+
+## Train & Predict {#train-predict}
+
+In this chapter, we explain how [tasks](#tasks) and [learners](#learners) can be used to train a model and predict to a new dataset.
+The concept is demonstrated on a supervised classification using the iris dataset and the **rpart** learner (classification tree).
+Additionally, this chapter includes the following use-cases:
+
+* Functional Data Analysis using <model name> (WIP)
+* Regression Analysis using <model name> (WIP)
+* Survival Analysis using <model name> (WIP)
+* Spatial Analysis using <model name> (WIP)
+
+### Basic concept
+
+#### Creating Task and Learner Objects
+
+The first step is to generate the following `r mlr_pkg("mlr3")` objects from the [task dictionary](#tasks) and the [learner dictionary](#learners), respectively:
+
+1. The classification [task](#task):
+
+```{r 02-basics-027}
+task = tsk("iris")
+```
+
+2. A [learner](#learner) for the classification tree:
+
+```{r 02-basics-028}
+learner = lrn("classif.rpart")
+```
+
+#### Setting up the train/test splits of the data {#split-data}
+
+It is common to train on a majority of the data.
+Here we use 80% of all available observations and predict on the remaining 20% observations.
+For this purpose, we create two index vectors:
+
+```{r 02-basics-029}
+train_set = sample(task$nrow, 0.8 * task$nrow)
+test_set = setdiff(seq_len(task$nrow), train_set)
+```
+
+#### Training the learner
+
+The field `model` stores the model that is produced in the training step.
+Before the `train` method is called on a learner object, this field is `NULL`:
+
+```{r 02-basics-030}
+learner$model
+```
+
+Next, the classification tree is trained using the train set of the iris task, applying the `$train()` method of the `r ref("Learner")`:
+
+```{r 02-basics-031}
+learner$train(task, row_ids = train_set)
+```
+
+This operation modifies the learner in-place.
+We can now access the stored model via the field `$model`:
+
+```{r 02-basics-032}
+print(learner$model)
+```
+
+#### Predicting
+
+After the model has been trained, we use the remaining part of the data for prediction.
+Remember that we [initially split the data](#split-data) in `train_set` and `test_set`.
+
+```{r 02-basics-033}
+prediction = learner$predict(task, row_ids = test_set)
+print(prediction)
+```
+
+The `$predict()` method of the `r ref("Learner")` returns a `r ref("Prediction")` object.
+More precise, as the learner is specialized for classification, a `r ref("LearnerClassif")` returns a `r ref("PredictionClassif")` object.
+
+A prediction objects holds The row ids of the test data, the respective true label of the target column and the respective predictions.
+The simplest way to extract this information is by converting to a `data.table()`:
+
+```{r 02-basics-034}
+head(as.data.table(prediction))
+```
+
+For classification, you can also extract the confusion matrix:
+
+```{r 02-basics-035}
+prediction$confusion
+```
+
+##### Performance assessment
+
+The last step of an modeling is usually the performance assessment.
+At the performance assessment one chooses a performance measure to quantify the predictions.
+This is done by comparing the predicted labels with the true labels.
+Available measures are stored in `r ref("mlr_measures")` (with convenience getter `r ref("msr()")`):
+
+```{r 02-basics-036}
+mlr_measures
+```
+
+We select the accuracy (`r ref("mlr_measures_classif.acc", text = "classif.acc")`) and call the method `$score()` of the `r ref("Prediction")` object.
+
+```{r 02-basics-037}
+measure = msr("classif.ce")
+prediction$score(measure)
+```
+
+Note that, if no measure is specified, classification defaults to classification error (`r ref("mlr_measures_classif.ce", text = "classif.ce")`) and regression defaults to the mean squared error (`r ref("mlr_measures_regr.mse", text = "regr.mse")`).
+
+
+## Resampling {#resampling}
+
+### Settings {#resamp-settings}
+
+In this example we use the _iris_ task and a simple classification tree (package `r cran_pkg("rpart")`).
+
+```{r 02-basics-038}
+task = tsk("iris")
+learner = lrn("classif.rpart")
+```
+
+When performing resampling with a dataset, we first need to define which approach should be used.
+The resampling strategies of _mlr3_ can be queried using the `.$keys()` method of the `r ref("mlr_resamplings")` dictionary.
+
+```{r 02-basics-039}
+mlr_resamplings
+```
+
+Additional resampling methods for special use cases will be available via extension packages, such as `r gh_pkg("mlr-org/mlr3spatiotemporal")` for spatial data (still in development).
+
+The model fit conducted in the [train/predict/score](#train-predict) chapter is equivalent to a "holdout", so let's consider this one first.
+Again, we can retrieve elements via `$get()` or with a convenience function (`r ref("rsmp()")`):
+
+```{r 02-basics-040}
+resampling = rsmp("holdout")
+print(resampling)
+```
+
+Note that the `Instantiated` field is set to `FALSE`.
+This means we did not actually apply the strategy on a dataset yet, but just performed a dry-run.
+Applying the strategy on a dataset is done in section next [Instantation](#instantation).
+
+By default we get a .66/.33 split of the data.
+There are two ways in which the ratio can be changed:
+
+1. Overwriting the slot in `.$param_set$values` using a named list:
+
+```{r 02-basics-041}
+resampling$param_set$values = list(ratio = 0.8)
+```
+
+2. Specifying the resampling parameters directly during construction:
+
+```{r 02-basics-042}
+rsmp("holdout", ratio = 0.8)
+```
+
+### Instantiation {#resamp-inst}
+
+So far we just set the stage and selected the resampling strategy.
+To actually perform the splitting, we need to apply the settings on a dataset.
+This can be done in two ways:
+
+1. Manually by calling the method `.$instantiate()` on a `r ref("Task")`:
+
+```{r 02-basics-043}
+resampling = rsmp("cv", folds = 3L)
+resampling$instantiate(task)
+resampling$iters
+resampling$train_set(1)
+```
+
+2. Automatically by passing the resampling object to `resample()`.
+   Here, the splitting is done within the `resample()` call based on the supplied `r ref("Task")`:
+
+```{r 02-basics-044}
+learner1 = lrn("classif.rpart") # simple classification tree
+learner2 = lrn("classif.featureless") # featureless learner, prediction majority class
+rr1 = resample(task, learner1, resampling)
+rr2 = resample(task, learner2, resampling)
+
+setequal(rr1$resampling$train_set(1), rr2$resampling$train_set(1))
+```
+
+If you want to compare multiple [learners](#learners), you should use the same resampling per task to reduce the variance of the performance estimation (**method 1**).
+If you use **method 2** (and do not instantiate manually before), the resampling splits will differ between both runs.
+
+If you aim is to compare different `r ref("Task")`, `r ref("Learner")` or `r ref("Resampling")`, you are better off using the `r ref("benchmark()")` function.
+It is basically a wrapper around `r ref("resample()")` simplifying the handling of multiple settings.
+
+If you discover this only after you've run multiple `r ref("resample()")` calls, don't worry.
+You can transform multiple single `r ref("ResampleResult")` objects into a `r ref("BenchmarkResult")` (explained later) using the `.$combine()` method.
+
+### Execution {#resamp-exec}
+
+With a `r ref("Task")`, a `r ref("Learner")` and `r ref("Resampling")` object we can call `r ref("resample()")` and create a `r ref("ResampleResult")` object.
+
+Before we go into more detail, let's change the resampling to a "3-fold cross-validation" to better illustrate what operations are possible with a `r ref("ResampleResult")`.
+Additionally, we tell `r ref("resample()")` to keep the fitted models via the flag `store_models`:
+
+```{r 02-basics-045}
+task = tsk("iris")
+learner = lrn("classif.rpart")
+resampling = rsmp("cv", folds = 3L)
+
+rr = resample(task, learner, resampling, store_models = TRUE)
+print(rr)
+```
+
+The following operations are supported with `r ref("ResampleResult")` objects:
+
+* Extract the performance for the individual resampling iterations:
+
+```{r 02-basics-046}
+rr$score("classif.ce")
+```
+
+* Extract and inspect the resampling splits:
+
+```{r 02-basics-047}
+rr$resampling
+rr$resampling$iters
+rr$resampling$test_set(1)
+rr$resampling$train_set(3)
+```
+
+* Retrieve the [learner](#learners) of a specific iteration and inspect it:
+
+```{r 02-basics-048}
+lrn = rr$learners[[1]]
+lrn$model
+```
+
+### Custom resampling
+
+Sometimes it is necessary to perform resampling with custom splits.
+If you want to do that because you are coming from a specific modeling field, first take a look at the _mlr3_ extension packages.
+It is important to make sure that your custom resampling method hasn't been implemented already.
+
+If your custom resampling method is widely used in your field, feel welcome to integrate it into one of the existing _mlr3_ extension packages.
+You could also create your own extension package.
+
+A manual resampling instance can be created using the `"custom"` template.
+
+```{r 02-basics-049}
+resampling = rsmp("custom")
+resampling$instantiate(task,
+  list(c(1:10, 51:60, 101:110)),
+  list(c(11:20, 61:70, 111:120))
+)
+resampling$iters
+resampling$train_set(1)
+resampling$test_set(1)
+```
+
+## Benchmarking {#benchmarking}
+
+Comparing the performance of different learners on multiple tasks and/or different resampling schemes is a recurrent task.
+This operation is usually referred to as "benchmarking" in the field of machine-learning.
+The `r mlr_pkg("mlr3")` package offers the `r ref("benchmark()")` function for convenience.
+
+### Design Creation {#bm-design}
+
+In _mlr3_ we require you to supply a "design" of your benchmark experiment.
+By "design" we essentially mean the matrix of settings you want to execute.
+A "design" consists of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")`.
+
+Here, we call `r ref("benchmark()")` to perform a single holdout split on a single task and two learners.
+We use the `r ref("benchmark_grid()")` function to create an exhaustive design and properly instantiate the resampling:
+
+```{r 02-basics-050}
+library(data.table)
+design = benchmark_grid(
+  tasks = tsk("iris"),
+  learners = list(lrn("classif.rpart"), lrn("classif.featureless")),
+  resamplings = rsmp("holdout")
+)
+print(design)
+bmr = benchmark(design)
+```
+
+Note that the holdout splits have been automatically instantiated for each row of the design.
+As a result, the `rpart` learner used a different training set than the `featureless` learner.
+However, for comparison of learners you usually want the learners to see the same splits into train and test sets.
+To overcome this issue, the resampling strategy needs to be [**manually instantiated**](#resamp-inst) before creating the design.
+
+The interface of `r ref("benchmark()")` allows for full flexibility.
+Irrespective, the creation of such design tables can be tedious.
+Therefore, `r mlr_pkg("mlr3")` provides a convenience function to quickly generate design tables and instantiate resampling strategies in an exhaustive grid fashion: `r ref("benchmark_grid()")`.
+
+```{r 02-basics-051}
+# get some example tasks
+tasks = lapply(c("german_credit", "sonar"), tsk)
+
+# get some learners and for all learners ...
+# * predict probabilities
+# * predict also on the training set
+library(mlr3learners)
+learners = c("classif.featureless", "classif.rpart", "classif.ranger", "classif.kknn")
+learners = lapply(learners, lrn,
+  predict_type = "prob", predict_sets = c("train", "test"))
+
+# compare via 3-fold cross validation
+resamplings = rsmp("cv", folds = 3)
+
+# create a BenchmarkDesign object
+design = benchmark_grid(tasks, learners, resamplings)
+print(design)
+```
+
+### Execution and Aggregation of Results {#bm-exec}
+
+After the [benchmark design](#bm-design) is ready, we can directly call `r ref("benchmark()")`:
+
+```{r 02-basics-052}
+# execute the benchmark
+bmr = benchmark(design)
+```
+
+Note that we did not instantiate the resampling instance.
+`r ref("benchmark_grid()")` took care of it for us:
+Each resampling strategy is instantiated for each task during the construction of the exhaustive grid.
+
+After the benchmark, one can calculate and aggregate the performance with `.$aggregate()`:
+
+```{r 02-basics-053}
+# measures:
+# * area under the curve (auc) on training
+# * area under the curve (auc) on test
+measures = list(
+  msr("classif.auc", id = "auc_train", predict_sets = "train"),
+  msr("classif.auc", id = "auc_test")
+)
+bmr$aggregate(measures)
+```
+
+Subsequently, we can aggregate the results further.
+For example, we might be interested which learner performed best over all tasks simultaneously.
+Simply aggregating the performances with the mean is usually not statistically sound.
+Instead, we calculate the rank statistic for each learner grouped by task.
+Then the calculated ranks grouped by learner are aggregated.
+Since the AUC needs to be maximized, we multiply with $-1$ so that the best learner gets a rank of 1.
+
+```{r 02-basics-054}
+tab = bmr$aggregate(measures)
+ranks = tab[, .(learner_id, rank_train = rank(-auc_train), rank_test = rank(-auc_test)), by = task_id]
+print(ranks)
+
+ranks[, .(mrank_train = mean(rank_train), mrank_test = mean(rank_test)), by = learner_id][order(mrank_test)]
+```
+
+Unsurprisingly, the featureless learner is outperformed.
+
+### Converting specific benchmark objects to resample objects
+
+A `r ref("BenchmarkResult")` object is essentially a collection of multiple `r ref("ResampleResult")` objects.
+As these are stored in a column of the aggregated `data.table()`, we can easily extract them:
+
+```{r 02-basics-055}
+tab = bmr$aggregate(measures)
+rr = tab[task_id == "sonar" & learner_id == "classif.ranger"]$resample_result[[1]]
+print(rr)
+```
+
+We can now investigate this resampling and even single resampling iterations using one of the approach shown in [the previous section](#bm-exec):
+
+```{r 02-basics-056}
+measure = msr("classif.auc")
+rr$aggregate(measure)
+
+# get the iteration with worst AUC
+perf = rr$score(measure)
+i = which.min(perf$classif.auc)
+
+# get the corresponding learner and train set
+print(rr$learners[[i]])
+head(rr$resampling$train_set(i))
+```
+
+## Binary classification {#binary}
+
+Classification problems with a target variable containing only two classes are called "binary".
+For such binary target variables, you can specify the *positive class* within the `r ref("TaskClassif", text = "classification task")` object during task creation.
+If not explicitly set during construction, the positive class defaults to the first level of the target variable.
+
+```{r 02-basics-057}
+# during construction
+data("Sonar", package = "mlbench")
+task = TaskClassif$new(id = "Sonar", Sonar, target = "Class", positive = "R")
+
+# switch positive class to level 'M'
+task$positive = "M"
+```
+
+### ROC Curve and Thresholds
+
+ROC Analysis, which stands for "receiver operating characteristics", is a subfield of machine learning which studies the evaluation of binary prediction systems.
+We saw earlier that one can retrieve the confusion matrix of a `r ref("Prediction")` by accessing the `$confusion` field:
+
+```{r 02-basics-058}
+learner = lrn("classif.rpart", predict_type = "prob")
+pred = learner$train(task)$predict(task)
+C = pred$confusion
+print(C)
+```
+
+The confusion matrix contains the counts of correct and incorrect class assignments, grouped by class labels.
+The columns illustrate the true (observed) labels and the rows display the predicted labels.
+The positive is always the first row or column in the confusion matrix.
+Thus, the element in $C_{11}$ is the number of times our model predicted the positive class and was right about it.
+Analogously, the element in $C_{22}$ is the number of times our model predicted the negative class and was also right about it.
+The elements on the diagonal are called True Positives (TP) and True Negatives (TN).
+The element $C_{12}$ is the number of times we falsely predicted a positive label, and is called False Positives (FP).
+The element $C_{21}$ is called False Negatives (FN).
+
+We can now normalize in rows and columns of the confusion matrix to derive several informative metrics:
+
+* **True Positive Rate (TPR)**: How many of the true positives did we predict as positive?
+* **True Negative Rate (TNR)**: How many of the true negatives did we predict as negative?
+* **Positive Predictive Value PPV**: If we predict positive how likely is it a true positive?
+* **Negative Predictive Value NPV**: If we predict negative how likely is it a true negative?
+
+```{r 02-basics-059, echo = FALSE}
+knitr::include_graphics("images/confusion_matrix(wikipedia).png")
+```
+
+Source: [Wikipedia](https://en.wikipedia.org/wiki/Evaluation_of_binary_classifiers)
+
+It is difficult to achieve a high TPR and low FPR in conjunction, so one uses them for constructing the ROC Curve.
+We characterize a classifier by its TPR and FPR values and plot them in a coordinate system.
+The best classifier lies on the top-left corner.
+The worst classifier lies at the diagonal.
+<!-- FIXME Why is the best classifier on the top-left? The argument here only shows that classifiers at the diogonal are inferior but there is no argument in place, illustrating why the other (top left) classifiers are superior. -->
+Classifiers lying on the diagonal produce random labels (with different proportions).
+If each positive $x$ will be randomly classified with 25\% as "positive", we get a TPR of 0.25.
+If we assign each negative $x$ randomly to "positive" we get a FPR of 0.25.
+In practice, we should never obtain a classifier below the diagonal, as inverting the predicted labels will result in a reflection at the diagonal.
+<!-- FIXME Why is that reflection bad as such ? One sentence to elaborate would add here-->
+
+A scoring classifier is a model which produces scores or probabilities, instead of discrete labels.
+Nearly all modern classifiers can do that.
+Thresholding flexibly converts measured probabilities to labels.
+Predict $1$ (positive class) if $\hat{f}(x) > \tau$ else predict $0$.
+Normally, one could use $\tau = 0.5$ to convert probabilities to labels, but for imbalanced or cost-sensitive situations another threshold could be more suitable.
+After thresholding, any metric defined on labels can be used.
+
+For `mlr3` prediction objects, the ROC curve can easily be created using third party packages such as the `r cran_pkg("precrec")` package:
+
+```{r 02-basics-060}
+library(precrec)
+evaluated = evalmod(
+  scores = pred$prob[, task$positive],
+  label = pred$truth,
+  posclass = task$positive
+)
+
+# TPR vs FPR / Sensitivity vs (1 - Specificity)
+ggplot2::autoplot(evaluated, curvetype = "ROC")
+
+# Precision vs Recall
+ggplot2::autoplot(evaluated, curvetype = "PRC")
+```
+
+
+### Threshold Tuning
+
+<!--
+When we are interested in class labels based on scores or probabilities, we can set the classification threshold according to our target performance measure.
+This threshold however can also be **tuned**, since the optimal threshold might differ for different (custom) measures or in situations like const-sensitive classification.
+
+This can be also done with `mlr3`.
+-->
+
