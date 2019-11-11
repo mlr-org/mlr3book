@@ -231,6 +231,91 @@ Note that we do not expect any differences here compared to the non-tuned approa
 * the tuning budget (10 evaluations) is small
 * `r cran_pkg("rpart")` does not benefit that much from tuning
 
+### Tuning with Hyperband {#hyperband}
+
+Besides the more traditional tuning methods listed above, the mlr3 eco system offers another procedure called hyperband implemented in the mlr3hyperband package.
+Hyperband is a budget oriented-procedure, weeding out suboptimally performing configurations early on during their training process, increasing tuning efficiency as a consequence.
+For this, several brackets are constructed with an associated set of configurations for each bracket. These configuration are initialized by stochastic, often uniform, sampling.
+Each bracket is divided into multiple stages, and configurations are evaluated for a increasing budget in each stage.
+Note that currently all configurations are trained completely from the beginning, so no online updates of models.
+Once a stage of a bracket is evaluated, the best proportion of \eqn{\frac{1}{\eta}}{1/eta} configurations are kept for the next stage, while the rest is discarded.
+The remaining configurations are retrained in the next bracket stage, with budget increased by the factor \eqn{\eta}{eta}.
+
+Different brackets are initialized with different number of configurations, and different initial budget sizes for the first stage, but each bracket is assigned (approximately) the same global summed budget for all of its evaluations.
+Some brackets contain many configurations, with a small initial budget, so that many are discarded after having been trained for only a short amount of time.
+Others are constructed with few configurations where discarding only takes place after a significant amount of budget.
+
+To identify the budget for evaluating hyperband, the user has to specify explicitly which hyperparameter of the learner influences the budget by tagging a single hyperparameter in the [paradox::ParamSet] with `"budget"`.
+An alternative approach using subsampling and pipelines is described below.
+
+Naturally, hyperband terminates once all of its brackets are evaluated, so a [Terminator][mlr3tuning::Terminator] in the tuning instance acts as an upper bound and should be only set to a low value if one is unsure of how long hyperband will take to finish under the given settings.
+
+One is by using the size of the training set as the budget, with the full set as the maximum budget; this is done with the help of [mlr3pipelines]:
+
+```{r  01-tuning-012}
+library(mlr3hyperband)
+library(mlr3pipelines)
+set.seed(123)
+# define Graph Learner from rpart with subsampling as preprocessing step
+pops = po("subsample")
+graph_learner = pops %>>% lrn("classif.rpart")
+   
+# define with extended hyperparameters with subsampling fraction as budget
+# ==> no learner budget is required
+params = list(
+  ParamDbl$new("classif.rpart.cp", lower = 0.001, upper = 0.1),
+  ParamInt$new("classif.rpart.minsplit", lower = 1, upper = 10),
+  ParamDbl$new("subsample.frac", lower = 0.1, upper = 1, tags = "budget")
+)
+   
+# define TuningInstance with the Graph Learner and the extended hyperparams
+inst = TuningInstance$new(
+  tsk("iris"),
+  graph_learner,
+  rsmp("holdout"),
+  msr("classif.ce"),
+  ParamSet$new(params),
+  term("evals", n_evals = 100000)
+)
+   
+# define and call hyperband as usual
+tuner = TunerHyperband$new(eta = 3.5)
+tuner$tune(inst)
+results = inst$archive()[, .(
+  frac = sapply(params, "[", "subsample.frac"),
+  cp = sapply(params, "[", "classif.rpart.cp"), 
+  minsplit = sapply(params, "[", "classif.rpart.minsplit"),
+  classif.ce
+)]
+```
+
+While the other way is by explicitly specifying which learner's hyperparameter is the budget (here, we use XGBoost with `nrounds` as budget parameter):
+
+```{r  01-tuning-013}
+library(mlr3learners)
+set.seed(123)
+# define hyperparameter and budget parameter for tuning with hyperband
+params = list(
+  ParamInt$new("nrounds", lower = 1, upper = 16, tags = "budget"),
+  ParamDbl$new("eta",     lower = 0, upper = 1),
+  ParamFct$new("booster", levels = c("gbtree", "gblinear", "dart"))
+)
+# initialize TuningInstance as usual
+inst = TuningInstance$new(
+  task = tsk("iris"),
+  learner = lrn("classif.xgboost"),
+  resampling = rsmp("holdout"),
+  measures = msr("classif.ce"),
+  ParamSet$new(params),
+  term("evals", n_evals = 100000L)
+)
+# initialize Hyperband Tuner and tune
+tuner = TunerHyperband$new(eta = 2L)
+result = tuner$tune(inst)
+# view results
+instance$archive()[, .(nrounds = sapply(params, "[", "nrounds"), cp = sapply(params, "[", "cp"), minsplit = sapply(params, "[", "minsplit"), classif.ce)]
+```
+
 ## Feature Selection / Filtering {#fs}
 
 Often, data sets include a large number of features.
@@ -443,4 +528,3 @@ Or take a look at the confusion matrix of the joined predictions:
 ```{r 03-optimization-022}
 rr$prediction()$confusion
 ```
-
