@@ -18,5 +18,13 @@ serve:
 clean:
 	$(RM) -r bookdown/_book bookdown/_bookdown_files
 
+html:
+	cd bookdown ;\
+	Rscript -e 'bookdown::render_book(input = "index.Rmd", "bookdown::gitbook", envir = new.env())'
+
+pdf:
+	cd bookdown ;\
+	Rscript -e 'bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())'
+
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
