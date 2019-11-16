@@ -15,7 +15,7 @@ remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 To build the book, run the following R command in the repository root:
 
 ```r
-bookdown::serve_book("bookdown"f
+bookdown::serve_book("bookdown")
 ```
 
 The command above starts a service which automatically (re-)compiles the bookdown sources in the background whenever a file is modified.
