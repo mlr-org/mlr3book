@@ -4,6 +4,8 @@ all: install serve
 help :
 	@echo "install : Install mlr3book and dependencies."
 	@echo "serve   : Start a http server to serve the book."
+	@echo "pdf     : Render book as pdf."
+	@echo "html    : Render book as html."
 	@echo "names   : Re-creates chunk names using mlr3book::name_chunks_mlr3book()."
 	@echo "clean   : Remove auto-generated files."
 
