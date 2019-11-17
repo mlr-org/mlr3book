@@ -12,15 +12,22 @@ To install all necessary dependencies for the book, install the this R package u
 remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 ```
 
-To build the book, run the following R command in the repository root:
+To build the HTML version of the book, run the following R command in the repository root:
 
 ```r
 bookdown::serve_book("bookdown")
 ```
 
 The command above starts a service which automatically (re-)compiles the bookdown sources in the background whenever a file is modified.
-Alternatively, you can use the provided `Makefile` (c.f. see `make help`).
 If your browser does not open automatically, go to http://127.0.0.1:4321/.
+
+Alternatively, you can use the provided `Makefile` (c.f. see `make help`).
+This way, you can 
+
+- install dependencies
+- build the HTML book -> `make html`
+- build the PDF book (bookdown:pdf_book) -> `make pdf`
+- build an alternative PDF version -> `make pinp`
 
 ## File system structure
 
@@ -76,21 +83,3 @@ Always store images also in a vector format (like .svg), even if you do not use 
 
 - Always start a new sentence on a new line, this keeps the diff readable.
 - Put an empty line before and after code blocks.
-
-### PDF version
-
-If you use RStudio, you can click on "Build Website" in the "Build pane" of RStudio to build both the HTML and the PDF version.
-Settings will be taken from `bookdown/_output.yml`.
-
-To format code in the PDF nicely, please install _formatR_ via `pak::pkg_install("pablo14/formatR")`.
-
-To build the PDF manually, call
-
-```r
-rmarkdown::render_site("bookdown/",
-  output_format = bookdown::pdf_book(includes = list("bookdown/preamble.tex"),
-    toc_depth = 4, highlight = "haddock", latex_engine = "xelatex",
-    citation_package = "natbib"))
-```
-
-(this call does sometimes not work. It is recommended to use RStudio.)
