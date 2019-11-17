@@ -16,7 +16,7 @@ serve:
 	Rscript -e 'bookdown::serve_book("bookdown")'
 
 clean:
-	$(RM) -r bookdown/_book bookdown/_bookdown_files
+	$(RM) -r bookdown/_book bookdown/_bookdown_files bookdown/mlr3book_cache bookdown/mlr3book_files
 
 html:
 	cd bookdown ;\
