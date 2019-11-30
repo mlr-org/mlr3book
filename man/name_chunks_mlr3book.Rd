@@ -7,5 +7,5 @@
 name_chunks_mlr3book()
 }
 \description{
-Names all chunks of all Rmd files using the pattern \verb{[file-name]-[number]}.
+Names all chunks of all Rmd files using the pattern \code{[file-name]-[number]}.
 }
