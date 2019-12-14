@@ -1,5 +1,5 @@
 get_stage("install") %>%
-    add_step(step_run_code(remotes::install_dev_deps()))
+    add_step(step_run_code(remotes::install_deps(dependencies = TRUE)))
 
 get_stage("script") %>%
     add_step(step_run_code(withr::with_dir(
