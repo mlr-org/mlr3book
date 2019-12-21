@@ -33,5 +33,5 @@ names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
 
 bibtex:
-	biber --tool --output_align --output_indent=2 --output_fieldcase=lower bookdown/book.bib -O bookdown/book.bib
+	biber --tool --output-align --output-indent=2 --output-fieldcase=lower bookdown/book.bib -O bookdown/book.bib
 	rm bookdown/book.bib.blg
