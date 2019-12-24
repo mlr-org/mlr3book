@@ -15,33 +15,36 @@ get_stage("deploy") %>%
 
   add_step(step_run_code(withr::with_dir(
     "bookdown",
-    bookdown::render_book("_output.yml", output_format = "bookdown::gitbook")
+    bookdown::render_book("index.Rmd", output_format = "bookdown::gitbook",
+      envir = new.env())
   ))) %>%
 
   # render pinp ----------------------------------------------------------------
 
-  add_step(step_run_code(withr::with_dir(
+  add_code_step(withr::with_dir(
     "bookdown",
-    bookdown::render_book("_output.yml", output_format = "pinp::pinp")
-  ))) %>%
-  add_step(step_run_code(file.rename(here::here("bookdown/_book/mlr3book.pdf"),
-    here::here("bookdown/_book/mlr3book-pinp.pdf")))) %>%
+    bookdown::render_book("index.Rmd", output_format = "pinp::pinp",
+    )
+  )) %>%
+  add_code_step(file.rename(here::here("bookdown/_book/mlr3book.pdf"),
+    here::here("bookdown/_book/mlr3book-pinp.pdf"))) %>%
 
   # render pdf -----------------------------------------------------------------
 
-  add_step(step_run_code(withr::with_dir(
+  add_code_step(withr::with_dir(
     "bookdown",
-    bookdown::render_book("_output.yml", output_format = "bookdown::pdf_book")
-  ))) %>%
+    bookdown::render_book("index.Rmd", output_format = "bookdown::pdf_book",
+    )
+  )) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
-  add_step(step_run_code({
+  add_code_step({
     files <- dir("bookdown/_book/", pattern = "[.]html$", full.names = TRUE)
     purrr::walk(files, ~ {
       print(system.time(pkgdown::autolink_html(.x)))
     })
-  })) %>%
+  }) %>%
 
   # deploy ---------------------------------------------------------------------
 
