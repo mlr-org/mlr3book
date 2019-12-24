@@ -5,19 +5,22 @@ get_stage("install") %>%
 
 # init deployment --------------------------------------------------------------
 
-get_stage("deploy") %>%
-  add_step(step_add_to_known_hosts("github.com")) %>%
-  add_step(step_install_ssh_keys()) %>%
-  add_step(step_setup_push_deploy(path = "bookdown/_book",
-    branch = "gh-pages")) %>%
+if (ci_get_branch() == "pdf") {
+  get_stage("deploy") %>%
+    add_step(step_add_to_known_hosts("github.com")) %>%
+    add_step(step_install_ssh_keys()) %>%
+    add_step(step_setup_push_deploy(path = "bookdown/_book",
+      branch = "gh-pages"))
+}
 
-  # render gitbook -------------------------------------------------------------
+# render gitbook -------------------------------------------------------------
 
-  add_step(step_run_code(withr::with_dir(
-    "bookdown",
-    bookdown::render_book("index.Rmd", output_format = "bookdown::gitbook",
-      envir = new.env())
-  ))) %>%
+get_stage("deploy")
+add_step(step_run_code(withr::with_dir(
+  "bookdown",
+  bookdown::render_book("index.Rmd", output_format = "bookdown::gitbook",
+    envir = new.env())
+))) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
@@ -46,8 +49,10 @@ get_stage("deploy") %>%
     )
   )) %>%
   add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
-    here::here("bookdown/_book/mlr3book.pdf"))) %>%
+    here::here("bookdown/_book/mlr3book.pdf")))
 
-  # deploy ---------------------------------------------------------------------
+# deploy ---------------------------------------------------------------------
 
+if (ci_get_branch() == "pdf") {
   add_step(step_do_push_deploy(path = "bookdown/_book"))
+}
