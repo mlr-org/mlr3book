@@ -19,6 +19,15 @@ get_stage("deploy") %>%
       envir = new.env())
   ))) %>%
 
+  # use pkgdown autolinker for HTML hyperlinks ---------------------------------
+
+  add_code_step({
+    files <- dir("bookdown/_book/", pattern = "[.]html$", full.names = TRUE)
+    purrr::walk(files, ~ {
+      print(system.time(pkgdown::autolink_html(.x)))
+    })
+  }) %>%
+
   # render pinp ----------------------------------------------------------------
 
   add_code_step(withr::with_dir(
@@ -26,7 +35,7 @@ get_stage("deploy") %>%
     bookdown::render_book("index.Rmd", output_format = "pinp::pinp",
     )
   )) %>%
-  add_code_step(file.rename(here::here("bookdown/_book/mlr3book.pdf"),
+  add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
     here::here("bookdown/_book/mlr3book-pinp.pdf"))) %>%
 
   # render pdf -----------------------------------------------------------------
@@ -36,15 +45,8 @@ get_stage("deploy") %>%
     bookdown::render_book("index.Rmd", output_format = "bookdown::pdf_book",
     )
   )) %>%
-
-  # use pkgdown autolinker for HTML hyperlinks ---------------------------------
-
-  add_code_step({
-    files <- dir("bookdown/_book/", pattern = "[.]html$", full.names = TRUE)
-    purrr::walk(files, ~ {
-      print(system.time(pkgdown::autolink_html(.x)))
-    })
-  }) %>%
+  add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
+    here::here("bookdown/_book/mlr3book.pdf"))) %>%
 
   # deploy ---------------------------------------------------------------------
 
