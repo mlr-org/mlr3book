@@ -8,7 +8,7 @@ get_stage("install") %>%
 get_stage("deploy") %>%
   add_step(step_add_to_known_hosts("github.com")) %>%
   add_step(step_install_ssh_keys()) %>%
-  add_step(step_setup_push_deploy(path = here::here("bookdown/_book"),
+  add_step(step_setup_push_deploy(path = "bookdown/_book",
     branch = "gh-pages")) %>%
 
   # render gitbook -------------------------------------------------------------
@@ -45,4 +45,4 @@ get_stage("deploy") %>%
 
   # deploy ---------------------------------------------------------------------
 
-  add_step(step_do_push_deploy(path = here::here("bookdown/_book")))
+  add_step(step_do_push_deploy(path = "bookdown/_book"))
