@@ -29,6 +29,10 @@ pdf:
 	cd bookdown ;\
 	Rscript -e 'bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())'
 
+pinp:
+	cd bookdown ;\
+	Rscript -e 'bookdown::render_book(input = "index.Rmd", "pinp::pinp", envir = new.env())'
+
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
 
