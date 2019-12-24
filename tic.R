@@ -54,5 +54,6 @@ get_stage("deploy") %>%
 # deploy ---------------------------------------------------------------------
 
 if (ci_get_branch() == "pdf") {
-  add_step(step_do_push_deploy(path = "bookdown/_book"))
+  get_stage("deploy") %>%
+    add_step(step_do_push_deploy(path = "bookdown/_book"))
 }
