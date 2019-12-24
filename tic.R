@@ -10,8 +10,8 @@ if (Sys.getenv("HTML") == "true") {
     ))) %>%
     add_step(step_run_code(unlink(dir("docs", pattern = "^[^0-9]",
       full.names = TRUE), recursive = TRUE))) %>%
-    add_step(step_run_code(file.copy(dir("bookdown/_book", full.names = TRUE),
-      "docs", recursive = TRUE))) %>%
+    add_step(step_run_code(fs::dir_copy(here::here("bookdown/_book"),
+      here::here("docs/")))) %>%
     add_step(step_run_code({
       files <- dir("docs", pattern = "[.]html$", full.names = TRUE)
       purrr::walk(files, ~ {
@@ -31,8 +31,8 @@ if (Sys.getenv("HTML") == "true") {
     ))) %>%
     add_step(step_run_code(unlink(dir("docs", pattern = "^[^0-9]",
       full.names = TRUE), recursive = TRUE))) %>%
-    add_step(step_run_code(file.copy(dir("bookdown/_book/mlr3book.pdf",
-      full.names = TRUE), "docs"))) %>%
+    add_step(step_run_code(fs::file_copy(here::here("bookdown/_book/mlr3book.pdf"),
+      here::here("docs/")))) %>%
     add_step(step_add_to_known_hosts("github.com")) %>%
     add_step(step_install_ssh_keys()) %>%
     add_step(step_setup_push_deploy(path = "docs", branch = "gh-pages")) %>%
