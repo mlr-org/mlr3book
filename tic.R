@@ -19,10 +19,11 @@ if (Sys.getenv("HTML") == "true") {
     }))
 } else if (Sys.getenv("PDF") == "true") {
 
-  add_step(step_run_code(withr::with_dir(
-    "bookdown",
-    bookdown::render_book("_output.yml", output_format = "bookdown::pdf_book")
-  ))) %>%
+  get_stage("script") %>%
+    add_step(step_run_code(withr::with_dir(
+      "bookdown",
+      bookdown::render_book("_output.yml", output_format = "bookdown::pdf_book")
+    ))) %>%
     add_step(step_run_code(unlink(dir("docs", pattern = "^[^0-9]",
       full.names = TRUE), recursive = TRUE))) %>%
     add_step(step_run_code(file.copy(dir("book/_book/mlr3book.pdf",
