@@ -15,12 +15,12 @@ if (ci_get_branch() == "pdf") {
 
 # render gitbook -------------------------------------------------------------
 
-get_stage("deploy")
-add_step(step_run_code(withr::with_dir(
-  "bookdown",
-  bookdown::render_book("index.Rmd", output_format = "bookdown::gitbook",
-    envir = new.env())
-))) %>%
+get_stage("deploy") %>%
+  add_step(step_run_code(withr::with_dir(
+    "bookdown",
+    bookdown::render_book("index.Rmd", output_format = "bookdown::gitbook",
+      envir = new.env())
+  ))) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
