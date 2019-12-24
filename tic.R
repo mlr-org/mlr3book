@@ -55,5 +55,8 @@ get_stage("deploy") %>%
 
 if (ci_get_branch() == "pdf") {
   get_stage("deploy") %>%
+    # write CNAME
+    add_code_step(writeLines("mlr3book.mlr-org.com", "bookdown/_book/CNAME")) %>%
+    # deploy
     add_step(step_do_push_deploy(path = "bookdown/_book"))
 }
