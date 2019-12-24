@@ -10,7 +10,7 @@ if (Sys.getenv("HTML") == "true") {
     ))) %>%
     add_step(step_run_code(unlink(dir("docs", pattern = "^[^0-9]",
       full.names = TRUE), recursive = TRUE))) %>%
-    add_step(step_run_code(file.copy(dir("book/_book", full.names = TRUE),
+    add_step(step_run_code(file.copy(dir("bookdown/_book", full.names = TRUE),
       "docs", recursive = TRUE))) %>%
     add_step(step_run_code({
       files <- dir("docs", pattern = "[.]html$", full.names = TRUE)
@@ -31,7 +31,7 @@ if (Sys.getenv("HTML") == "true") {
     ))) %>%
     add_step(step_run_code(unlink(dir("docs", pattern = "^[^0-9]",
       full.names = TRUE), recursive = TRUE))) %>%
-    add_step(step_run_code(file.copy(dir("book/_book/mlr3book.pdf",
+    add_step(step_run_code(file.copy(dir("bookdown/_book/mlr3book.pdf",
       full.names = TRUE), "docs"))) %>%
     add_step(step_add_to_known_hosts("github.com")) %>%
     add_step(step_install_ssh_keys()) %>%
