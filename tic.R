@@ -1,8 +1,7 @@
 # install dependencies ---------------------------------------------------------
 
 get_stage("install") %>%
-  add_step(step_run_code(remotes::install_deps(dependencies = TRUE))) %>%
-  add_step(step_install_cran("here"))
+  add_step(step_run_code(remotes::install_deps(dependencies = TRUE)))
 
 # init deployment --------------------------------------------------------------
 
@@ -25,8 +24,8 @@ get_stage("deploy") %>%
     "bookdown",
     bookdown::render_book("_output.yml", output_format = "pinp::pinp")
   ))) %>%
-  add_code_step(file.rename(here::here("bookdown/_book/mlr3book.pdf"),
-    here::here("bookdown/_book/mlr3book-pinp.pdf"))) %>%
+  add_step(step_run_code(file.rename(here::here("bookdown/_book/mlr3book.pdf"),
+    here::here("bookdown/_book/mlr3book-pinp.pdf")))) %>%
 
   # render pdf -----------------------------------------------------------------
 
