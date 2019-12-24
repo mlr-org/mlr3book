@@ -20,6 +20,7 @@ if (Sys.getenv("HTML") == "true") {
 } else if (Sys.getenv("PDF") == "true") {
 
   get_stage("script") %>%
+    add_code_step(remove.packages("tinytex")) %>%
     add_step(step_run_code(withr::with_dir(
       "bookdown",
       bookdown::render_book("_output.yml", output_format = "bookdown::pdf_book")
