@@ -16,8 +16,8 @@ if (Sys.getenv("HTML") == "true") {
     })) %>%
     add_step(step_add_to_known_hosts("github.com")) %>%
     add_step(step_install_ssh_keys()) %>%
-    add_step(step_setup_push_deploy(path = "bookdown/_book/", branch = "gh-pages")) %>%
-    add_step(step_do_push_deploy(path = "bookdown/_book"))
+    add_step(step_setup_push_deploy(path = here::here("bookdown/_book"), branch = "gh-pages")) %>%
+    add_step(step_do_push_deploy(path = here::here("bookdown/_book")))
 } else if (Sys.getenv("PDF") == "true") {
 
   get_stage("deploy") %>%
@@ -27,6 +27,6 @@ if (Sys.getenv("HTML") == "true") {
     ))) %>%
     add_step(step_add_to_known_hosts("github.com")) %>%
     add_step(step_install_ssh_keys()) %>%
-    add_step(step_setup_push_deploy(path = "bookdown/_book/", branch = "gh-pages")) %>%
-    add_step(step_do_push_deploy(path = "bookdown/_book", commit_paths = 'mlr3book.pdf'))
+    add_step(step_setup_push_deploy(path = here::here("bookdown/_book"), branch = "gh-pages")) %>%
+    add_step(step_do_push_deploy(path = here::here("bookdown/_book"), commit_paths = here::here("bookdown/_book/mlr3book.pdf")))
 }
