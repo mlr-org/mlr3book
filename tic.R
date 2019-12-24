@@ -10,7 +10,7 @@ if (ci_get_branch() == "pdf") {
     add_step(step_add_to_known_hosts("github.com")) %>%
     add_step(step_install_ssh_keys()) %>%
     add_step(step_setup_push_deploy(path = "bookdown/_book",
-      branch = "gh-pages"))
+      branch = "gh-pages", orphan = TRUE))
 }
 
 # render gitbook -------------------------------------------------------------
