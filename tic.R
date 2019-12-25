@@ -33,13 +33,13 @@ get_stage("deploy") %>%
 
   # render pinp ----------------------------------------------------------------
 
-  add_code_step(withr::with_dir(
-    "bookdown",
-    bookdown::render_book("index.Rmd", output_format = "pinp::pinp",
-    )
-  )) %>%
-  add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
-    here::here("bookdown/_book/mlr3book-pinp.pdf"))) %>%
+  # add_code_step(withr::with_dir(
+  #   "bookdown",
+  #   bookdown::render_book("index.Rmd", output_format = "pinp::pinp",
+  #   )
+  # )) %>%
+  # add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
+  #   here::here("bookdown/_book/mlr3book-pinp.pdf"))) %>%
 
   # render pdf -----------------------------------------------------------------
 
