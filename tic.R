@@ -6,8 +6,8 @@ get_stage("install") %>%
 # install fonts ----------------------------------------------------------------
 
 get_stage("before_install") %>%
-  add_code_step("bash inst/install-fira-code.sh") %>% # monospace font for PDF version
-  add_code_step("bash inst/install-fira-sans.sh") # main font for PDF version
+  add_code_step(system("bash inst/install-fira-code.sh")) %>% # monospace font for PDF version
+  add_code_step(system("bash inst/install-fira-sans.sh")) # main font for PDF version
 
 # init deployment --------------------------------------------------------------
 
