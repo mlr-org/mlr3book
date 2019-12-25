@@ -3,6 +3,12 @@
 get_stage("install") %>%
   add_step(step_run_code(remotes::install_deps(dependencies = TRUE)))
 
+# install fonts ----------------------------------------------------------------
+
+get_stage("before_install") %>%
+  add_code_step("bash inst/install-fira-code.sh") %>% # monospace font for PDF version
+  add_code_step("bash inst/install-fira-sans.sh") # main font for PDF version
+
 # init deployment --------------------------------------------------------------
 
 if (ci_get_branch() == "pdf") {
@@ -30,16 +36,6 @@ get_stage("deploy") %>%
       print(system.time(pkgdown::autolink_html(.x)))
     })
   }) %>%
-
-  # render pinp ----------------------------------------------------------------
-
-  # add_code_step(withr::with_dir(
-  #   "bookdown",
-  #   bookdown::render_book("index.Rmd", output_format = "pinp::pinp",
-  #   )
-  # )) %>%
-  # add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
-  #   here::here("bookdown/_book/mlr3book-pinp.pdf"))) %>%
 
   # render pdf -----------------------------------------------------------------
 
