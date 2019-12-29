@@ -11,17 +11,14 @@ get_stage("before_install") %>%
 
 # init deployment --------------------------------------------------------------
 
-if (ci_get_branch() == "pdf") {
-  get_stage("deploy") %>%
-    add_step(step_add_to_known_hosts("github.com")) %>%
-    add_step(step_install_ssh_keys()) %>%
-    add_step(step_setup_push_deploy(path = "bookdown/_book",
-      branch = "gh-pages", orphan = TRUE))
-}
-
-# render all output formats ----------------------------------------------------
-
 get_stage("deploy") %>%
+  add_step(step_add_to_known_hosts("github.com")) %>%
+  add_step(step_install_ssh_keys()) %>%
+  add_step(step_setup_push_deploy(path = "bookdown/_book",
+    branch = "gh-pages", orphan = TRUE)) %>%
+
+  # render all output formats ----------------------------------------------------
+
   add_step(step_run_code(withr::with_dir(
     "bookdown",
     bookdown::render_book("index.Rmd", output_format = "all",
@@ -37,13 +34,10 @@ get_stage("deploy") %>%
     })
   }) %>%
 
+  # deploy ---------------------------------------------------------------------
 
-# deploy ---------------------------------------------------------------------
-
-if (ci_get_branch() == "pdf") {
   get_stage("deploy") %>%
-    # write CNAME
-    add_code_step(writeLines("mlr3book.mlr-org.com", "bookdown/_book/CNAME")) %>%
-    # deploy
-    add_step(step_do_push_deploy(path = "bookdown/_book"))
-}
+  # write CNAME
+  add_code_step(writeLines("mlr3book.mlr-org.com", "bookdown/_book/CNAME")) %>%
+  # deploy
+  add_step(step_do_push_deploy(path = "bookdown/_book"))
