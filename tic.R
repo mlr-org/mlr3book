@@ -19,12 +19,12 @@ if (ci_get_branch() == "pdf") {
       branch = "gh-pages", orphan = TRUE))
 }
 
-# render gitbook -------------------------------------------------------------
+# render all output formats ----------------------------------------------------
 
 get_stage("deploy") %>%
   add_step(step_run_code(withr::with_dir(
     "bookdown",
-    bookdown::render_book("index.Rmd", output_format = "bookdown::gitbook",
+    bookdown::render_book("index.Rmd", output_format = "all",
       envir = new.env())
   ))) %>%
 
@@ -37,15 +37,6 @@ get_stage("deploy") %>%
     })
   }) %>%
 
-  # render pdf -----------------------------------------------------------------
-
-  add_code_step(withr::with_dir(
-    "bookdown",
-    bookdown::render_book("index.Rmd", output_format = "bookdown::pdf_book",
-    )
-  )) %>%
-  add_code_step(file.rename(here::here("bookdown/mlr3book.pdf"),
-    here::here("bookdown/_book/mlr3book.pdf")))
 
 # deploy ---------------------------------------------------------------------
 
