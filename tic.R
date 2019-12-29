@@ -36,7 +36,6 @@ get_stage("deploy") %>%
 
   # deploy ---------------------------------------------------------------------
 
-  get_stage("deploy") %>%
   # write CNAME
   add_code_step(writeLines("mlr3book.mlr-org.com", "bookdown/_book/CNAME")) %>%
   # deploy
