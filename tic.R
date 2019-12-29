@@ -3,12 +3,6 @@
 get_stage("install") %>%
   add_step(step_run_code(remotes::install_deps(dependencies = TRUE)))
 
-# install fonts ----------------------------------------------------------------
-
-get_stage("before_install") %>%
-  add_code_step(system("bash inst/install-fira-code.sh")) %>% # monospace font for PDF version
-  add_code_step(system("bash inst/install-fira-sans.sh")) # main font for PDF version
-
 # init deployment --------------------------------------------------------------
 
 get_stage("deploy") %>%
