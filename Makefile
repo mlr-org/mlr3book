@@ -29,10 +29,6 @@ pdf:
 	cd bookdown ;\
 	Rscript -e 'bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())'
 
-pinp:
-	cd bookdown ;\
-	Rscript -e 'bookdown::render_book(input = "index.Rmd", "pinp::pinp", envir = new.env())'
-
 pngTopdf:
 	cd bookdown/images ;\
 	ls -1 *.png | parallel convert '{}' '{.}.pdf'
