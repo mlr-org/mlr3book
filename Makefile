@@ -33,6 +33,10 @@ pinp:
 	cd bookdown ;\
 	Rscript -e 'bookdown::render_book(input = "index.Rmd", "pinp::pinp", envir = new.env())'
 
+pngTopdf:
+	cd bookdown/images ;\
+	ls -1 *.png | parallel convert '{}' '{.}.pdf'
+
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
 
