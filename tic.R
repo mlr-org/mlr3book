@@ -13,7 +13,7 @@ get_stage("deploy") %>%
 
   # render all output formats ----------------------------------------------------
 
-  add_step(mlr3book::render_mlr3book(output_format = "all")) %>%
+  add_code_step(mlr3book::render_mlr3book(output_format = "all")) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
