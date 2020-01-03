@@ -13,11 +13,7 @@ get_stage("deploy") %>%
 
   # render all output formats ----------------------------------------------------
 
-  add_step(step_run_code(withr::with_dir(
-    "bookdown",
-    bookdown::render_book("index.Rmd", output_format = "all",
-      envir = new.env())
-  ))) %>%
+  add_step(mlr3book::render_mlr3book(output_format = "all")) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
