@@ -13,7 +13,7 @@ get_stage("deploy") %>%
 
   # render all output formats ----------------------------------------------------
 
-  add_code_step(mlr3book::render_mlr3book(output_format = "all"),
+  add_code_step(render_mlr3book(output_format = "all"),
     prepare_call = remotes::install_github("mlr-org/mlr3book")) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
