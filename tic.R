@@ -14,10 +14,10 @@ get_stage("deploy") %>%
 
   # render all output formats ----------------------------------------------------
 
-  add_code_step(withr::with_dir(source_dir, {
-    root = rprojroot::find_package_root_file()
-    source_dir = file.path(root, "bookdown")
-    bookdown::render_book(input = "index.Rmd", output_format = "all", envir = new.env())
+  add_code_step(
+    withr::with_dir("bookdown/", {
+      bookdown::render_book(input = "index.Rmd", output_format = "all",
+        envir = new.env())
   })) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
