@@ -14,8 +14,9 @@ get_stage("deploy") %>%
 
   # render all output formats ----------------------------------------------------
 
-  add_code_step(render_mlr3book(output_format = "all"),
-    prepare_call = remotes::install_github("mlr-org/mlr3book")) %>%
+  add_code_step(withr::with_dir(source_dir, {
+    bookdown::render_book(input = "index.Rmd", output_format = "all", envir = new.env())
+  })) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
