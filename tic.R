@@ -1,8 +1,7 @@
 # install dependencies ---------------------------------------------------------
 
 get_stage("install") %>%
-  add_step(step_run_code(remotes::install_deps(dependencies = TRUE))) %>%
-  add_step(step_install_github("mlr-org/mlr3book"))
+  add_step(step_run_code(remotes::install_deps(dependencies = TRUE)))
 
 # init deployment --------------------------------------------------------------
 
@@ -14,7 +13,8 @@ get_stage("deploy") %>%
 
   # render all output formats ----------------------------------------------------
 
-  add_code_step(mlr3book::render_mlr3book(output_format = "all")) %>%
+  add_code_step(mlr3book::render_mlr3book(output_format = "all"),
+    prepare_call = remotes::install_github("mlr-org/mlr3book")) %>%
 
   # use pkgdown autolinker for HTML hyperlinks ---------------------------------
 
