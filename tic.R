@@ -1,8 +1,7 @@
 # install dependencies ---------------------------------------------------------
 
 get_stage("install") %>%
-  add_step(step_run_code(remotes::install_deps(dependencies = TRUE))) %>%
-  add_step(step_install_github("mlr-org/mlr3book"))
+  add_step(step_run_code(remotes::install_deps(dependencies = TRUE)))
 
 # init deployment --------------------------------------------------------------
 
