@@ -22,12 +22,11 @@ The command above starts a service which automatically (re-)compiles the bookdow
 If your browser does not open automatically, go to http://127.0.0.1:4321/.
 
 Alternatively, you can use the provided `Makefile` (c.f. see `make help`).
-This way, you can 
+This way, you can
 
 - install dependencies
 - build the HTML book -> `make html`
 - build the PDF book (bookdown:pdf_book) -> `make pdf`
-- build an alternative PDF version -> `make pinp`
 
 ## File system structure
 
