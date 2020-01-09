@@ -8,6 +8,7 @@ help :
 	@echo "html    : Render book as html."
 	@echo "names   : Re-creates chunk names using mlr3book::name_chunks_mlr3book()."
 	@echo "clean   : Remove auto-generated files."
+	@echo "bibtex  : Reformats the bibtex file."
 
 install:
 	Rscript -e 'if (length(find.package("devtools", quiet = TRUE)) == 0) install.packages("devtools")' ;\
@@ -28,9 +29,9 @@ pdf:
 	cd bookdown ;\
 	Rscript -e 'bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())'
 
-pinp:
-	cd bookdown ;\
-	Rscript -e 'bookdown::render_book(input = "index.Rmd", output_format = "pinp::pinp", envir = new.env())'
-
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
+
+bibtex:
+	biber --tool --output-align --output-indent=2 --output-fieldcase=lower bookdown/book.bib -O bookdown/book.bib
+	rm bookdown/book.bib.blg
