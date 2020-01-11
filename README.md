@@ -12,7 +12,7 @@ To install all necessary dependencies for the book, install the this R package u
 remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 ```
 
-To build the HTML version of the book, run the following R command in the repository root:
+To build the HTML version of the book, run the following R command in the repository root (or `make serve`):
 
 ```r
 bookdown::serve_book("bookdown")
@@ -26,7 +26,7 @@ This way, you can
 
 - install dependencies
 - build the HTML book -> `make html`
-- build the PDF book (bookdown:pdf_book) -> `make pdf`
+- build the PDF book -> `make pdf`
 
 ## File system structure
 
@@ -52,7 +52,7 @@ For lists please use `*` and not `-`.
 
 ### Chunk Names
 
-Chunks are named automatically as `[chapter-name]-#` by calling `name_chunks_mlr3book()`:
+Chunks are named automatically as `[chapter-name]-#` by calling `name_chunks_mlr3book()` (or `make names`):
 
 ```r
 mlr3book::name_chunks_mlr3book()
