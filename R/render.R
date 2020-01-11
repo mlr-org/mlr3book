@@ -18,7 +18,7 @@ render_mlr3book = function(format = "html", ...) {
     }
 
     if ("pdf" %in% format) {
-      bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env())
+      bookdown::render_book(input = "index.Rmd", "bookdown::pdf_book", envir = new.env(), ...)
     }
   })
 }
