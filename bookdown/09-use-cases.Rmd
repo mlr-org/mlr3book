@@ -351,3 +351,535 @@ res$score("regr.mse")
 sprintf("RMSE of ranger with filtering: %s", round(sqrt(res$aggregate()), 2))
 ```
 
+
+## Credit worthiness prediction {#use-case-german-credit1}
+
+We use the `german_credit` dataset (contained in this book) for our next example.
+The German credit data is a research data set of the University of Hamburg from 1994 donated by Prof. Hans Hoffman.
+The data features personal, demographic and bank account related data on individuals.
+Furthermore, it contains an assessment on the individual's creditworthniness.
+A detailed description (and manual download) can be found at the [UCI repository](https://archive.ics.uci.edu/ml/datasets/Statlog+%28German+Credit+Data%29).
+
+```{r 09-use-cases-2-001}
+library(mlr3book)
+data("german_credit", package = "mlr3book")
+```
+
+Our use case is primarily concerned with representing the complete `mlr3` workbench.
+Our special focus is on the parametrisation of learners.
+
+### Exploratory Data Analysis
+
+We can get a quick overview on our data set using R's summary function:
+
+```{r 09-use-cases-2-002}
+summary(german_credit)
+dim(german_credit)
+```
+
+Our dataset has `r nrow(german_credit)` observations and `r ncol(german_credit)` columns.
+The variable we want to predict is `class` (either **good** or **bad**).
+That means we aim to classify people by their credit risk (**good** or **bad**)
+In total we have access to the following `r ncol(german_credit)` features:
+
+  * `checking_status:          status/balance of checking account at this bank`
+  * `duration:                 duration of the credit in months`
+  * `credit_history:           past credit history of applicant at this bank`
+  * `purpose:                  reason customer is applying for a loan`
+  * `credit_amount:            amount asked by applicant`
+  * `savings_status:           savings accounts/bonds at this bank`
+  * `employment:               present employment since`
+  * `installment_commitment:   installment rate in percentage of disposable income`
+  * `personal_status:          combination of sex and personal status of applicant`
+  * `other_parties:            other debtors/guarantors present?`
+  * `residence_since:          present residence since`
+  * `property_magnitude:       properties that applicant has`
+  * `age:                      age in years`
+  * `other_payment_plans:      other installment plans the applicant is paying`
+  * `housing:                  type of apartment: rented, owned, for free / no payment`
+  * `existing_credits:         number of existing credits at this bank`
+  * `job:                      current job information`
+  * `num_dependents:           number of people being liable to provide maintenance`
+  * `own_telephone:            is there any telephone registered for this customer?`
+  * `foreign_worker:           is applicant foreign worker?`
+  
+We recommend the `skimr` (`skimr::skim`) and `DataExplorer` (`DataExplorer::plot_bar`, `DataExplorer::plot_histogram`, `DataExplorer::plot_boxplot`) packages as they create very well readable and understandable overviews.
+
+```{r 09-use-cases-2-003}
+skimr::skim(german_credit)
+```
+
+```{r 09-use-cases-2-004, out.width="100%", fig.height=7}
+DataExplorer::plot_bar(german_credit, nrow = 5, ncol = 3)
+```
+
+```{r 09-use-cases-2-005, out.width="100%", fig.height=4}
+DataExplorer::plot_histogram(german_credit, nrow = 2, ncol = 3)
+DataExplorer::plot_boxplot(german_credit, by = "class", nrow = 2, ncol = 3)
+```
+
+During this exploratory analysis meaningful analysis aspects could be:
+  - Skewed distributions
+  - Missing values
+  - Empty / rare factor variables
+  
+However, in this use case we do not focus on the exploratory analysis.
+  
+### Modeling
+
+The modeling in `mlr3` can be split into five components:
+
+1) The **task** defintion
+
+2) The **learner** definition
+
+3) The **training**
+
+4) The **prediction**
+
+5) The evaluation via **measures**
+
+#### Task Definition
+
+First of all, we are interested in the target which we want to model.
+Most supervised machine learning problems are __regression__ or __classification__ problems.
+However, note that other problems include unsupervised learning or time-to-event data (covered in `mlr3survival`).
+In the `mlr3` context to distinguish between these problems, we define **tasks**.
+If we want to solve a classification problem, we define a classifaction task -- `TaskClassif`.
+For a regression problem, we establish a regression task -- `TaskRegr`.
+Tasks are not only different words for problem.
+They also reflect some technical properties with respect to `mlr3`.
+
+In our case it is clearly our objective to model or predict the binary `factor` variable `class`.
+Thus, we use `TaskClassif`.
+
+With `TaskClassif$new()` we can initialize a classification task. 
+We need to specify a name for the task (we choose `"GermanCredit"`), the data we want to use (`credit`) and name of the target (`"class"`):
+
+```{r 09-use-cases-2-006, error=TRUE}
+library(mlr3)
+task = TaskClassif$new("GermanCredit", german_credit, "class")
+```
+
+We see that we need to make the target explicitely to a factor.
+
+```{r 09-use-cases-2-007}
+
+german_credit$class = as.factor(german_credit$class)
+task = TaskClassif$new("GermanCredit", german_credit, "class")
+
+```
+
+
+#### Learner Definition
+
+After having decided _what_ should be modeled, we need to decide on how.
+This means we need to decide which learning algrorithms, or **Learners** are appropriate.
+Using prior knowledge (e.g. knowing that it is a classification task or assuming that the classes are linearly separable) one ends up with one or some suitable **Learners**.
+Many learners can be obtained via the `mlr3learners` package (CRAN). 
+Additionally, many learners are provided on the `mlr3learners` organsisation [github page](https://github.com/mlr3learners).
+These two ressources combined account for a large fraction of standard learning algorithms.
+As `mlr3` usually only wraps learners from packages, it is easy to create a formal **Learner** by yourself using our template (). 
+You may find the section 'Extending mlr3' in this book also very helpful.
+If you happen to write your own **Learner** in `mlr3`, we would be happy if you share it with the `mlr3` community.
+
+All available `Learner`s (i.e. all which you have installed from `mlr3`, `mlr3learners`, the mlr3learners github page or self-written ones) can be obtained by:
+
+```{r 09-use-cases-2-008}
+mlr_learners
+```
+
+For our problem, a suitable learner could be one of the following:
+Logistic regression, CART, Random Forest (or many more).
+
+A learner can be initialized with the `lrn` function and the name of the learner (e.g., `lrn("classif.xxx")`). 
+Use `?mlr_learners_xxx` to open the help page of a learner named `xxx`, or use [the internet](https://mlr3learners.mlr-org.com/reference/index.html).
+
+For example a logistic regression can be initialised in the following manner (logistic regression using R's `glm()` function and is provided by the `mlr3learners` package).
+
+```{r 09-use-cases-2-009}
+library(mlr3learners)
+```
+
+```{r 09-use-cases-2-010}
+learner_logreg = lrn("classif.log_reg")
+```
+
+Alternatively but equivalently, one could use:
+
+```{r 09-use-cases-2-011}
+learner_logreg = LearnerClassifLogReg$new()
+```
+
+#### Training
+
+Training is the procedure, where a model is fitted on data.
+The selected model is trained so that is reflects the data situation in the best possible manner.
+
+##### Logistic Regression
+
+We start with the example of the logistic regression.
+However, you will immidiatley see that the procedure generalises to any learner very easily.
+
+An initialised learner can be trained on data using the `R6` method `train`.
+
+```{r 09-use-cases-2-012}
+learner_logreg$train(task)
+```
+
+Typically, in machine learning, one does not use the full data which is available but a subset, the so-called training data.
+
+To efficiently perform a spilt of the data one could do the following.
+
+```{r 09-use-cases-2-013}
+train_set = sample(task$nrow, 0.8 * task$nrow)
+test_set = setdiff(seq_len(task$nrow), train_set)
+```
+
+80 percent of the data is used for training.
+The remaining 20 percent are used later on for evaluation.
+`train_set` is an integer vector displaying the selected rows of the original data set.
+
+```{r 09-use-cases-2-014}
+head(train_set)
+```
+
+In `mlr3` the training with a subset of the data is declared by the additional argument `row_ids = train_set`.
+
+```{r 09-use-cases-2-015}
+learner_logreg$train(task, row_ids = train_set)
+```
+
+We used logistic regression from the `stats` package.
+To be precise `stats::glm` with the `family` argument set to `family = binomial()`.
+All other arguments are set to the default of the `stats::glm` function.
+`mlr3` only works as a wrapper. 
+The original model can be accessed via
+
+```{r 09-use-cases-2-016}
+learner_logreg$model
+```
+
+The stored object is a normal `glm` object and works with its `S3` methods.
+
+```{r 09-use-cases-2-017}
+class(learner_logreg$model)
+summary(learner_logreg$model)
+```
+
+##### Random forest
+
+Just like the logistic regression, we could train a random forest instead.
+We use the fast implementation from the `ranger` package (@ranger).
+To do so we first need to define the learner and then actually train it.
+Before we just used the default logistic regression learner.
+
+We now additionally supply the importance argument (`importance = "permutation"`).
+Doing so we override the default and let the learner do feature importance determination based on permutation feature importance (e.g. see here: @permutation).
+
+```{r 09-use-cases-2-018}
+
+learner_rf = lrn("classif.ranger", importance = "permutation")
+learner_rf$train(task)
+
+```
+
+We can access the importance values using `$importance()`.
+The `R6` importance method plots the feature importance derived during training.
+
+```{r 09-use-cases-2-019}
+learner_rf$importance()
+```
+
+In order to obtain a better plot, we convert the importance into a `data.table`.
+
+```{r 09-use-cases-2-020}
+
+importance = as.data.table(learner_rf$importance(), keep.rownames = TRUE)
+colnames(importance) = c("Feature", "Importance")
+importance
+ggplot(importance, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_col() + coord_flip() + xlab("")
+
+```
+
+#### Prediction
+
+After taining the machine learning model can be used for prediction.
+Usually, prediction is the main purpose of machine learning models.
+In our case, the model can be used to classify new credit applicants w.r.t. their associated credit status (good vs. bad) on the basis of the features.
+Typically, machine learning models create numeric values.
+In the regression case this is very natural.
+For classification, most models create scores or probabilites.
+From these, class predictions are derived.
+
+#### Predict Classes
+
+First, we directly predict classes.
+Here, we do something which is almost never a good idea in machine learning:
+Use the same data for prediction as for training.
+However, for the purpose of demonstration we can negelct this.
+
+```{r 09-use-cases-2-021}
+pred_logreg = learner_logreg$predict_newdata(german_credit)
+pred_rf = learner_rf$predict_newdata(german_credit)
+pred_logreg
+pred_rf
+```
+
+The `predict()` function gives a `Prediction` object. 
+It can be converted to a `data.table` if one wants to use it downstream.
+
+We display the precition results aggregated in a confusion matrix.
+
+```{r 09-use-cases-2-022}
+pred_logreg$confusion
+pred_rf$confusion
+```
+
+The random forest seems to perform much better than the logistic regression.
+Based on this output, we would always want the random forest to do our credit worthiness classification.
+However, as outlined, we evalaute on the training data.
+It is possible that the results are steered by overfitting.
+Additionally, we use the default options of the packages which seems 'unfair'.
+It could be that the default options of the random forest are much better suited to the data situation than the logistic regression.
+We should do [Performance Evaluation](#performance-evaluation), [Tuning](#tuning) and [benchmarks](#performance-comparison-and-benchmarks).
+
+## Predict Probabilities
+
+Most learners may not only predict a class variable ("response"), but also their degree of "belief" / uncertainty in a given response.
+Typically, we achieve this by setting the `$predict_type` slot to `"prob"`.
+Sometimes this needs to be done *before* the learner is trained.
+This is because the wrapped package requires this.
+Alternatively, we can directly create the learner with this option: `lrn("classif.log_reg", predict_type = "prob")`
+
+```{r 09-use-cases-2-023}
+learner_logreg$predict_type = "prob"
+```
+
+```{r 09-use-cases-2-024}
+learner_logreg$predict_newdata(german_credit)
+```
+
+Note that the probability interpretation of the predictions is sometimes to be dealt with caution.
+For a discussion on this topic, have a look at this article:
+
+#### Performance Evaluation
+
+To measure the performance of a learner on new unseen data, we usually mimic the scenario of unseen data by splitting up the data into training and test set.
+The training set is used for training the learner, and the test set is only used for predicting and evaluating the performance of the trained learner.
+Many resampling methods (cross-validation, bootstrap) repeat the splitting process in different ways.
+
+We need to specify the resampling strategy using the `rsmp()` function:
+```{r 09-use-cases-2-025}
+resampling = rsmp("holdout", ratio = 2/3)
+print(resampling)
+```
+Here, we use "holdout", a simple train-test split (with just one interation).
+We use the `resample()` function to do the resampling calculation:
+```{r 09-use-cases-2-026}
+res = resample(task, learner_logreg, resampling)
+res
+```
+The default score of the measure is included in the `$aggregate()` slot:
+```{r 09-use-cases-2-027}
+res$aggregate()
+```
+
+The default in this scenario is `classif.ce`. 
+This refers to the classification error. 
+A low value close to one is desired.
+
+We can easily run differend resampling strategies, e.g. repeated holdout (`"subsampling"`), or cross validation.
+Most methods perform repeated train/predict cycles on different data subsets and aggregate the result (usually as the `mean()`). 
+Doing this manually would require us to write loops.
+`mlr3` does the job for us.
+
+```{r 09-use-cases-2-028}
+res_sub = resample(task, learner_logreg, rsmp("subsampling", repeats = 10))
+res_sub$aggregate()
+```
+
+Instead, we could also apply cross-validation.
+
+```{r 09-use-cases-2-029}
+res_cv = resample(task, learner_logreg, rsmp("cv", folds = 10))
+res_cv$aggregate()
+```
+
+`mlr3` features scores for many more measures. 
+Here we apply `msr("classif.fpr")` for the false positive rate, or `msr("classif.fnr")` for the false negative rate.
+Multiple measures are entered via a list.
+
+```{r 09-use-cases-2-030}
+# false positive rate
+res_cv$aggregate(msr("classif.fpr"))
+# false positive rate and false negative
+msr_list = list(
+  msr("classif.fpr"),
+  msr("classif.fnr")
+)
+res_cv$aggregate(msr_list)
+```
+
+There are a few more resampling methods, and quite a few more measures. 
+We list them in
+```{r 09-use-cases-2-031}
+mlr_resamplings
+```
+
+and 
+
+```{r 09-use-cases-2-032}
+mlr_measures
+```
+
+To get help on a resampling method, use `?mlr_resamplings_xxx`, for a measure do `?mlr_measures_xxx`. 
+You can also use the [mlr3 reference](https://mlr3.mlr-org.com/reference/index.html) online.
+
+Some measure, for example `"auc"`, require a "probability" prediction, instead of a response prediction.
+
+#### Performance Comparison and Benchmarks
+
+We could compare `Learners` by evaluating `resample()` for each of them manually.
+However, `benchmark()` automatically performs resampling evaluations for multiple learners and tasks.
+`benchmark_grid()` creates fully crossed designs:
+Multiple `Learner`s for multiple `Task`s are compared w.r.t. multiple `Resampling`s.
+```{r 09-use-cases-2-033}
+lrn_list = list(
+  lrn("classif.log_reg", predict_type = "prob"),
+  lrn("classif.ranger", predict_type = "prob")
+)
+bm_design = benchmark_grid(task = task, resamplings = rsmp("cv", folds = 10), learners = lrn_list)
+```
+
+At this point, we want to mention that large benchmarks will (naturally) be very time-consuming and computionally expensvie.
+Our use case is very simple, so expect it to take about one minute.
+In general, we want use *parallelization* to speed things up on multicore machines.
+A benchmark is an 'embarassingly parallel' task, so in this case it would be very easy.
+This does **not work** on rstudio cloud, though.
+So only uncomment it locally!
+
+```{r 09-use-cases-2-034}
+# future::plan("multiprocess")
+```
+
+```{r 09-use-cases-2-035} 
+bmr = benchmark(bm_design)
+```
+
+In the benchmark we can compare different measures. 
+We compare misclassification rate and AUC.
+
+```{r 09-use-cases-2-036}
+msr_list = list(msr("classif.ce"), msr("classif.auc"))
+performances = bmr$aggregate(msr_list)
+performances[, c("learner_id", "classif.ce", "classif.auc")]
+```
+
+In contrast to before, we see that the two models perform very similarly.
+The perfect class assignment from before was obviously a very optimistic evalution.
+
+### Deviating from package defaults
+
+The previously shown techniques build the backbone of an `mlr3`-featured machine learning work bench.
+However, in most cases one would never proceed in the way we did.
+While many `R` packages have carefully selected default settings, they will not perform optimally in any scenario.
+Typically, we can select the values of hyperparameters.
+These (hyper)parameters can be accessed via
+
+```{r 09-use-cases-2-037}
+
+learner_logreg$param_set$get_values()
+
+```
+
+or 
+
+```{r 09-use-cases-2-038}
+
+learner_logreg$param_set
+
+```
+
+As of now, the parameter set is empty.
+
+We can parametrise our learners in two different manners.
+If we have prior knowledge on how the learner should be (hyper-)parametrised, the way to go would be manually entering the parameters in the parameter set.
+In most cases, however, we would want to tune the model so that it can search good model configurations itself.
+For now however we only want to compare a small number of models.
+
+To get an idea on which parameters can be manipulated, we can investigate the parameters of the original package version.
+
+```{r 09-use-cases-2-039}
+
+?ranger::ranger
+
+```
+
+```{r 09-use-cases-2-040, echo= FALSE}
+
+expression1 = floor(sqrt(ncol(german_credit) - 1))
+
+``` 
+
+For the random forest two meaninful parameters which steer model complexity are:
+`num.trees` and `mtry`
+
+`num.trees` defaults to `500` and `mtry` to `floor(sqrt(ncol(data) - 1))`, in our case `r expression1`.
+
+In the following we aim to train three different learners:
+
+1) The default random forest.
+
+2) A random forest with low `num.trees` and low `mtry`.
+
+3) A random forest with high `num.trees` and high `mtry`.
+
+We will benchmark their performance on the German credit data set.
+
+
+We construct the three learners and set the parameters with a named list.
+
+```{r 09-use-cases-2-041}
+
+learner_rf_medium = lrn("classif.ranger", predict_type = "prob")
+
+learner_rf_low = lrn("classif.ranger", predict_type = "prob")
+learner_rf_low$param_set$values <- list(num.trees = 5, mtry = 2)
+
+learner_rf_high = lrn("classif.ranger", predict_type = "prob")
+learner_rf_high$param_set$values <- list(num.trees = 1000, mtry = 11)
+
+
+```
+
+Once the learners are defined, we can benchmark them.
+
+```{r 09-use-cases-2-042}
+lrn_list = list(
+  learner_rf_low = learner_rf_low,
+  learner_rf_medium = learner_rf_medium,
+  learner_rf_high = learner_rf_high
+)
+bm_design = benchmark_grid(task = task, resamplings = rsmp("cv", folds = 10), learners = lrn_list)
+```
+
+```{r 09-use-cases-2-043}
+bmr = benchmark(bm_design)
+```
+
+We compare misclassification rate and AUC again.
+
+```{r 09-use-cases-2-044}
+msr_list = list(msr("classif.ce"), msr("classif.auc"))
+performances = bmr$aggregate(msr_list)
+cbind(learner = names(lrn_list), performances[, c("classif.ce", "classif.auc")])
+```
+
+All learners seem to have similar performance while the `learner_rf_low` seems to underfit a bit.
+
+
+
+
+
