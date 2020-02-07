@@ -4,9 +4,12 @@
 \alias{render_mlr3book}
 \title{Render the mlr3 book}
 \usage{
-render_mlr3book(...)
+render_mlr3book(format = "html", ...)
 }
 \arguments{
+\item{format}{(\code{character()}).
+Vector of output formats. Possible values: \code{"html"}, \code{"pdf"}.}
+
 \item{...}{Passed down to \code{\link[bookdown:render_book]{bookdown::render_book()}}.}
 }
 \description{
