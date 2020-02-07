@@ -877,10 +877,12 @@ It basically performs a smart hyperparameter tuning.
 
 If you want to get to know the data set in greater detail, please refer to ().
 
+In this previous use case we found out that a random forest did a good job explaining credit worthiness.
+However, we did not systematically explore different specifictions of random forests but only benchmarked different models where we a priori fixed the parameters.
 
 ### Defining the task
 
-The `german_credit` data set is a ready-to-use taks in the `r mlr_pkg("mlr3")` package.
+The `german_credit` data set is a ready-to-use task in the `r mlr_pkg("mlr3")` package.
 
 ```{r 09-use-cases-3-001}
 task = tsk("german_credit")
@@ -898,6 +900,181 @@ The data of the task can be inspected this way:
 task$data()
 ```
 
+General information on the task can be obtained via:
+
+```{r 09-use-cases-3-003}
+print(task)
+```
+
 ### Learner Definition
 
-As previously outlined, we aim to focus on th
+As previously outlined, we aim to focus on the random forest from the `r cran_pkg("ranger")` package.
+
+```{r 09-use-cases-3-003}
+learner = LearnerClassifRanger$new()
+```
+
+We can access the parameters of the learner via:
+
+```{r 09-use-cases-3-006}
+learner$param_set
+```
+
+
+
+Not all of these paramters ae eventually meaningful to be tuned.
+However, many of them directly affect the learner's performance.
+In the next section we will tune the learner only with a subset of these.
+
+### Tuning
+
+In `r mlr_pkg("mlr3")` we typically directly distinguish between hyperparameter tuning and feature selection.
+We will neglect feature selection in this use case, as the random forest has a kind of "built-in" feature selection.
+Hyperparameter tuning is occupied with choosing __good__ value combinations for all or some of the model paramters.
+In the case of the random forest, for example, this could be the number of trees or the number of variables to possibly split at in each node.
+However, also discrete choices such as the sampling strategy (`replace`) can be tuned.
+
+To perform hyperparameter tuning in `r mlr_pkg("mlr3")` we need to use the `r mlr_pkg("mlr3tuning")` package and need to set up a `r ref("TuningInstance")`.
+The instance needs __6__ different inputs:
+
+- A `task`
+
+- A `learner`
+
+- A `resampling` (to determine the goodness of the different hyperparameter combinations)
+
+- A (list of) `measures` (to evaluate the goodness)
+
+- A `param_set` to be tuned
+
+- A `terminator` that determines the budget spent to do the tuning
+
+#### Resampling
+
+A resampling strategy which is typically chose is cross-validation.
+In our case we choose 5 folds.
+
+```{r}
+cv_rsmp = rsmp("cv", folds = 5L)
+```
+
+#### Measures  
+
+Usually, the misclassifaction rate serves as a good evaluation criterion.
+
+```{r}
+measure = msr("classif.ce")
+```
+
+#### Parameter set
+
+The paramter set `param_set` contains information on which paramters are to be tuned and what is the paramter space to be searched.
+
+The `r mlr_pkg("paradox")` package supplies us with the appropiate syntax and commands to create a `param_set`.
+We limit ourselves to `num.trees`, `mtry` and `replace`.
+But feel free to add more meaningful parameters and change to upper / lower bounds of the searched space.
+
+```{r}
+library(paradox)
+tune_ps = ParamSet$new(list(
+  ParamInt$new("num.trees", lower = 5L, upper = 1000L),
+  ParamInt$new("mtry", lower = 1L, upper = 15L),
+  ParamLgl$new("replace", default = TRUE)
+))
+tune_ps
+```
+
+#### Terminator
+
+The terminator sets a budget for the tuning.
+In this example we choose `r ref("TerminatorClockTime")`, to make sure that the use case does not run forever.
+`r ref("TerminatorClockTime")` allocates a fixed budget in terms of seconds.
+In order to compile the book in a reasonable time (this is not the only use case), we only allow 100 seconds here.
+Also feel free to increase this number.
+
+```{r}
+eval_60_sec = term("clock_time", secs = 100)
+```
+
+### Setting up a Tuning instance
+
+```{r}
+library(mlr3tuning)
+
+instance = TuningInstance$new(
+  task = task,
+  learner = learner,
+  resampling = cv_rsmp,
+  measures = measure,
+  param_set = tune_ps,
+  terminator = eval_60_sec
+)
+print(instance)
+```
+
+### Setting up a `Tuner` Class
+
+We set up a `Tuner` referring to a random search (see: `r ref("TunerRandomSearch")`).
+
+```{r}
+tuner = TunerRandomSearch$new()
+```
+
+
+### Tuning the learner
+
+We tune the learner by calling the `tune` method of the `R6` class `Tuner`.
+The result is typically, `NULL`.
+Don't be confused because of this.
+
+```{r}
+set.seed(20200210)
+result = tuner$tune(instance)
+print(result)
+```
+
+One better accesses the results via the `archive` method.
+
+
+```{r}
+instance$archive()
+```
+
+Most of the information in the archive is redundant, so we focus on the essential columns.
+
+```{r}
+tuning_result =
+  instance$archive(unnest = "params")[, c("num.trees", "mtry", "replace", "classif.ce")]
+tuning_result[order(tuning_result$classif.ce), ]
+```
+
+At first glance, a rather medium value for `num.trees` and a large value for `mtry` seems to work best.
+However, we want to more systematically evaluate the results.
+
+```{r}
+ggplot(data = tuning_result, aes(x = num.trees, y = mtry)) +
+  geom_point(aes(shape = replace, col = classif.ce)) + 
+  scale_color_gradient2(midpoint = mean(c(max(tuning_result$classif.ce), min(tuning_result$classif.ce))),
+                        low = "blue", mid = "white", high = "red", space = "Lab")
+```
+
+
+Using the graph one can validate that small values of the numeric hyper parameters tend to be associated with higher misclassifaction.
+Only for medium and large values in both, `num.trees` and `mtry` low missclassification rates are observed.
+We observe an accumulation of low missclassification rates for models with both, high `num.trees` and `mtry`.
+A strcuture induced by the sampling strategy cannot be easily observed.
+
+Kontur plot..
+
+
+As an additional evaluation tool we can use linear regresion to predict the missclassification rate using the three features we varied as features.
+Doing so, we regard the random search as an experiment and analyse the resulting variance (ANOVA).
+
+```{r}
+library(mlr3learners)
+tuning_result$replace <- as.factor(tuning_result$replace)
+tuning_task = TaskRegr$new("tuning", tuning_result, target = "classif.ce")
+tuning_learner = LearnerRegrLM$new()
+tuning_learner$train(tuning_task)
+summary(tuning_learner$model)
+```
