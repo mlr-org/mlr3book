@@ -902,7 +902,7 @@ task$data()
 
 General information on the task can be obtained via:
 
-```{r 09-use-cases-3-003}
+```{r 09-use-cases-3-004}
 print(task)
 ```
 
@@ -910,7 +910,8 @@ print(task)
 
 As previously outlined, we aim to focus on the random forest from the `r cran_pkg("ranger")` package.
 
-```{r 09-use-cases-3-003}
+```{r 09-use-cases-3-005}
+library(mlr3learners)
 learner = LearnerClassifRanger$new()
 ```
 
@@ -954,7 +955,7 @@ The instance needs __6__ different inputs:
 A resampling strategy which is typically chose is cross-validation.
 In our case we choose 5 folds.
 
-```{r}
+```{r 09-use-cases-3-007}
 cv_rsmp = rsmp("cv", folds = 5L)
 ```
 
@@ -962,7 +963,7 @@ cv_rsmp = rsmp("cv", folds = 5L)
 
 Usually, the misclassifaction rate serves as a good evaluation criterion.
 
-```{r}
+```{r 09-use-cases-3-008}
 measure = msr("classif.ce")
 ```
 
@@ -974,7 +975,7 @@ The `r mlr_pkg("paradox")` package supplies us with the appropiate syntax and co
 We limit ourselves to `num.trees`, `mtry` and `replace`.
 But feel free to add more meaningful parameters and change to upper / lower bounds of the searched space.
 
-```{r}
+```{r 09-use-cases-3-009}
 library(paradox)
 tune_ps = ParamSet$new(list(
   ParamInt$new("num.trees", lower = 5L, upper = 1000L),
@@ -992,13 +993,13 @@ In this example we choose `r ref("TerminatorClockTime")`, to make sure that the 
 In order to compile the book in a reasonable time (this is not the only use case), we only allow 100 seconds here.
 Also feel free to increase this number.
 
-```{r}
-eval_60_sec = term("clock_time", secs = 100)
+```{r 09-use-cases-3-010}
+eval_100_sec = term("clock_time", secs = 100)
 ```
 
 ### Setting up a Tuning instance
 
-```{r}
+```{r 09-use-cases-3-011}
 library(mlr3tuning)
 
 instance = TuningInstance$new(
@@ -1007,7 +1008,7 @@ instance = TuningInstance$new(
   resampling = cv_rsmp,
   measures = measure,
   param_set = tune_ps,
-  terminator = eval_60_sec
+  terminator = eval_100_sec
 )
 print(instance)
 ```
@@ -1016,7 +1017,7 @@ print(instance)
 
 We set up a `Tuner` referring to a random search (see: `r ref("TunerRandomSearch")`).
 
-```{r}
+```{r 09-use-cases-3-012}
 tuner = TunerRandomSearch$new()
 ```
 
@@ -1027,7 +1028,7 @@ We tune the learner by calling the `tune` method of the `R6` class `Tuner`.
 The result is typically, `NULL`.
 Don't be confused because of this.
 
-```{r}
+```{r 09-use-cases-3-013}
 set.seed(20200210)
 result = tuner$tune(instance)
 print(result)
@@ -1036,13 +1037,13 @@ print(result)
 One better accesses the results via the `archive` method.
 
 
-```{r}
+```{r 09-use-cases-3-014}
 instance$archive()
 ```
 
 Most of the information in the archive is redundant, so we focus on the essential columns.
 
-```{r}
+```{r 09-use-cases-3-015}
 tuning_result =
   instance$archive(unnest = "params")[, c("num.trees", "mtry", "replace", "classif.ce")]
 tuning_result[order(tuning_result$classif.ce), ]
@@ -1051,30 +1052,50 @@ tuning_result[order(tuning_result$classif.ce), ]
 At first glance, a rather medium value for `num.trees` and a large value for `mtry` seems to work best.
 However, we want to more systematically evaluate the results.
 
-```{r}
+```{r 09-use-cases-3-016}
 ggplot(data = tuning_result, aes(x = num.trees, y = mtry)) +
   geom_point(aes(shape = replace, col = classif.ce)) + 
   scale_color_gradient2(midpoint = mean(c(max(tuning_result$classif.ce), min(tuning_result$classif.ce))),
                         low = "blue", mid = "white", high = "red", space = "Lab")
 ```
 
-
 Using the graph one can validate that small values of the numeric hyper parameters tend to be associated with higher misclassifaction.
 Only for medium and large values in both, `num.trees` and `mtry` low missclassification rates are observed.
 We observe an accumulation of low missclassification rates for models with both, high `num.trees` and `mtry`.
 A strcuture induced by the sampling strategy cannot be easily observed.
 
-Kontur plot..
-
-
 As an additional evaluation tool we can use linear regresion to predict the missclassification rate using the three features we varied as features.
 Doing so, we regard the random search as an experiment and analyse the resulting variance (ANOVA).
 
-```{r}
-library(mlr3learners)
-tuning_result$replace <- as.factor(tuning_result$replace)
+```{r 09-use-cases-3-017}
+tuning_result$replace = as.factor(ifelse(tuning_result$replace, 1, 0))
+tuning_result$mtry = as.numeric(tuning_result$mtry)
+tuning_result$num.trees = as.numeric(tuning_result$num.trees)
 tuning_task = TaskRegr$new("tuning", tuning_result, target = "classif.ce")
 tuning_learner = LearnerRegrLM$new()
 tuning_learner$train(tuning_task)
 summary(tuning_learner$model)
 ```
+
+This model is in line with our visual observation:
+A higher complexity of the model is associated with significantly lower misclassification error.
+
+We can use the model predictions in order to visually present the results.
+
+```{r 09-use-cases-3-018}
+expanded_result = expand.grid(num.trees = seq(1, 1000, by = 3), 
+                               mtry = seq(1, 15, by = 0.05), 
+                               replace = c(1, 0))
+
+expanded_result$replace = as.factor(expanded_result$replace)
+expanded_predictions = tuning_learner$predict_newdata(expanded_result)
+expanded_result$response = expanded_predictions$response
+
+ggplot(expanded_result, aes(num.trees, mtry, fill= response)) + 
+  geom_tile() 
+
+```
+
+One has to remember that this graphic itself is based on a (rather simplistic) model which can only explain `summary(tuning_learner$model)$adj.r.squared * 100` percent of the variable is the misclassification rate.
+Additionally, we have now idea yet when we leave the parameter spaces defined earlier.
+However, for the moment, we seem to fancy more complex models while the absolute difference in performance between complex and simple models seems rather low.
