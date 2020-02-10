@@ -23,12 +23,12 @@ To build the book, run one of the following commands:
 
 ```r
 # HTML
-withr::with_dir("bookdown", bookdown::render_book("index.Rmd", 
-  output_format = "bookdown::gitbook")) 
+withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
+  output_format = "bookdown::gitbook"))
 
 # PDF
-withr::with_dir("bookdown", bookdown::render_book("index.Rmd", 
-  output_format = "bookdown::pdf_book")) # PDF
+withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
+  output_format = "bookdown::pdf_book")) 
 ```
 
 ### Serve the book
@@ -85,12 +85,44 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 
 ### Figures
 
-Please use `knitr::include_graphics()` to add figures.
-This way works for the HTML and PDF output.
-In addtion, one can control the width + height of the figure.
-This is not the case for the common markdown syntax `[](<figure>)`.
+#### Include existing figures
 
-Always store images also in a vector format (like .svg), even if you do not use them in vector format in the book. Otherwise, we cannot re-use or modify images in the future.
+To include figures in the `Rmd` follow these rules:
+
+* Use `knitr::include_graphics()` to add figures instead of markdown syntax `[](<figure>)`. `knitr::include_graphics()` works for the HTML and PDF output and allows to control the width + height of the figure.
+* If available, include the `svg` version in the `Rmd` source, e.g. `knitr::include_graphics("images/some_figure.svg")`.
+* If no `svg` version is available, include the `png` version.
+* Never include the `pdf` version of a figure.
+
+#### Adding a new figure
+
+To add a new figure into the repository consider the following rules:
+
+* Add the file in the `bookdown/images` folder without any subdirectory.
+* Store the figure as `svg` file if possible, i.e. if it is a vector graphic.
+  This allows us to re-use or modify images in the future.
+* For any `svg` file you need to supply a `pdf` version with the exact same name.
+* For `png` files only one version needs to be supplied.
+  - `png` files should have reasonable resolution, i.e. the width of a pixel graphic should be between `400px` and `2000px`.
+    If a higher resolution is needed to obtain a readable plot you are probably doing something wrong, e.g. use a pixel graphic where you should use a vector graphic.
+* Please look at the file size.
+  - If your `pdf` or `svg` file is larger than `1MB` it probably contains unnecessary unplotted content or unvectorized parts.
+  - If your `png` file is larger than `1MB` the resolution is probably too big.
+
+#### Further aspects
+
+* How do I convert `svg` to `pdf`?
+  - Use Inkscape or any other tool which does not convert to raster imgages.
+* How do I convert `pdf` to `svg`?
+  - Use Inkscape which allows you to also remove unwanted parts of the `pdf`.
+* Do not use screenshots!
+  - *Google Slides* allows `svg` export.
+  - *PDF* can be converted to `svg` and you can even cut parts.
+  - *HTML* can be converted to `svg`.
+* The difference between vector (`svg`) and pixel (`png`) graphics should be known.
+  - Attention: `svg` and `pdf` also support to include pixel graphics.
+    There is no guarantee that a `svg` or `pdf` is a pure vector graphic.
+    If you paste a pixel graphic (e.g. a screenshot) into Inkscape and save it as `svg` it does not magically become a vector graphic.
 
 ### Spacing
 
