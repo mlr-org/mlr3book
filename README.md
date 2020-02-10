@@ -93,6 +93,7 @@ To include figures follow these rules:
 * If you add a new figure:
   - Add it in the `bookdown/images` folder without any subdirectory.
   - Store them as `svg` file if possible, i.e. if it is a vector graphic.
+  This allows us to re-use or modify images in the future.
   - For any `svg` file you need to supply a `pdf` version with the exact same name.
   - For `png` files only one version needs to be supplied.
   - `png` files should have reasonable resolution, i.e. the width of a pixel graphic should be between `400px` and `2000px`.
@@ -115,9 +116,6 @@ Further aspects:
   - Attention: `svg` and `pdf` also support to include pixel graphics.
     There is no guarantee that a `svg` or `pdf` is a pure vector graphic.
     If you paste a pixel graphic (e.g. a screenshot) into Inkscape and save it as `svg` it does not magically become a vector graphic.
-
-
-Always store images also in a vector format (like .svg), even if you do not use them in vector format in the book. Otherwise, we cannot re-use or modify images in the future.
 
 ### Spacing
 
