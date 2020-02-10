@@ -112,7 +112,7 @@ To add a new figure into the repository consider the following rules:
 #### Further aspects
 
 * How do I convert `svg` to `pdf`?
-  - Use Inkscape, `rsvg-convert`, `convert` (ImageMagick) or any tool you like.
+  - Use Inkscape or any other tool which does not convert to raster imgages.
 * How do I convert `pdf` to `svg`?
   - Use Inkscape which allows you to also remove unwanted parts of the `pdf`.
 * Do not use screenshots!
