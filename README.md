@@ -91,7 +91,7 @@ To include figures in the `Rmd` follow these rules:
 * Use `knitr::include_graphics()` to add figures instead of markdown syntax `[](<figure>)`. `knitr::include_graphics()` works for the HTML and PDF output and allows to control the width + height of the figure.
 * If available, include the `svg` version in the `Rmd` source, e.g. `knitr::include_graphics("images/some_figure.svg")`.
 * If no `svg` version is available, include the `png` version.
-* Never include a `pdf` figure.
+* Never include the `pdf` version of a figure.
 
 #### Adding a new figure:
 
