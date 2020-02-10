@@ -28,7 +28,7 @@ withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
 
 # PDF
 withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
-  output_format = "bookdown::pdf_book")) # PDF
+  output_format = "bookdown::pdf_book")) 
 ```
 
 ### Serve the book
@@ -85,17 +85,19 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 
 ### Figures
 
-#### Include existing figures:
+#### Include existing figures
 
 To include figures in the `Rmd` follow these rules:
+
 * Use `knitr::include_graphics()` to add figures instead of markdown syntax `[](<figure>)`. `knitr::include_graphics()` works for the HTML and PDF output and allows to control the width + height of the figure.
 * If available, include the `svg` version in the `Rmd` source, e.g. `knitr::include_graphics("images/some_figure.svg")`.
 * If no `svg` version is available, include the `png` version.
 * Never include the `pdf` version of a figure.
 
-#### Adding a new figure:
+#### Adding a new figure
 
 To add a new figure into the repository consider the following rules:
+
 * Add the file in the `bookdown/images` folder without any subdirectory.
 * Store the figure as `svg` file if possible, i.e. if it is a vector graphic.
   This allows us to re-use or modify images in the future.
@@ -107,7 +109,8 @@ To add a new figure into the repository consider the following rules:
   - If your `pdf` or `svg` file is larger than `1MB` it probably contains unnecessary unplotted content or unvectorized parts.
   - If your `png` file is larger than `1MB` the resolution is probably too big.
 
-Further aspects:
+#### Further aspects
+
 * How do I convert `svg` to `pdf`?
   - Use Inkscape, `rsvg-convert`, `convert` (ImageMagick) or any tool you like.
 * How do I convert `pdf` to `svg`?
