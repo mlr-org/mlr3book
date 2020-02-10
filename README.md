@@ -105,7 +105,7 @@ To include figures follow these rules:
 
 Further aspects:
 * How do I convert `svg` to `pdf`?
-  - Use Inkscape, `rsvg-convert`, `convert` (ImageMagic) or any tool you like.
+  - Use Inkscape, `rsvg-convert`, `convert` (ImageMagick) or any tool you like.
 * How do I convert `pdf` to `svg`?
   - Use Inkscape which allows you to also remove unwanted parts of the `pdf`.
 * Do not use screenshots!
