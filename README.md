@@ -92,10 +92,10 @@ To include figures follow these rules:
 * Never include a `pdf` figure.
 * If you add a new figure:
   - Add it in the `bookdown/images` folder without any subdirectory.
-  - Store them as `svg` file if possible, i.e.\ if it is a vector graphic.
+  - Store them as `svg` file if possible, i.e. if it is a vector graphic.
   - For any `svg` file you need to supply a `pdf` version with the exact same name.
   - For `png` files only one version needs to be supplied.
-  - `png` files should have reasonable resolution, i.e.\ the width of a pixel graphic should be between `400px` and `2000px`.
+  - `png` files should have reasonable resolution, i.e. the width of a pixel graphic should be between `400px` and `2000px`.
     If a higher resolution is needed to obtain a readable plot you are probably doing something wrong, e.g. use a pixel graphic where you should use a vector graphic.
   - Please look at the file size.
     If your `pdf` or `svg` file is larger than `1MB` it probably contains unnecessary unplotted content or unvectorized parts.
@@ -106,7 +106,7 @@ Further aspects:
 * How do I convert `svg` to `pdf`?
   - Use Inkscape, `rsvg-convert`, `convert` (ImageMagic) or any tool you like.
 * How do I convert `pdf` to `svg`?
-  - Use Inkscape which allows you to also remove unwanted parts of the `pdf`
+  - Use Inkscape which allows you to also remove unwanted parts of the `pdf`.
 * Do not use screenshots!
   - *Google Slides* allows `svg` export.
   - *PDF* can be converted to `svg` and you can even cut parts.
