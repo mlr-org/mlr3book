@@ -88,14 +88,14 @@ Start the code chunk with `block` instead of `r` and add `type='caution'`.
 You have to options to include a figure:
 
 1) Vector graphic
-  - In the Rmd: `knitr::include_graphics("images/some_figure.svg")`
+  - In the `Rmd`: `knitr::include_graphics("images/some_figure.svg")`
   - Add `bookdown/images/some_figure.svg` **and** `bookdown/images/some_figure.pdf` to the repository.
 2) Pixel graphic
-  - In the Rmd: `knitr::include_graphics("images/some_figure.png")`
+  - In the `Rmd`: `knitr::include_graphics("images/some_figure.png")`
   - Add **only** `bookdown/images/some_figure.png` to the repository.
 
 * Do not use markdown syntax `[](<figure>)` to include figures.
-* Do not inlcude `pdf` in the Rmd: `knitr::include_graphics("images/some_figure.pdf")`.
+* Do not include `pdf` in the `Rmd`: `knitr::include_graphics("images/some_figure.pdf")`.
 
 #### Adding a new figure
 
@@ -113,7 +113,7 @@ To add a new figure into the repository consider the following rules:
 #### Further aspects
 
 * How do I convert `svg` to `pdf`?
-  - Use Inkscape or any other tool which does not convert to raster imgages.
+  - Use Inkscape or any other tool which does not convert to raster images.
 * How do I convert `pdf` to `svg`?
   - Use Inkscape which allows you to also remove unwanted parts of the `pdf`.
 * Do not use screenshots!
