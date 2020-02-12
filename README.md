@@ -28,7 +28,7 @@ withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
 
 # PDF
 withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
-  output_format = "bookdown::pdf_book")) 
+  output_format = "bookdown::pdf_book"))
 ```
 
 ### Serve the book
@@ -71,17 +71,6 @@ mlr3book::name_chunks_mlr3book()
 ```
 
 or alternatively executing `make names` from the terminal.
-
-### Blocks
-
-You can add certain ["blocks"](https://bookdown.org/yihui/bookdown/custom-blocks.html) supported by [bookdown](https://github.com/rstudio/bookdown) for notes, warnings, etc.
-Start the code chunk with `block` instead of `r` and add `type='caution'`.
-
-````
-```{block <name>, type='caution'}
-<text>
-```
-````
 
 ### Figures
 
