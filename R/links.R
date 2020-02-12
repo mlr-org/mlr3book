@@ -93,5 +93,5 @@ mlr_pkg = function(pkg) {
 gh_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
   parts = strsplit(trimws(pkg), "/", fixed = TRUE)[[1L]]
-  sprintf("[`%s`](https://github.com/%s)", parts[2L], pkg)
+  sprintf("[%s](https://github.com/%s)", parts[2L], pkg)
 }
