@@ -8,16 +8,20 @@ options(
 )
 
 if (knitr::is_latex_output()) {
-  options("width" = 56)
-  knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 56, indent = 2), tidy = TRUE)
   knitr::opts_chunk$set(fig.pos = "H")
 } else if (knitr::is_html_output()) {
-  knitr::opts_chunk$set(fig.width = 6.5,
-    fig.height = 4,
-    fig.align = "center",
-    results = "markup")
+  # no special settings yet
 }
 
 
-knitr::opts_chunk$set(collapse = FALSE, cache = TRUE, cache.lazy = FALSE)
+knitr::opts_chunk$set(
+  collapse = FALSE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  fig.width = 6.5,
+  fig.height = 4,
+  fig.align = "center",
+  results = "markup"
+)
+
 lgr::get_logger("mlr3")$set_threshold("warn")
