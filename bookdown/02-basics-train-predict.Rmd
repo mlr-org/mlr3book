@@ -1,0 +1,168 @@
+## Train and Predict {#train-predict}
+
+In this section, we explain how [tasks](#tasks) and [learners](#learners) can be used to train a model and predict to a new dataset.
+The concept is demonstrated on a supervised classification using the iris dataset and the **rpart** learner, which builds a singe classification tree.
+
+Training a [learner](#learners) means fitting a model to a given data set.
+Subsequently, we want to [predict](#predicting) the label for new observations.
+These [predictions](#predicting) are compared to the ground truth values in order to assess the predictive performance of the model.
+
+### Creating Task and Learner Objects {#train-predict-objects}
+
+The first step is to generate the following `r mlr_pkg("mlr3")` objects from the [task dictionary](#tasks) and the [learner dictionary](#learners), respectively:
+
+1. The classification [task](#tasks):
+
+```{r 02-basics-train-predict-001}
+task = tsk("sonar")
+```
+
+2. A [learner](#learners) for the classification tree:
+
+```{r 02-basics-train-predict-002}
+learner = lrn("classif.rpart")
+```
+
+### Setting up the train/test splits of the data {#split-data}
+
+It is common to train on a majority of the data.
+Here we use 80% of all available observations and predict on the remaining 20%.
+For this purpose, we create two index vectors:
+
+```{r 02-basics-train-predict-003}
+train_set = sample(task$nrow, 0.8 * task$nrow)
+test_set = setdiff(seq_len(task$nrow), train_set)
+```
+
+In Section \@ref(resampling) we will learn how mlr3 can automatically create training and test sets based on different [resampling](#resampling) strategies.
+
+### Training the learner {#training}
+
+The field `$model` stores the model that is produced in the training step.
+Before the `$train()` method is called on a learner object, this field is `NULL`:
+
+```{r 02-basics-train-predict-004}
+learner$model
+```
+
+Next, the classification tree is trained using the train set of the iris task by calling the `$train()` method of the `r ref("Learner")`:
+
+```{r 02-basics-train-predict-005}
+learner$train(task, row_ids = train_set)
+```
+
+This operation modifies the learner in-place.
+We can now access the stored model via the field `$model`:
+
+```{r 02-basics-train-predict-006}
+print(learner$model)
+```
+
+### Predicting {#predicting}
+
+After the model has been trained, we use the remaining part of the data for prediction.
+Remember that we [initially split the data](#split-data) in `train_set` and `test_set`.
+
+```{r 02-basics-train-predict-007}
+prediction = learner$predict(task, row_ids = test_set)
+print(prediction)
+```
+
+The `$predict()` method of the `r ref("Learner")` returns a `r ref("Prediction")` object.
+More precisely, a `r ref("LearnerClassif")` returns a `r ref("PredictionClassif")` object.
+
+A prediction objects holds the row ids of the test data, the respective true label of the target column and the respective predictions.
+The simplest way to extract this information is by converting the `r ref("Prediction")` object to a `data.table()`:
+
+```{r 02-basics-train-predict-008}
+head(as.data.table(prediction))
+```
+
+For classification, you can also extract the confusion matrix:
+
+```{r 02-basics-train-predict-009}
+prediction$confusion
+```
+
+### Changing the Predict Type {#predict-type}
+
+Classification learners default to predicting the class label.
+However, many classifiers additionally also tell you how sure they are about the predicted label by providing posterior probabilities.
+To switch to predicting these probabilities, the `predict_type` field of a `r ref("LearnerClassif")` must be changed from `"response"` to `"prob"` before training:
+
+```{r 02-basics-train-predict-010}
+learner$predict_type = "prob"
+
+# re-fit the model
+learner$train(task, row_ids = train_set)
+
+# rebuild prediction object
+prediction = learner$predict(task, row_ids = test_set)
+```
+
+The prediction object now contains probabilities for all class labels:
+
+```{r 02-basics-train-predict-011}
+# data.table conversion
+head(as.data.table(prediction))
+
+# directly access the predicted labels:
+head(prediction$response)
+
+# directly access the matrix of probabilities:
+head(prediction$prob)
+```
+
+Analogously to predicting probabilities, many `r ref("LearnerRegr", text = "regression learners")` support the extraction of standard error estimates by setting the predict type to `"se"`.
+
+
+### Plotting Predictions {#autoplot-prediction}
+
+Analogously to [plotting tasks](#autoplot-task), `r mlr_pkg("mlr3viz")` provides a `r ref("ggplot2::autoplot()", text = "autoplot()")` method for `r ref("Prediction")` objects.
+All available types are listed on the manual page of `r ref("autoplot.PredictionClassif()")` or `r ref("autoplot.PredictionClassif()")`, respectively.
+
+```{r 02-basics-train-predict-012, message = FALSE, warning = FALSE}
+library("mlr3viz")
+
+task = tsk("sonar")
+learner = lrn("classif.rpart", predict_type = "prob")
+learner$train(task)
+prediction = learner$predict(task)
+autoplot(prediction)
+autoplot(prediction, type = "roc")
+```
+
+```{r 02-basics-train-predict-013, message = FALSE, warning = FALSE}
+library("mlr3viz")
+library("mlr3learners")
+local({ # we do this locally to not overwrite the objects from previous chunks
+  task = tsk("mtcars")
+  learner = lrn("regr.lm")
+  learner$train(task)
+  prediction = learner$predict(task)
+  autoplot(prediction)
+})
+```
+
+
+### Performance assessment {#measure}
+
+The last step of modeling is usually the performance assessment.
+To assess the quality of the predictions, the predicted labels are compared with the true labels.
+How this comparison is calculated is defined by a measure, which is given by a `r ref("Measure")` object.
+Note that if the prediction was made on a dataset without the target column, i.e. without true labels, then no performance can be calculated.
+
+Predefined available measures are stored in `r ref("mlr_measures")` (with convenience getter `r ref("msr()")`):
+
+```{r 02-basics-train-predict-014}
+mlr_measures
+```
+
+We choose **accuracy** (`r ref("mlr_measures_classif.acc", text = "classif.acc")`) as a specific performance measure and call the method `$score()` of the `r ref("Prediction")` object to quantify the predictive performance.
+
+```{r 02-basics-train-predict-015}
+measure = msr("classif.acc")
+prediction$score(measure)
+```
+
+Note that, if no measure is specified, classification defaults to classification error (`r ref("mlr_measures_classif.ce", text = "classif.ce")`) and regression defaults to the mean squared error (`r ref("mlr_measures_regr.mse", text = "regr.mse")`).

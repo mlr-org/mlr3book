@@ -1,7 +1,7 @@
-library(mlr3)
-library(mlr3learners)
-library(mlr3pipelines)
-library(mlr3misc)
+library("mlr3")
+library("mlr3learners")
+library("mlr3pipelines")
+library("mlr3misc")
 data("titanic_train", package = "titanic")
 data("titanic_test", package = "titanic")
 
