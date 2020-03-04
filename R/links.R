@@ -32,7 +32,7 @@ ref = function(topic, text = topic) {
     pkg = parts[1L]
   } else {
     update_db()
-    matched = db$base[db$aliases[list(strip_parenthesis(topic)), c("Alias", "ID"), on = "Alias", nomatch = 0L], on = "ID", nomatch = 0L]
+    matched = db$base[db$aliases[list(strip_parenthesis(topic)), c("Alias", "ID"), on = "Alias", nomatch = 0L], on = "ID", nomatch = NULL]
     if (nrow(matched) == 0L) {
       stop(sprintf("Could not find help page for topic '%s'", topic))
     }
