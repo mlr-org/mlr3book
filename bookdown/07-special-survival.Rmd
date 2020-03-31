@@ -1,26 +1,35 @@
 ## Survival Analysis {#survival}
 
-Survival analysis examines data on whether a specific event of interest takes place and how long it takes till this event occurs.
-One cannot use ordinary regression analysis when dealing with survival analysis data sets.
-Firstly, survival data contains solely positive values and therefore needs to be transformed to avoid biases.
-Secondly, ordinary regression analysis cannot deal with censored observations accordingly.
-Censored observations are observations in which the event of interest has not occurred, yet.
-Survival analysis allows the user to handle censored data with limited time frames that sometimes do not entail the event of interest.
+Survival analysis is a sub-field of supervised machine learning in which the aim is to predict the survival distribution of a given individual. Arguably the main feature of survival analysis is that unlike classification and regression, learners are trained on two features:
+
+1. the time until the event takes place
+2. the event type: either censoring or death.
+
+At a particular time-point, an individual is either: alive, dead, or censored. Censoring occurs if it is unknown if an individual is alive or dead. For example, say we are interested in patients in hospital and every day it is recorded if they are alive or dead, then after a patient leaves it is unknown if they are alive or dead, hence they are censored. If there was no censoring, then ordinary regression analysis could be used instead. Furthermore, survival data contains solely positive values and therefore needs to be transformed to avoid biases. 
+
 Note that survival analysis accounts for both censored and uncensored observations while adjusting respective model parameters.
 
 The package `r mlr_pkg("mlr3proba")` extends `r mlr_pkg("mlr3")` with the following objects for survival analysis:
 
-* `r ref("mlr3proba::TaskSurv", text = "TaskSurv")` to define (right-censored) survival tasks
+* `r ref("mlr3proba::TaskSurv", text = "TaskSurv")` to define (censored) survival tasks
 * `r ref("mlr3proba::LearnerSurv", text = "LearnerSurv")` as base class for survival learners
 * `r ref("mlr3proba::PredictionSurv", text = "PredictionSurv")` as specialized class for `r ref("Prediction")` objects
 * `r ref("mlr3proba::MeasureSurv", text = "MeasureSurv")` as specialized class for performance measures
 
-In this example we demonstrate the basic functionality of the package on the `r ref("survival::rats", text = "rats")` data from the `r cran_pkg("survival")` package.
-This task ships as pre-defined `r ref("TaskSurv")` with `r mlr_pkg("mlr3proba")`.
+### TaskSurv
 
-```{r 07-special-survival-001}
-library("mlr3proba")
-task = tsk("rats")
+Unlike `TaskClassif` and `TaskRegr` which have a single 'target' argument, `TaskSurv` mimics the
+`survival::Surv` object and has three-four target arguments (dependent on censoring type)
+
+```{r}
+# type = "right" is default
+
+TaskSurv$new(id = "right_censored", backend = survival::rats,
+             time = "time", event = "status", type = "right")
+
+task = TaskSurv$new(id = "interval_censored", backend = survival::bladder2[,-c(1, 7)],
+                    time = "start", time2 = "stop", type = "interval2")
+                    
 print(task)
 
 # the target column is a survival object:
@@ -31,11 +40,74 @@ library("mlr3viz")
 autoplot(task)
 ```
 
-Now, we conduct a small benchmark study on the `r ref("mlr_tasks_rats", text = "rats")` task using some of the integrated survival learners:
+### Predict Types - crank, lp, and distr
+
+Every `PredictionSurv` object can predict one or more of:
+
+* `lp` - Linear predictor calculated as the fitted coefficients multiplied by the test data.
+* `distr` - Predicted survival distribution, either discrete or continuous. Implemented in **[distr6](https://CRAN.R-project.org/package=distr6)**.
+* `crank` - Continuous risk ranking.
+
+`lp` and `crank` can be used with measures of discrimination such as the concordance index. Whilst
+`lp` is a specific mathematical prediction, `crank` is any continuous ranking that identifies who is
+more or less likely to experience the event. So far the only implemented learner that only returns a continuous
+ranking is `surv.svm`. If a `PredictionSurv` returns an `lp` then the `crank` is identical to this.
+Otherwise `crank` is calculated as the expectation of the predicted survival distribution. Note that 
+for linear proportional hazards models, the ranking (but not necessarily the `crank` score itself)
+given by `lp` and the expectation of `distr`, is identical.
+
+```{r}
+learn = lrn("surv.coxph")
+train_set = sample(task_veteran$nrow, 0.8 * task_veteran$nrow)
+test_set = setdiff(seq_len(task_veteran$nrow), train_set)
+
+learn$train(task, row_ids = train_set)
+prediction = learn$predict(task, row_ids = test_set)
+
+print(prediction)
+```
+
+### Composition
+
+Finally we take a look at the `PipeOp`s implemented in **mlr3proba**, which are used for composition
+of predict types. For example, a predict linear predictor does not have a lot of meaning by itself, but it can be composed into a survival distribution. See `r mlr_pkg("mlr3pipelines")` for full tutorials and details on `PipeOp`s.
+
+
+```{r}
+# PipeOpDistrCompositor - Train one model with a baseline distribution,
+# (Kaplan-Meier or Nelson-Aalen), and another with a predicted linear predictor.
+task = tgen("simsurv")$generate(30)
+leaner_lp = lrn("surv.gbm", bag.fraction = 1, n.trees = 50L)
+leaner_distr = lrn("surv.kaplan")
+prediction_lp = leaner_lp$train(task)$predict(task)
+prediction_distr = leaner_distr$train(task)$predict(task)
+prediction_lp$distr
+
+# Doesn't need training. Base = baseline distribution. ph = Proportional hazards.
+
+pod = po("distrcompose", param_vals = list(form = "ph", overwrite = FALSE))
+prediction = pod$predict(list(base = prediction_distr, pred = prediction_lp))$output
+
+# Now we have a predicted distr!
+
+prediction$distr
+
+# This can all be simplified by using the distrcompose wrapper
+
+gbm.distr = distrcompositor(learner = lrn("surv.gbm", bag.fraction = 1, n.trees = 50L),
+                             estimator = "kaplan",
+                             form = "aft",
+                             overwrite = FALSE)
+gbm.distr$train(task)$predict(task)
+```
+
+### Benchmark Experiment
+
+Finally, we conduct a small benchmark study on the `r ref("mlr_tasks_rats", text = "rats")` task using some of the integrated survival learners:
 
 ```{r 07-special-survival-002}
 # some integrated learners
-learners = lapply(c("surv.coxph", "surv.kaplan", "surv.ranger"), lrn)
+learners = lrns(c("surv.coxph", "surv.kaplan", "surv.ranger"))
 print(learners)
 
 # Uno's C-Index for survival
