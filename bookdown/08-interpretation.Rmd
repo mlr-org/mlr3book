@@ -3,3 +3,199 @@
 ## IML {#iml}
 
 ## Dalex {#dalex}
+
+The DALEX package xrays any model and helps to explore and explain its behaviour, let us understand how complex models are working. The main function explain() creates a wrapper around a predictive model. Wrapped models may then be explored and compared with a collection of local and global explainers. Recent developments from the area of Interpretable Machine Learning/eXplainable Artificial Intelligence.
+
+### FIFA20
+
+Examples will be conducted using [FIFA20](https://www.kaggle.com/stefanoleone992/fifa-20-complete-player-dataset). It contains data retrieved from FIFA20 video game. We will use this data to build a predictive model for the assessment of player value. Once the model will be created we will use methods for exploration and explanation to better understand how it is working and also to better understand which factors and how to influence the player value.
+
+```{r eval=FALSE}
+library("readr")
+fifa20 <- as.data.frame(read_csv("players_20.csv"))
+```
+Unfortunately the data  contains a lot of unecessery information. In this anlysis we will cut orginal data only to inforamtion that are strictly conected to the player. Also target variable, `value_eur` is skewed, so we apply log-transofmation. Besides we omit rows with NA, duplicated, and those with negative log-value. At last we set rownames of data as names of players.
+```{r eval=FALSE}
+fifa20_selected <- fifa20[,c(4, 5, 7,8,13,17,25:26,45:78)]
+fifa20_selected$value_eur <- log10(fifa20_selected$value_eur)
+fifa20_selected$team_position <- factor(fifa20_selected$team_position)
+fifa20_selected <- na.omit(fifa20_selected)
+fifa20_selected <- fifa20_selected[fifa20_selected$value_eur > 0,]
+fifa20_selected <- fifa20_selected[!duplicated(fifa20_selected[,1]),]
+rownames(fifa20_selected) <- fifa20_selected[,1]
+fifa20_selected <- fifa20_selected[,-1]
+```
+
+### Model creation
+
+For FIFA 20 data we will try four models with different structures that can catch different types of relations. They will be:
+
+* shallow gbm
+* deep gbm
+* ranger forest
+* linear model.
+
+We will compare their performance in future paragraphs.
+```{r eval=FALSE}
+# remotes::install_github("mlr3learners/mlr3learners.gbm")
+library("mlr3")
+library("mlr3learners")
+library("mlr3learners.gbm")
+
+fifa_task <- TaskRegr$new(id = "FIFA20", backend = fifa20_selected, target = "value_eur")
+
+fifa_gbm_shallow <- lrn("regr.gbm")
+fifa_gbm_shallow$param_set$values <- list(n.trees = 250,
+                                          interaction.depth = 1,
+                                          distribution = "gaussian",
+                                          n.minobsinnode = 10)
+fifa_gbm_shallow$train(fifa_task)
+
+fifa_gbm_deep <- lrn("regr.gbm")
+fifa_gbm_deep$param_set$values <- list(n.trees = 250,
+                                          interaction.depth = 4,
+                                          distribution = "gaussian",
+                                          n.minobsinnode = 10)
+fifa_gbm_deep$train(fifa_task)
+
+fifa_ranger <- lrn("regr.ranger")
+fifa_ranger$param_set$values <- list(num.trees = 250)
+fifa_ranger$train(fifa_task)
+
+fifa_linear <- lrn("regr.lm")
+fifa_linear$train(fifa_task)
+```
+
+### Explanations
+
+To get started with the exploration of model behavior we need to create explainers that are unified interface which let us achieve explanations in the future. DALEX::explain function handles is for all type of predictive models, but in an the extension, DALEXtra package, there are dedicated DALEXtra::explain_mlr3 function.
+
+Note that models are trained on the logarithm of the value, but it will be much more natural to operate on values in Euro. This is why in explainers we specified a user-defined predict function that transforms log value to the value in Euro. In this function `yhat` stands for default predict function used with mlr3 models and implemented in DALEXtra. Hadn't we provided custom predict_function, yhat would have been used as a default parameter.
+
+```{r eval=FALSE}
+library("DALEX")
+library("DALEXtra")
+fifa_gbm_exp_deep <- explain_mlr3(fifa_gbm_deep,
+        data = fifa20_selected, y = 10^fifa20_selected$value_eur,
+        predict_function = function(m,x) 10^yhat(m,x),
+        label = "GBM deep")
+
+fifa_gbm_exp_shallow <- explain_mlr3(fifa_gbm_shallow,
+        data = fifa20_selected, y = 10^fifa20_selected$value_eur,
+        predict_function = function(m,x) 10^yhat(m,x),
+        label = "GBM shallow")
+
+fifa_ranger_exp <- explain_mlr3(fifa_ranger,
+        data = fifa20_selected, y = 10^fifa20_selected$value_eur,
+        predict_function = function(m,x) 10^yhat(m,x),
+        label = "Ranger RF")
+
+fifa_linear_exp <- explain_mlr3(fifa_linear,
+        data = fifa20_selected, y = 10^fifa20_selected$value_eur,
+        predict_function = function(m,x) 10^yhat(m,x),
+        label = "Linear Model")
+```
+
+### Model audit
+
+Once we have created explainers, it is hight time to analyze the model. Let's start with the audit of residuals. That can lead us to an assumption which model is best, or, possibly, to exclude the worst. The figure below compares distributions of absolute model residuals. Red dots correspond to average, which is RMSE. On average, the smallest residuals are for the random forest model.
+
+```{r eval=FALSE}
+fifa_mp_gbm_deep <- model_performance(fifa_gbm_exp_deep)
+fifa_mp_gbm_shallow <- model_performance(fifa_gbm_exp_shallow)
+fifa_mp_ranger <- model_performance(fifa_ranger_exp)
+fifa_mp_linear <- model_performance(fifa_linear_exp)
+
+library(ggplot2)
+plot(fifa_mp_gbm_shallow, fifa_mp_gbm_deep, fifa_mp_ranger, fifa_mp_linear, geom = "boxplot") +
+  scale_y_continuous("Absolute residuals in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
+  ggtitle("Distributions of model absolute residuals")
+```
+```{r}
+knitr::include_graphics("images/DALEX_mp.png")
+```
+
+But performance is not everything. Next figure show diagnostics plots for every model. Each scatterplot shows a true target variable against model predictions. The random forest model has predictions closest to the true target values.
+
+```{r eval=FALSE}
+fifa_md_gbm_shallow <- model_diagnostics(fifa_gbm_exp_shallow)
+fifa_md_gbm_deep <- model_diagnostics(fifa_gbm_exp_deep)
+fifa_md_ranger <- model_diagnostics(fifa_ranger_exp)
+fifa_md_linear <- model_diagnostics(fifa_linear_exp)
+
+plot(fifa_md_gbm_shallow, fifa_md_gbm_deep,
+                fifa_md_ranger, fifa_md_linear,
+     variable = "y", yvariable = "y_hat") +
+  scale_x_continuous("Value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
+  scale_y_continuous("Estimated value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
+  facet_wrap(~label) +
+  geom_abline(slope = 1) + theme(legend.position = "none") +
+  ggtitle("Diagnostics plot Predicted vs True target values", "")
+```
+```{r}
+knitr::include_graphics("images/DALEX_md.png")
+```
+
+The below figure shows variable importance plots for four selected models. Only 12 most important variables in each model are presented.
+
+We can see that all models share the same important variables, especially skill_ball_control and movemnet_reactions that are most important for all models except linear. However, the importance of other variables may be very different, for instance only the shallow GBM model considers team_position variable between the first 12 most valuable ones.
+
+```{r eval=FALSE}
+fifa_vi_gbm_shallow <- model_parts(fifa_gbm_exp_shallow)
+fifa_vi_gbm_deep <- model_parts(fifa_gbm_exp_deep)
+fifa_vi_ranger <- model_parts(fifa_ranger_exp)
+fifa_vi_linear <- model_parts(fifa_linear_exp)
+
+plot(fifa_vi_gbm_shallow, fifa_vi_gbm_deep,
+     fifa_vi_ranger, fifa_vi_linear,
+     max_vars = 12, bar_width = 4, show_boxplots = FALSE)
+```
+```{r}
+knitr::include_graphics("images/DALEX_fi.png")
+```
+
+The next step in understanding the models is to calculate partial dependency and present them using a plot. They show the average relation between particular variables and players' value.
+
+```{r eval=FALSE}
+selected_variables <- c("age", "movement_reactions","skill_ball_control", "skill_dribbling")
+
+fifa_pd_gbm_shallow <- model_profile(fifa_gbm_exp_shallow, variables = selected_variables)$agr_profiles
+fifa_pd_gbm_deep <- model_profile(fifa_gbm_exp_deep, variables = selected_variables)$agr_profiles
+fifa_pd_ranger <- model_profile(fifa_ranger_exp, variables = selected_variables)$agr_profiles
+fifa_pd_linear <- model_profile(fifa_linear_exp, variables = selected_variables)$agr_profiles
+
+plot(fifa_pd_gbm_shallow, fifa_pd_gbm_deep, fifa_pd_ranger, fifa_pd_linear) +
+  scale_y_continuous("Estimated value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
+  ggtitle("Partial Dependence profiles for selected variables")
+```
+```{r}
+knitr::include_graphics("images/DALEX_pd.png")
+```
+
+The general direction of relation in all models is the same. The larger the player characteristic the higher is the price. With a single exception – variable Age. Possible causation is that football managers tend to put a lot of hope for the self-development of young players, and therefore the price of promising players can be unbelievably high.
+
+### Instance understanding
+
+Time to see how the model behaves for a single observation/player This can be done for any player, but this example we will use Robert Lewandowski, the most valuable Polish football player.
+
+```{r eval=FALSE}
+lewandowski <- fifa20_selected["Robert Lewandowski",]
+lewandowski_bd_gbm_shallow <- variable_attribution(fifa_gbm_exp_shallow, new_observation = lewandowski)
+lewandowski_bd_gbm_deep <- variable_attribution(fifa_gbm_exp_deep, new_observation = lewandowski)
+lewandowski_bd_ranger <- variable_attribution(fifa_ranger_exp, new_observation = lewandowski)
+lewandowski_bd_linear <- variable_attribution(fifa_linear_exp, new_observation = lewandowski)
+plot(lewandowski_bd_gbm_shallow, lewandowski_bd_gbm_deep, lewandowski_bd_ranger, lewandowski_bd_linear)
+```
+```{r}
+knitr::include_graphics("images/DALEX_bd.png")
+```
+Above plots show estimated contrubution of varaible value to final prediction. For more information please visit introduction to [breakDown](https://pbiecek.github.io/ema/breakDown.html#breakDown) method. Robert Lewandowski is a striker. It makes sense that his most valuable characteristics are those related with attack, like attacking_voleys or skill_dribbling.
+
+```{r eval=FALSE}
+lewandowski_pdiag_ranger <- predict_diagnostics(fifa_gbm_exp_shallow, new_observation = lewandowski)
+plot(lewandowski_pdiag_ranger)
+```
+Plot above shows residuals for all observations against residuals for 50 closest neighbours of Robert Lewandowski. Clearly, among neighbours he has the most expensive players and therefore their residuals are much higher than average residuals.
+```{r}
+knitr::include_graphics("images/DALEX_pdiag.png")
+```
