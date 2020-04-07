@@ -1,0 +1,129 @@
+## Database Backends {#backends}
+
+In mlr3, `r ref("Task")`s store their data in an abstract data format, the `r ref("DataBackend")`.
+The default backend uses `r cran_pkg("data.table")` via the `r ref("DataBackendDataTable")` as an in-memory data base.
+
+For larger data, or when working with many tasks in parallel, it can be advantageous to interface an out-of-memory data.
+We use the excellent R package `r cran_pkg("dbplyr")` which extends `r cran_pkg("dplyr")` to work on many popular data bases like [MariaDB](https://mariadb.org/), [PostgreSQL](https://www.postgresql.org/) or [SQLite](https://www.sqlite.org).
+
+### Use Case: NYC Flights
+
+To generate a halfway realistic scenario, we use the NYC flights data set from package `r cran_pkg("nycflights13")`:
+
+```{r 05-technical-databases-001}
+# load data
+requireNamespace("DBI")
+requireNamespace("RSQLite")
+requireNamespace("nycflights13")
+data("flights", package = "nycflights13")
+str(flights)
+
+# add column of unique row ids
+flights$row_id = 1:nrow(flights)
+
+# create sqlite database in temporary file
+path = tempfile("flights", fileext = ".sqlite")
+con = DBI::dbConnect(RSQLite::SQLite(), path)
+tbl = DBI::dbWriteTable(con, "flights", as.data.frame(flights))
+DBI::dbDisconnect(con)
+
+# remove in-memory data
+rm(flights)
+```
+
+### Preprocessing with `dplyr`
+
+With the SQLite database in `path`, we now re-establish a connection and switch to `r cran_pkg("dplyr")`/`r cran_pkg("dbplyr")` for some essential preprocessing.
+
+```{r 05-technical-databases-002}
+# establish connection
+con = DBI::dbConnect(RSQLite::SQLite(), path)
+
+# select the "flights" table, enter dplyr
+library("dplyr")
+library("dbplyr")
+tbl = tbl(con, "flights")
+```
+
+First, we select a subset of columns to work on:
+
+```{r 05-technical-databases-003}
+keep = c("row_id", "year", "month", "day", "hour", "minute", "dep_time",
+  "arr_time", "carrier", "flight", "air_time", "distance", "arr_delay")
+tbl = select(tbl, keep)
+```
+
+Additionally, we remove those observations where the arrival delay (`arr_delay`) has a missing value:
+
+```{r 05-technical-databases-004}
+tbl = filter(tbl, !is.na(arr_delay))
+```
+
+To keep runtime reasonable for this toy example, we filter the data to only use every second row:
+
+```{r 05-technical-databases-005}
+tbl = filter(tbl, row_id %% 2 == 0)
+```
+
+The factor levels of the feature `carrier` are merged so that infrequent carriers are replaced by level "other":
+
+```{r 05-technical-databases-006}
+tbl = mutate(tbl, carrier = case_when(
+    carrier %in% c("OO", "HA", "YV", "F9", "AS", "FL", "VX", "WN") ~ "other",
+    TRUE ~ carrier)
+)
+```
+
+### DataBackendDplyr
+
+The processed table is now used to create a `r ref("mlr3db::DataBackendDplyr")` from `r mlr_pkg("mlr3db")`:
+
+```{r 05-technical-databases-007}
+library("mlr3db")
+b = as_data_backend(tbl, primary_key = "row_id")
+```
+
+We can now use the interface of `r ref("DataBackend")` to query some basic information of the data:
+
+```{r 05-technical-databases-008}
+b$nrow
+b$ncol
+b$head()
+```
+
+Note that the `r ref("DataBackendDplyr")` does not know about any rows or columns we have filtered out with `r cran_pkg("dplyr")` before, it just operates on the view we provided.
+
+### Model fitting
+
+We create the following `r mlr_pkg("mlr3")` objects:
+
+* A `r ref("TaskRegr", text = "regression task")`, based on the previously created `r ref("mlr3db::DataBackendDplyr")`.
+* A regression learner (`r ref("mlr_learners_regr.rpart", text = "regr.rpart")`).
+* A resampling strategy: 3 times repeated subsampling using 2\% of the observations for training ("`r ref("mlr_resamplings_subsampling", text = "subsampling")`")
+* Measures "`r ref("mlr_measures_regr.mse", text = "mse")`", "`r ref("mlr_measures_time_train", text = "time_train")`" and "`r ref("mlr_measures_time_predict", text = "time_predict")`"
+
+```{r 05-technical-databases-009}
+task = TaskRegr$new("flights_sqlite", b, target = "arr_delay")
+learner = lrn("regr.rpart")
+measures = mlr_measures$mget(c("regr.mse", "time_train", "time_predict"))
+resampling = rsmp("subsampling")
+resampling$param_set$values = list(repeats = 3, ratio = 0.02)
+```
+
+We pass all these objects to `r ref("resample()")` to perform a simple resampling with three iterations.
+In each iteration, only the required subset of the data is queried from the SQLite data base and passed to `r ref("rpart::rpart()")`:
+
+```{r 05-technical-databases-010}
+rr = resample(task, learner, resampling)
+print(rr)
+rr$aggregate(measures)
+```
+
+### Cleanup
+
+Finally, we remove the `tbl` object and close the connection.
+
+```{r 05-technical-databases-011}
+rm(tbl)
+DBI::dbDisconnect(con)
+```
