@@ -2,156 +2,238 @@
 
 ## IML {#iml}
 
-## Dalex {#dalex}
+## DALEX {#interpretability-dalex}
 
-The DALEX package xrays any model and helps to explore and explain its behavior, let us understand how complex models are working. The main function explain() creates a wrapper around a predictive model. Wrapped models may then be explored and compared with a collection of local and global explainers. Recent developments from the area of Interpretable Machine Learning/eXplainable Artificial Intelligence.
+### Introduction {#interpretability-dalex-introduction}
 
-### FIFA20
+The DALEX package xrays any predictive model and helps to explore, explain and visualise its behaviour. The package implements a collection of methods for [Explanatory Model Analysis](https://pbiecek.github.io/ema/). It is based on a unified grammar summarised in Figure \@ref(fig:DALEXema).
 
-Examples will be conducted using [FIFA20](https://www.kaggle.com/stefanoleone992/fifa-20-complete-player-dataset). It contains data retrieved from FIFA20 video game. We will use this data to build a predictive model for the assessment of player value. Once the model will be created we will use methods for exploration and explanation to better understand how it is working and also to better understand which factors and how to influence the player value.
+In the following sections, we will present subsequent methods available in the DALEX package based on a random forest model trained for football players worth prediction on the FIFA 20 data. We will show both methods analyzing the model at the level of a single prediction and at the global level - for the whole data set.
 
-```{r eval=FALSE}
-library("readr")
-fifa20 <- as.data.frame(read_csv("D:\\Pobrane\\fifa-20-complete-player-dataset\\players_20.csv"))
-```
-Unfortunately the data  contains a lot of unecessery information. In this anlysis we will cut orginal data only to inforamtion that are strictly conected to the player. Also target variable, `value_eur` is skewed, so we apply log-transofmation. Besides we omit rows with NA, duplicated, and those with negative log-value. At last we set rownames of data as names of players.
-```{r eval=FALSE}
-fifa20_selected <- fifa20[,c(4, 5, 7,8,13,17,25:26,45:78)]
-fifa20_selected$value_eur <- log10(fifa20_selected$value_eur)
-fifa20_selected$team_position <- factor(fifa20_selected$team_position)
-fifa20_selected <- na.omit(fifa20_selected)
-fifa20_selected <- fifa20_selected[fifa20_selected$value_eur > 0,]
-fifa20_selected <- fifa20_selected[!duplicated(fifa20_selected[,1]),]
-rownames(fifa20_selected) <- fifa20_selected[,1]
-fifa20_selected <- fifa20_selected[,-1]
+The structure of this chapter is following:
+
+* In section \@ref(interpretability-data-fifa) we introduce a FIFA20 dataset and then in section \@ref(interpretability-train-ranger) we train a `ranger` regression model,
+* Section \@ref(interpretability-architecture) introduces general logic beyond DALEX explainers,
+* Section \@ref(interpretability-dataset-level) introduces methods for dataset level model exploration,
+* Section \@ref(interpretability-instance-level) introduces methods for instance level model exploration,
+* Section \@ref(interpretability-multiple-models) shows how to use the `DALEX` for cross comparison of multiple models.
+
+
+```{r DALEXema, echo=FALSE, fig.cap='Pyramid with the methods of model exploration presented in this chapter. Left part overview methods for instance level exploration while right part is related to dataset level model exploration.', out.width = '100%', fig.align='center'}
+knitr::include_graphics("images/DALEX_ema.png")
 ```
 
-### Model creation
 
-For FIFA 20 data we will try forest type model implemented in `ranger` library. Besides `num.trees` that is set to 250, default parameters will be used.
+### Read data: FIFA20 {#interpretability-data-fifa}
+
+Examples presented in this chapter are based on data retrieved from FIFA20 video game. The raw data is available at  [FIFA20](https://www.kaggle.com/stefanoleone992/fifa-20-complete-player-dataset). After some basic data cleaning, the processed data is available at [explainFIFA20](https://github.com/pbiecek/explainFIFA20) website.
+
+It can be read directly from the GitHub with a single line
+
+```{r eval=FALSE}
+fifa20 <- readRDS(url("https://github.com/pbiecek/explainFIFA20/blob/master/fifa20.rds?raw=true"))
+```
+
+The dataset contains data on almost 18 thousand players. For every player, we have 41 features available.
+
+```{r eval=FALSE}
+dim(fifa20)
+## [1] 17969    41
+```
+
+In the table below we overview these 41 features for three selected players.
+One of the features, called `value_eur`, is the worth of a footballer in euros. In the next section, we will build a prediction model, which will estimate the worth of the player based on other player characteristics.
+
+
+|     |Lionel Messi |Cristiano Ronaldo |Neymar Junior |
+|:--------------------------|:------------|:-----------------|:-------------|
+|age  |32       |34            |27      |
+|height_cm                  |170      |187           |175     |
+|weight_kg                  |72       |83            |68      |
+|value_eur                  |95 500 000 |58 500 000      |105 500 000                     |
+|international_reputation   |5        |5             |5       |
+|team_position              |RW       |LW            |CAM     |
+|team_jersey_number         |10       |7             |10      |
+|attacking_crossing         |88       |84            |87      |
+|attacking_finishing        |95       |94            |87      |
+|attacking_heading_accuracy |70       |89            |62      |
+|attacking_short_passing    |92       |83            |87      |
+|attacking_volleys          |88       |87            |87      |
+|skill_dribbling            |97       |89            |96      |
+|skill_curve                |93       |81            |88      |
+|skill_fk_accuracy          |94       |76            |87      |
+|skill_long_passing         |92       |77            |81      |
+|skill_ball_control         |96       |92            |95      |
+|movement_acceleration      |91       |89            |94      |
+|movement_sprint_speed      |84       |91            |89      |
+|movement_agility           |93       |87            |96      |
+|movement_reactions         |95       |96            |92      |
+|movement_balance           |95       |71            |84      |
+|power_shot_power           |86       |95            |80      |
+|power_jumping              |68       |95            |61      |
+|power_stamina              |75       |85            |81      |
+|power_strength             |68       |78            |49      |
+|power_long_shots           |94       |93            |84      |
+|mentality_aggression       |48       |63            |51      |
+|mentality_interceptions    |40       |29            |36      |
+|mentality_positioning      |94       |95            |87      |
+|mentality_vision           |94       |82            |90      |
+|mentality_penalties        |75       |85            |90      |
+|mentality_composure        |96       |95            |94      |
+|defending_marking          |33       |28            |27      |
+|defending_standing_tackle  |37       |32            |26      |
+|defending_sliding_tackle   |26       |24            |29      |
+|goalkeeping_diving         |6        |7             |9       |
+|goalkeeping_handling       |11       |11            |9       |
+|goalkeeping_kicking        |15       |15            |15      |
+|goalkeeping_positioning    |14       |14            |15      |
+|goalkeeping_reflexes       |8        |11            |11      |
+
+
+
+### Train a model: Ranger {#interpretability-train-ranger}
+
+The `DALEX` package works for any model regardless of its internal structure. Examples of how this package works are shown on a random forest model implemented in the `ranger` package.
+
+We use the `mlr3` package to build a predictive model. Since the `value_eur` feature is strongly diagonal, we will build a model for the logarithm of this price.
+
+First, let's load the required packages.
 
 ```{r eval=FALSE}
 library("mlr3")
 library("mlr3learners")
+```
 
-fifa_task <- TaskRegr$new(id = "FIFA20", backend = fifa20_selected, target = "value_eur")
+Then we can define the task - prediction for `value_eur` variable.
 
+```{r eval=FALSE}
+fifa_task <- TaskRegr$new(id = "FIFA20", backend = fifa20, target = "value_eur")
+```
+
+Finally, we train the `ranger` model with 250 trees. Note that in this example for brevity we do not split the data into a train/test data. The model is built on the whole data.
+
+```{r eval=FALSE}
 fifa_ranger <- lrn("regr.ranger")
 fifa_ranger$param_set$values <- list(num.trees = 250)
 fifa_ranger$train(fifa_task)
 ```
 
-### Explanations
+### The general workflow {#interpretability-architecture}
 
-To get started with the exploration of model behavior we need to create explainer that is a unified interface that lets us achieve explanations in the future. DALEX::explain function handles is for all types of predictive models, but in the extension, DALEXtra package, there is dedicated DALEXtra::explain_mlr3 function.
+Working with explanations in the DALEX package always consists of three steps schematically shown in the pipe below.
 
-Note that model is trained on the logarithm of the value, but it will be much more natural to operate on values in Euro. This is why in explainer we specified a user-defined predict function that transforms log value to the value in Euro. In this function `yhat` stands for default predict function used with mlr3 models and implemented in DALEXtra. Hadn't we provided custom predict_function, `yhat` would have been used as a default parameter.
+```
+model %>%
+  explain_mlr3(data = ..., y = ..., label = ...) %>%
+  model_part() %>%
+  plot()
+```
+
+1. All functions in the DALEX package can work for models with any structure. So the first step is to create an adapter that allows the downstream functions to access the model in a consistent fashion. In general, such an adapter is created with `DALEX::explain()` function, but for models created in the `mlr3` package it is more convenient to use the `DALEXtra::explain_mlr3()`.
+
+2. Explanations are determined by the functions `model_part`, `model_profile`, `predict_part` and `predict_profile`. Each of these functions takes the model adapter as its first argument. The other arguments describe how the function works. We will present them in the following chapters.
+
+3. Explanations can be visualized with the generic function `plot()` or presented with the generic function `print()`. Each explanation is a data frame with an additional class attribute. The `plot()` function creates graphs using the `ggplot2` package, so they can be easily modified with general ggplot modifiers.
+
+We will show this cascade of functions based on examples.
+
+To get started with the exploration of model behaviour we need to create explainer that is a unified interface that lets us achieve explanations in the future. `DALEX::explain` function handles is for all types of predictive models. In the DALEXtra extension there is dedicated` DALEXtra::explain_mlr3` function.
+
+The function performs a series of internal checks so the output is a bit verbose. Turn the `verbose = FALSE` argument to make it less wordy.
 
 ```{r eval=FALSE}
 library("DALEX")
 library("DALEXtra")
 
-fifa_ranger_exp <- explain_mlr3(fifa_ranger,
-        data = fifa20_selected, y = 10^fifa20_selected$value_eur,
-        predict_function = function(m,x) 10^yhat(m,x),
+ranger_exp <- explain_mlr3(fifa_ranger,
+        data  = fifa20_selected, 
+        y     = fifa20_selected$value_eur,
         label = "Ranger RF")
 ```
+```
+Preparation of a new explainer is initiated
+  -> model label       :  Ranger RF 
+  -> data              :  17969  rows  41  cols 
+  -> target variable   :  17969  values 
+  -> model_info        :  package mlr3 , ver. 0.1.8 , task regression (  default  ) 
+  -> predict function  :  yhat.LearnerRegr  will be used (  default  )
+  -> predicted values  :  numerical, min =  38519.33 , mean =  2525546 , max =  89143900  
+  -> residual function :  difference between y and yhat (  default  )
+  -> residuals         :  numerical, min =  -8468367 , mean =  -732.0355 , max =  18815600  
+  A new explainer has been created!  
+```
+  
+### Dataset level exploration {#interpretability-dataset-level}
 
-### Model audit
-
-Once we have created an explainer, it is hight time to analyze the model. Let's start with the audit of residuals. That can lead us to an assumption which model is best, or, possibly, to exclude the worst. `model_performance` is one of the functions that serve for that purpose. It calculates residuals and basic measures creating objects that can be plotted.  The figure below shows the distributions of the absolute model residuals. Red dots correspond to average, which is RMSE. Also, there are four other available geometries which are:
-  * ecdef
-  * boxplot
-  * gain
-  * lift
-  * histogram
+The `model_parts()` function calculates the importance of variables using the [permutations based procedure](https://pbiecek.github.io/ema/featureImportance.html).
 
 ```{r eval=FALSE}
-fifa_mp_ranger <- model_performance(fifa_ranger_exp)
-
-library(ggplot2)
-plot(fifa_mp_ranger, geom = "boxplot") +
-  scale_y_continuous("Absolute residuals in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
-  ggtitle("Distributions of model absolute residuals")
-```
-```{r}
-knitr::include_graphics("images/DALEX_mp.png")
+fifa_vi <- model_parts(ranger_exp)
 ```
 
-But performance is not everything. Next figure show diagnostics plots. The scatterplot shows a true target variable against model predictions. We can spot that model has predictions quite close to the true target values. Of course we can plot dependency between response and any other variable by manipulating arguments of `plot` function.. 
+Results can be visualised with generic `plot()`. The chart for all 41 variables would be unreadable, so with the `max_vars` argument, we limit the number of variables on the plot.
 
 ```{r eval=FALSE}
-fifa_md_ranger <- model_diagnostics(fifa_ranger_exp)
-
-plot(fifa_md_ranger, variable = "y", yvariable = "y_hat") +
-  scale_x_continuous("Value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
-  scale_y_continuous("Estimated value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
-  geom_abline(slope = 1) + theme(legend.position = "none") +
-  ggtitle("Diagnostics plot Predicted vs True target values", "")
+plot(fifa_vi, max_vars = 12, show_boxplots = FALSE) 
 ```
-```{r}
-knitr::include_graphics("images/DALEX_md.png")
-```
-
-### Global understanding
-
-The below figure shows a variable importance plot. Only 12 most important variables are presented.
-
-We can see that all models share the same important variables, especially skill_ball_control and movemnet_reactions that are most important for all models except linear. However, the importance of other variables may be very different, for instance only the shallow GBM model considers team_position variable between the first 12 most valuable ones.
-
-```{r eval=FALSE}
-fifa_vi_ranger <- model_parts(fifa_ranger_exp)
-
-
-plot(fifa_vi_ranger, max_vars = 12, bar_width = 4, show_boxplots = FALSE)
-```
-```{r}
+```{r, echo=FALSE}
 knitr::include_graphics("images/DALEX_fi.png")
 ```
 
-The next step in understanding the models is to calculate partial dependency and present them using a plot. They show the average relation between particular variables and players' value.
+Once we know which variables are most important, we can use [Partial Dependence Plots](https://pbiecek.github.io/ema/partialDependenceProfiles.html) show how the model on average response to changes in variables.
+They show the average relation between particular variables and players' value.
 
 ```{r eval=FALSE}
-selected_variables <- c("age", "movement_reactions","skill_ball_control", "skill_dribbling")
+selected_variables <- c("age", "movement_reactions",
+                "skill_ball_control", "skill_dribbling")
 
-fifa_pd_ranger <- model_profile(fifa_ranger_exp, variables = selected_variables)$agr_profiles
+fifa_pd <- model_profile(fifa_ranger_exp, 
+                variables = selected_variables)$agr_profiles
+```
 
-plot(fifa_pd_ranger) +
+Again, the result of the explanation can be presented with the generic function `plot()`.
+
+```{r eval=FALSE}
+library("ggplot2")
+plot(fifa_pd) +
   scale_y_continuous("Estimated value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
   ggtitle("Partial Dependence profiles for selected variables")
 ```
-```{r}
+```{r, echo=FALSE}
 knitr::include_graphics("images/DALEX_pd.png")
 ```
 
-The general direction of relation in all models is the same. The larger the player characteristic the higher is the price. With a single exception – variable Age. Possible causation is that football managers tend to put a lot of hope for the self-development of young players, and therefore the price of promising players can be unbelievably high.
+The general trend for most player characteristics is the same. The higher are the skills the higher is the player worth. With a single exception – variable Age. 
 
-### Instance understanding
 
-Time to see how the model behaves for a single observation/player This can be done for any player, but this example we will use Robert Lewandowski, the most valuable Polish football player.
+### Instance level explanation {#interpretability-instance-level}
+
+Time to see how the model behaves for a single observation/player 
+This can be done for any player, but this example we will use Robert Lewandowski, the most valuable Polish football player.
+
+The function `predict_parts` is an instance level version of the `model_parts` function introduced in the previouse section.
 
 ```{r eval=FALSE}
-lewandowski <- fifa20_selected["Robert Lewandowski",]
-lewandowski_bd_ranger <- variable_attribution(fifa_ranger_exp, new_observation = lewandowski)
+lewandowski <- fifa20["Robert Lewandowski",]
+lewandowski_bd_ranger <- predict_parts(fifa_ranger_exp,
+                        new_observation = lewandowski)
+```
+
+The generic `plot()` function shows the estimated contribution of variables to the final prediction. 
+Robert Lewandowski is a striker. It makes sense that his most valuable characteristics are those related with attack, like attacking_voleys or skill_dribbling.
+
+```{r eval=FALSE}
 plot(lewandowski_bd_ranger)
 ```
-```{r}
+```{r, echo=FALSE}
 knitr::include_graphics("images/DALEX_bd.png")
 ```
-Above plots show estimated contrubution of varaible value to final prediction. For more information please visit introduction to [breakDown](https://pbiecek.github.io/ema/breakDown.html#breakDown) method. Robert Lewandowski is a striker. It makes sense that his most valuable characteristics are those related with attack, like attacking_voleys or skill_dribbling.
 
-```{r eval=FALSE}
-lewandowski_pdiag_ranger <- predict_diagnostics(fifa_ranger_exp, new_observation = lewandowski)
-plot(lewandowski_pdiag_ranger)
-```
-Plot above shows residuals for all observations against residuals for 50 closest neighbours of Robert Lewandowski. Clearly, among neighbours he has the most expensive players and therefore their residuals are much higher than average residuals.
-```{r}
-knitr::include_graphics("images/DALEX_pdiag.png")
-```
+### Multiple Models {#interpretability-multiple-models}
 
-### Models comparison
+TO BE EXTENDED.
 
-So we have already introduced the basics of DALEX package and simple know-how of explaining the predictive model. Now we are going to show how explanations can be used to explain more than one model at once and compare them trying to determine which one is better. For that purpose we will create three more models along with their explainers: 
+So we have already introduced the basics of DALEX package for a single predictive model. Now we are going to show how explanations can be used to explain more than one model at once. For that purpose we will create three more models along with their explainers: 
 
 * shallow gbm
 * deep gbm
@@ -200,7 +282,7 @@ fifa_linear_exp <- explain_mlr3(fifa_linear,
         label = "Linear Model")
 ```
 
-Starting from the beginning, distribution of residuals can be a helpful tool that allows us to distinguish models and point the best of the worst. `plot.model_performance` functions allow us to pass more than one `model_performance` class object and plot them all together.
+Distribution of residuals can be a helpful tool that allows us to distinguish models and point the best of the worst. `plot.model_performance` functions allow us to pass more than one `model_performance` class object and plot them all together.
 
 ```{r eval=FALSE}
 fifa_mp_gbm_deep <- model_performance(fifa_gbm_exp_deep)
@@ -212,28 +294,10 @@ plot(fifa_mp_gbm_shallow, fifa_mp_gbm_deep, fifa_mp_ranger, fifa_mp_linear, geom
   ggtitle("Distributions of model absolute residuals")
 
 ```
-```{r}
+```{r, echo=FALSE}
 knitr::include_graphics("images/DALEX_mp_multi.png")
 ```
 
-We can spot that previously choosen Ranger Random Forest Model has the smallest residuals on the average. Smilliar observation can be made if we take scatter plot of y and y_hat but this time use facet and plot results for four models at once. There is not need to deeply look into that plot in order to realize that points in the down rigth corner are the closest to black line indicating perfect model.
-
-```{r eval=FALSE}
-fifa_md_gbm_shallow <- model_diagnostics(fifa_gbm_exp_shallow)
-fifa_md_gbm_deep <- model_diagnostics(fifa_gbm_exp_deep)
-fifa_md_linear <- model_diagnostics(fifa_linear_exp)
-plot(fifa_md_gbm_shallow, fifa_md_gbm_deep,
-                fifa_md_ranger, fifa_md_linear,
-     variable = "y", yvariable = "y_hat") +
-  scale_x_continuous("Value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
-  scale_y_continuous("Estimated value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
-  facet_wrap(~label) +
-  geom_abline(slope = 1) + theme(legend.position = "none") +
-  ggtitle("Diagnostics plot Predicted vs True target values", "")
-```
-```{r}
-knitr::include_graphics("images/DALEX_md_multi.png")
-```
 
 Variable importance for models can also be plotted together to simplify comparison of them. Once again 12 the most important variables will be shown. We can see that models tend to account for variables differently. For instance, the most important variable for both gbm's and ranger is not even in the top 5 for a linear model. 
 
@@ -245,11 +309,11 @@ plot(fifa_vi_gbm_shallow, fifa_vi_gbm_deep,
      fifa_vi_ranger, fifa_vi_linear,
      max_vars = 12, bar_width = 4, show_boxplots = FALSE)
 ```
-```{r}
+```{r, echo=FALSE}
 knitr::include_graphics("images/DALEX_fi_multi.png")
 ```
 
-`DALEX` allows users to easily compare profiles of variables. (Tutaj skończył mi się wena na dziś.)
+`DALEX` allows users to easily compare profiles of variables.
 
 ```{r eval=FALSE}
 selected_variables <- c("age", "movement_reactions","skill_ball_control", "skill_dribbling")
@@ -260,6 +324,6 @@ plot(fifa_pd_gbm_shallow, fifa_pd_gbm_deep, fifa_pd_ranger, fifa_pd_linear) +
   scale_y_continuous("Estimated value in Euro", trans = "log10", labels = scales::dollar_format(suffix = "€", prefix = "")) +
   ggtitle("Partial Dependence profiles for selected variables")
 ```
-```{r}
+```{r, echo=FALSE}
 knitr::include_graphics("images/DALEX_pd_multi.png")
 ```
