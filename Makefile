@@ -33,3 +33,4 @@ names:
 bibtex:
 	biber --tool --output-align --output-indent=2 --output-fieldcase=lower bookdown/book.bib -O bookdown/book.bib
 	rm bookdown/book.bib.blg
+
