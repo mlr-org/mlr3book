@@ -15,10 +15,10 @@ knitr::include_graphics("images/tuning_process.svg")
 
 At the heart of `r mlr_pkg("mlr3tuning")` are the R6 classes:
 
-* `r ref("TuningInstance")`: This class describes the tuning problem and stores results.
+* `r ref("TuningInstanceSingleCrit")`, `r ref("TuningInstanceMultiCrit")`: This two classes describe the tuning problem and store the results.
 * `r ref("Tuner")`: This class is the base class for implementations of tuning algorithms.
 
-### The `TuningInstance` Class {#tuning-optimization}
+### The `TuningInstance` Classes {#tuning-optimization}
 
 The following sub-section examines the optimization of a simple classification tree on the `r ref("mlr_tasks_pima", text = "Pima Indian Diabetes")` data set.
 
@@ -68,22 +68,22 @@ This is done by selecting one of the available `r ref("Terminator", text = "Term
 * Terminate when tuning does not improve (`r ref("TerminatorStagnation")`)
 * A combination of the above in an *ALL* or *ANY* fashion (`r ref("TerminatorCombo")`)
 
-For this short introduction, we specify a budget of 20 evaluations and then put everything together into a `r ref("TuningInstance")`:
+For this short introduction, we specify a budget of 20 evaluations and then put everything together into a `r ref("TuningInstanceSingleCrit")`:
 
 ```{r 03-optimization-tuning-006}
 library("mlr3tuning")
 
 evals20 = term("evals", n_evals = 20)
 
-instance = TuningInstance$new(
+instance = TuningInstanceSingleCrit$new(
   task = task,
   learner = learner,
   resampling = hout,
-  measures = measure,
-  param_set = tune_ps,
+  measure = measure,
+  search_space = tune_ps,
   terminator = evals20
 )
-print(instance)
+instance
 ```
 
 To start the tuning, we still need to select how the optimization should take place.
@@ -97,40 +97,41 @@ The following algorithms are currently implemented in `r mlr_pkg("mlr3tuning")`:
 * Random Search (`r ref("TunerRandomSearch")`) [@bergstra2012]
 * Generalized Simulated Annealing (`r ref("TunerGenSA")`)
 
-In this example, we will use a simple grid search with a grid resolution of 10:
+In this example, we will use a simple grid search with a grid resolution of 5.
 
 ```{r 03-optimization-tuning-007}
 tuner = tnr("grid_search", resolution = 5)
 ```
 
-Since we have only numeric parameters, `r ref("TunerGridSearch")` will create a grid of equally-sized steps between the respective upper and lower bounds.
+Since we have only numeric parameters, `r ref("TunerGridSearch")` will create an equidistant grid between the respective upper and lower bounds.
 As we have two hyperparameters with a resolution of 5, the two-dimensional grid consists of $5^2 = 25$ configurations.
-Each configuration serves as hyperparameter setting for the classification tree and triggers a 3-fold cross validation on the task.
+Each configuration serves as hyperparameter setting for the previously defined `r ref("Learner")` and triggers a 3-fold cross validation on the task.
 All configurations will be examined by the tuner (in a random order), until either all configurations are evaluated or the `r ref("Terminator")` signals that the budget is exhausted.
 
 ### Triggering the Tuning {#tuning-triggering}
 
-To start the tuning, we simply pass the `r ref("TuningInstance")` to the `$tune()` method of the initialized `r ref("Tuner")`.
-The tuner proceeds as follow:
+To start the tuning, we simply pass the `r ref("TuningInstanceSingleCrit")` to the `$optimize()` method of the initialized `r ref("Tuner")`.
+The tuner proceeds as follows:
 
-1. The `r ref("Tuner")` proposes at least one hyperparameter configuration (the `r ref("Tuner")` and may propose multiple points to improve parallelization, which can be controlled via the setting `batch_size`).
-2. For each configuration, a `r ref("Learner")` is fitted on `r ref("Task")` using the provided `r ref("Resampling")`.
-   The results are combined with other results from previous iterations to a single `r ref("BenchmarkResult")`.
+1. The `r ref("Tuner")` proposes at least one hyperparameter configuration (the `r ref("Tuner")` may propose multiple points to improve parallelization, which can be controlled via the setting `batch_size`).
+2. For each configuration, the given `r ref("Learner")` is fitted on the `r ref("Task")` using the provided `r ref("Resampling")`.
+   All evaluations are stored in the archive of the `r ref("TuningInstanceSingleCrit")`.
 3. The `r ref("Terminator")` is queried if the budget is exhausted.
    If the budget is not exhausted, restart with 1) until it is.
 4. Determine the configuration with the best observed performance.
-5. Return a named list with the hyperparameter settings (`"values"`) and the corresponding measured performance (`"performance"`).
+5. Store the best configurations as result in the instance object. 
+   The best hyperparameter settings (`$result_learner_param_vals`) and the corresponding measured performance (`$result_y`) can be acessed from the instance.
 
 ```{r 03-optimization-tuning-008}
-result = tuner$tune(instance)
-print(result)
+tuner$optimize(instance) #should return invisible(NULL)
+instance$result_learner_param_vals
+instance$result_y
 ```
 
-One can investigate all resamplings which were undertaken, using the `$archive()` method of the `r ref("TuningInstance")`.
-Here, we just extract the performance values and the hyperparameters:
+One can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("TuningInstanceSingleCrit")` and can be accessed through `$data()` method:
 
 ```{r 03-optimization-tuning-009}
-instance$archive(unnest = "params")[, c("cp", "minsplit", "classif.ce")]
+instance$archive$data()
 ```
 
 In sum, the grid search evaluated 20/25 different configurations of the grid in a random order before the `r ref("Terminator")` stopped the tuning.
@@ -138,7 +139,7 @@ In sum, the grid search evaluated 20/25 different configurations of the grid in 
 Now the optimized hyperparameters can take the previously created `r ref("Learner")`, set the returned hyperparameters and train it on the full dataset.
 
 ```{r 03-optimization-tuning-010}
-learner$param_set$values = instance$result$params
+learner$param_set$values = instance$result_learner_param_vals
 learner$train(task)
 ```
 
@@ -161,8 +162,6 @@ library("paradox")
 library("mlr3tuning")
 
 learner = lrn("classif.rpart")
-resampling = rsmp("holdout")
-measures = msr("classif.ce")
 tune_ps = ParamSet$new(list(
   ParamDbl$new("cp", lower = 0.001, upper = 0.1),
   ParamInt$new("minsplit", lower = 1, upper = 10)
@@ -172,9 +171,9 @@ tuner = tnr("random_search")
 
 at = AutoTuner$new(
   learner = learner,
-  resampling = resampling,
-  measures = measures,
-  tune_ps = tune_ps,
+  resampling = rsmp("holdout"),
+  measure = msr("classif.ce"),
+  search_space = tune_ps,
   terminator = terminator,
   tuner = tuner
 )
@@ -196,8 +195,13 @@ grid = benchmark_grid(
   learner = list(at, lrn("classif.rpart")),
   resampling = rsmp("cv", folds = 3)
 )
+
+# avoid console output from mlr3tuning
+logger = lgr::get_logger("mlr3tuning")
+logger$set_threshold("warn")
+
 bmr = benchmark(grid)
-bmr$aggregate(measures)
+bmr$aggregate(msrs(c("classif.ce", "time_train")))
 ```
 
 Note that we do not expect any differences compared to the non-tuned approach for multiple reasons:
