@@ -12,9 +12,9 @@ help :
 
 install:
 	Rscript -e 'if (length(find.package("devtools", quiet = TRUE)) == 0) install.packages("devtools")' \
-	        -e 'devtools::document()' \
 	        -e 'devtools::install_dev_deps(upgrade = "always")' \
 			-e 'devtools::update_packages(upgrade = "always")' \
+	        -e 'devtools::document()' \
 			-e 'devtools::install()'
 
 serve:
