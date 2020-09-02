@@ -1,6 +1,6 @@
 # mlr3book
 
-[![Build Status](https://img.shields.io/travis/mlr-org/mlr3book/master?label=Linux&logo=travis&style=flat-square)](https://travis-ci.org/mlr-org/mlr3book)
+![BuildStatus](https://github.com/mlr-org/mlr3book/workflows/mlr3book/badge.svg)
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 
 Package to build the [mlr3](https://mlr3.mlr-org.com) [bookdown](https://bookdown.org/) book.
