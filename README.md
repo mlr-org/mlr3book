@@ -2,6 +2,7 @@
 
 [![tic](https://github.com/mlr-org/mlr3book/workflows/tic/badge.svg)](https://github.com/mlr-org/mlr3book/actions?query=workflow%3Atic)
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
+[![Mattermost](https://img.shields.io/badge/chat-mattermost-orange.svg)](https://lmmisld-lmu-stats-slds.srv.mwn.de/mlr_invite/)
 
 Package to build the [mlr3](https://mlr3.mlr-org.com) [bookdown](https://bookdown.org/) book.
 
