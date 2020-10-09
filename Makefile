@@ -21,7 +21,9 @@ serve:
 	Rscript -e 'bookdown::serve_book("bookdown")'
 
 clean:
-	$(RM) -r bookdown/_book bookdown/_bookdown_files bookdown/mlr3book_cache bookdown/mlr3book_files
+	$(RM) -r bookdown/_book bookdown/_bookdown_files bookdown/mlr3book_files;\
+	find -regex '^./bookdown.*cache$$' -exec rm -rf {} +;\
+	find -regex '^./bookdown.*files$$' -exec rm -rf {} +;
 
 html:
 	Rscript -e 'mlr3book::render_mlr3book("html")'
