@@ -167,9 +167,111 @@ See below for better alternatives to find good threshold values.
 
 ### Threshold Tuning
 
-More following soon!
 
-Upcoming sections will entail:
+## Prerequisites
 
-* threshold tuning as pipeline operator
-* joint hyperparameter optimization
+Before we start, we have load all required packages:
+
+```{r 07-special-costsens-012}
+library(mlr3)
+library(mlr3pipelines)
+library(mlr3tuning)
+```
+
+## Adjusting thresholds: Two strategies
+
+Currently `mlr3pipelines` offers two main strategies towards adjusting `classification thresholds`.
+We can either expose the thresholds as a `hyperparameter` of the Learner by using `PipeOpThreshold`.
+This allows us to tune the `thresholds` via an outisde optimizer from `mlr3tuning`.
+
+Alternatively, we can also use `PipeOpTuneThreshold` which automatically tunes the threshold after each learner is fit.
+
+In this blog-post, we'll go through both strategies.
+
+## PipeOpThreshold
+
+`PipeOpThreshold` can be put directly after a `Learner`.
+
+A simple example would be:
+
+```{r 07-special-costsens-013}
+gr = lrn("classif.rpart", predict_type = "prob") %>>% po("threshold")
+l = GraphLearner$new(gr)
+```
+
+Note, that `predict_type` = "prob" is required for `po("threshold")` to have any effect.
+
+The `thresholds` are now exposed as a `hyperparameter` of the `GraphLearner` we created:
+
+```{r 07-special-costsens-014}
+l$param_set
+```
+
+We can now tune those thresholds fom the outside as follows:
+
+Before `tuning`, we have to define which hyperparameters we want to tune over.
+In this example, we only tune over the `thresholds` parameter of the `threshold` pipeop.
+you can easily imagine, that we can also jointly tune over additional hyperparameters, i.e. rpart's `cp` parameter.
+
+As the `Task` we aim to optimize for is a binary task, we can simply specify the threshold param:
+
+```{r 07-special-costsens-015}
+library(paradox)
+ps = ParamSet$new(list(
+  ParamDbl$new("threshold.thresholds", lower = 0, upper = 1)
+))
+```
+
+We now create a `AutoTuner`, which automatically tunes the supplied learner over the `ParamSet` we supplied above.
+
+```{r 07-special-costsens-016}
+at = AutoTuner$new(
+  learner = l,
+  resampling = rsmp("cv", folds = 3L),
+  measure = msr("classif.ce"),
+  search_space = ps,
+  terminator = trm("evals", n_evals = 5L),
+  tuner = TunerRandomSearch$new()
+)
+
+at$train(tsk("german_credit"))
+```
+
+Inside the `trafo`, we simply collect all set params into a named vector via `map_dbl` and store it
+in the `threshold.thresholds` slot expected by the learner.
+
+Again, we create a `AutoTuner`, which automatically tunes the supplied learner over the `ParamSet` we supplied above.
+
+
+One drawback of this strategy is, that this requires us to fit a new model for each new threshold setting.
+While setting a threshold and computing performance is relatively cheap, fitting the learner is often
+more computationally demanding.
+A better strategy is therefore often to optimize the thresholds separately after each model fit.
+
+
+## PipeOpTunethreshold
+
+`PipeOpTuneThreshold` on the other hand works together with `PipeOpLearnerCV`.
+It directly optimizes the `cross-validated` predictions made by this `PipeOp`.
+This is done in order to avoid over-fitting the threshold tuning.
+
+A simple example would be:
+
+```{r 07-special-costsens-017}
+gr = po("learner_cv", lrn("classif.rpart", predict_type = "prob")) %>>% po("tunethreshold")
+l2 = GraphLearner$new(gr)
+```
+
+Note, that `predict_type` = "prob" is required for `po("tunethreshold")` to work.
+Additionally, note that this time no `threshold` parameter is exposed, it is automatically tuned internally.
+
+```{r 07-special-costsens-018}
+l2$param_set
+```
+
+Note that we can set `rsmp("intask")` as a resampling strategy for "learner_cv" in order to evaluate
+predictions on the "training" data. This is generally not advised, as it might lead to over-fitting
+on the thresholds but can significantlty reduce runtime.
+
+
+For more information, see the post on Threshold Tuning on the [mlr3 gallery](https://mlr3gallery.mlr-org.com/).
