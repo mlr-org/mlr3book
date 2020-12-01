@@ -100,10 +100,10 @@ To identify the budget for evaluating Hyperband, the user has to specify explici
 library(paradox)
 
 # Hyperparameter subset of XGBoost
-params = list(
+search_space = ParamSet$new(list(
   ParamInt$new("nrounds", lower = 1, upper = 16, tags = "budget"),
   ParamFct$new("booster", levels = c("gbtree", "gblinear", "dart"))
-)
+))
 ```
 
 Thanks to the broad ecosystem of the `r mlr_pkg("mlr3verse")` a learner does not require a natural budget parameter.
@@ -120,24 +120,24 @@ set.seed(123)
 ll = po("subsample") %>>% lrn("classif.rpart")
 
 # extend hyperparameters of "classif.rpart" with subsampling fraction as budget
-params = list(
+search_space = ParamSet$new(list(
   ParamDbl$new("classif.rpart.cp", lower = 0.001, upper = 0.1),
   ParamInt$new("classif.rpart.minsplit", lower = 1, upper = 10),
   ParamDbl$new("subsample.frac", lower = 0.1, upper = 1, tags = "budget")
-)
+))
 ```
 
 We can now plug the new learner with the extended hyperparameter set into a `r ref("TuningInstanceSingleCrit")` the same way as usual.
 Naturally, Hyperband terminates once all of its brackets are evaluated, so a `r ref("Terminator")` in the tuning instance acts as an upper bound and should be only set to a low value if one is unsure of how long Hyperband will take to finish under the given settings.
 
 ```{r 03-optimization-hyperband-005}
-inst = TuningInstanceSingleCrit$new(
-  tsk("iris"),
-  ll,
-  rsmp("holdout"),
-  msr("classif.ce"),
-  ParamSet$new(params),
-  trm("none") # hyperband terminates itself
+instance = TuningInstanceSingleCrit$new(
+  task = tsk("iris"), 
+  learner = ll, 
+  resampling = rsmp("holdout"), 
+  measure = msr("classif.ce"), 
+  terminator = trm("none"), # hyperband terminates itself
+  search_space = search_space
 )
 ```
 
@@ -145,13 +145,13 @@ Now, we initialize a new instance of the `r ref("mlr3hyperband::TunerHyperband")
 
 ```{r 03-optimization-hyperband-006}
 tuner = tnr("hyperband", eta = 3)
-tuner$optimize(inst)
+tuner$optimize(instance)
 ```
 
 To receive the results of each sampled configuration, we simply run the following snippet.
 
 ```{r 03-optimization-hyperband-007}
-inst$archive$data()[, c(
+instance$archive$data()[, c(
   "subsample.frac",
   "classif.rpart.cp",
   "classif.rpart.minsplit",
@@ -162,9 +162,9 @@ inst$archive$data()[, c(
 You can access the best found configuration through the instance object.
 
 ```{r 03-optimization-hyperband-008}
-inst$result
-inst$result_learner_param_vals
-inst$result_y
+instance$result
+instance$result_learner_param_vals
+instance$result_y
 ```
 
 If you are familiar with the original paper, you may have wondered how we just used Hyperband with a parameter ranging from `0.1` to `1.0` [@Li2016].
@@ -173,7 +173,7 @@ The answer is, with the help the internal rescaling of the budget parameter.
 If we want an overview of what bracket layout Hyperband created and how the rescaling in each bracket worked, we can print a compact table to see this information.
 
 ```{r 03-optimization-hyperband-009}
-unique(inst$archive$data()[, .(bracket, bracket_stage, budget_scaled, budget_real, n_configs)])
+unique(instance$archive$data()[, .(bracket, bracket_stage, budget_scaled, budget_real, n_configs)])
 ```
 
 In the traditional way, Hyperband uses uniform sampling to receive a configuration sample at the start of each bracket.
@@ -183,26 +183,26 @@ But it is also possible to define a custom `r ref("Sampler")` for each hyperpara
 library(mlr3learners)
 set.seed(123)
 
-params = list(
+search_space = ParamSet$new(list(
   ParamInt$new("nrounds", lower = 1, upper = 16, tag = "budget"),
   ParamDbl$new("eta",     lower = 0, upper = 1),
   ParamFct$new("booster", levels = c("gbtree", "gblinear", "dart"))
-)
+))
 
-inst = TuningInstanceSingleCrit$new(
-  tsk("iris"),
-  lrn("classif.xgboost"),
-  rsmp("holdout"),
-  msr("classif.ce"),
-  ParamSet$new(params),
-  trm("none") # hyperband terminates itself
+instance = TuningInstanceSingleCrit$new(
+  task = tsk("iris"), 
+  learner = lrn("classif.xgboost"), 
+  resampling = rsmp("holdout"), 
+  measure = msr("classif.ce"), 
+  terminator = trm("none"), # hyperband terminates itself
+  search_space = search_space
 )
 
 # beta distribution with alpha = 2 and beta = 5
 # categorical distribution with custom probabilities
 sampler = SamplerJointIndep$new(list(
-  Sampler1DRfun$new(params[[2]], function(n) rbeta(n, 2, 5)),
-  Sampler1DCateg$new(params[[3]], prob = c(0.2, 0.3, 0.5))
+  Sampler1DRfun$new(search_space$params[[2]], function(n) rbeta(n, 2, 5)),
+  Sampler1DCateg$new(search_space$params[[3]], prob = c(0.2, 0.3, 0.5))
 ))
 ```
 
@@ -211,32 +211,33 @@ Afterwards, the usual tuning can proceed.
 
 ```{r 03-optimization-hyperband-011}
 tuner = tnr("hyperband", eta = 2, sampler = sampler)
-tuner$optimize(inst)
+tuner$optimize(instance)
 
-inst$result
+instance$result
 ```
 
 Furthermore, we extended the original algorithm, to make it also possible to use `r mlr_pkg("mlr3hyperband")` for multi-objective optimization.
 To do this, simply specify more measures in the `r ref("TuningInstanceMultiCrit")` and run the rest as usual.
 
 ```{r 03-optimization-hyperband-012}
-inst = TuningInstanceMultiCrit$new(
-  tsk("pima"),
-  lrn("classif.xgboost"),
-  rsmp("holdout"),
-  msrs(c("classif.tpr", "classif.fpr")),
-  ParamSet$new(params),
-  trm("none") # hyperband terminates itself
+instance = TuningInstanceMultiCrit$new(
+  task = tsk("pima"), 
+  learner = lrn("classif.xgboost"), 
+  resampling = rsmp("holdout"), 
+  measures = msrs(c("classif.tpr", "classif.fpr")), 
+  terminator = trm("none"), # hyperband terminates itself
+  search_space = search_space
 )
 
 tuner = tnr("hyperband", eta = 4)
-tuner$optimize(inst)
+tuner$optimize(instance)
 ```
 
 Now the result is not a single best configuration but an estimated Pareto front.
 All red points are not dominated by another parameter configuration regarding their *fpr* and *tpr* performance measures.
+
 ```{r 03-optimization-hyperband-013}
-inst$result
-plot(classif.tpr~classif.fpr, inst$archive$data())
-points(classif.tpr~classif.fpr, inst$result, col = "red")
+instance$result
+plot(classif.tpr~classif.fpr, instance$archive$data())
+points(classif.tpr~classif.fpr, instance$result, col = "red")
 ```
