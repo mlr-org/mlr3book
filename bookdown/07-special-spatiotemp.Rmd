@@ -1,0 +1,140 @@
+## Spatiotemporal Analysis {#spatiotemporal}
+
+Data observations may entail reference information about spatial or temporal characteristics.
+Spatial information is stored as coordinates, usually named "x" and "y" or "lat"/"lon".
+Treating spatiotemporal data using non-spatial data methods can lead to over-optimistic performance estimates.
+Hence, methods specifically designed to account for the special nature of spatiotemporal data are needed.
+
+In the `r cran_pkg("mlr3")` framework, the following packages relate to this field:
+
+- `r gh_pkg("mlr-org/mlr3spatiotemporal")` (biased-reduced performance estimation)
+- `r gh_pkg("mlr-org/mlr3forecasting")` (time-series support)
+- `r gh_pkg("mlr-org/mlr3raster")` (enhanced spatial prediction)
+
+The following (sub-)sections introduce the potential pitfalls of spatiotemporal data in machine learning and how to account for it.
+Note that not all functionality will be covered, and that some of the used packages are still in early lifecycles.
+If you want to contribute to one of the packages mentioned above, please contact [Patrick Schratz](https://github.com/pat-s).
+
+### Autocorrelation {#spatiotemporal-intro}
+
+Data which includes spatial or temporal information requires special treatment in machine learning (similar to [survival](#survival), [ordinal](#ordinal) and other task types listed in the [special tasks](#special-tasks) chapter).
+In contrast to non-spatial/non-temporal data, observations inherit a natural grouping, either in space or time or in both space and time [@legendre1993].
+This grouping causes observations to be autocorrelated, either in space (spatial autocorrelation (SAC)), time (temporal autocorrelation (TAC)) or both space and time (spatiotemporal autocorrelation (STAC)).
+For simplicity, the acronym STAC is used as a generic term in the following chapter for all the different characteristics introduced above.
+
+*What effects does STAC have in statistical/machine learning?*
+
+The overarching problem is that STAC violates the assumption that the observations in the train and test datasets are independent [@hastie2001].
+If this assumption is violated, the reliability of the resulting performance estimates, for example retrieved via cross-validation, is decreased.
+The magnitude of this decrease is linked to the magnitude of STAC in the dataset, which cannot be determined easily.
+
+One approach to account for the existence of STAC is to use dedicated resampling methods.
+`r gh_pkg("mlr-org/mlr3spatiotemporal")` provides access to the most frequently used spatiotemporal resampling methods.
+The following example showcases how a spatial dataset can be used to retrieve a bias-reduced performance estimate of a learner.
+
+The following examples use the [ecuador](https://mlr3spatiotempcv.mlr-org.com/reference/mlr_tasks_ecuador.html) dataset created by [Jannes Muenchow](https://scholar.google.com/citations?user=Slq94Y4AAAAJ&hl=de&authuser=1&oi=ao).
+It contains information on the occurrence of landslides (binary) in the Andes of Southern Ecuador.
+The landslides were mapped from aerial photos taken in 2000.
+The dataset is well suited to serve as an example because it it relatively small and of course due to the spatial nature of the observations.
+Please refer to @muenchow2012 for a detailed description of the dataset.
+
+To account for the spatial autocorrelation probably present in the landslide data, we will make use one of the most used spatial partitioning methods, a cluster-based k-means grouping [@brenning2012], (`"spcv_coords"` in `r gh_pkg("mlr-org/mlr3spatiotemporal")`).
+This method performs a clustering in 2D space which contrasts with the commonly used random partitioning for non-spatial data.
+The grouping has the effect that train and test data are more separated in space as they would be by conducting a random partitioning, thereby reducing the effect of STAC.
+
+By contrast, when using the classical random partitioning approach with spatial data, train and test observations would be located side-by-side across the full study area (a visual example is provided further below).
+This leads to a high similarity between train and test sets, resulting in "better" but biased performance estimates in every fold of a CV compared to the spatial CV approach.
+However, these low error rates are mainly caused due to the STAC in the observations and the lack of appropriate partitioning methods and not by the power of the fitted model.
+
+### Spatial CV vs. Non-Spatial CV {#sp-vs-nsp-cv}
+
+In the following a spatial and a non-spatial CV will be conducted to showcase the mentioned performance differences.
+
+The performance of a simple classification tree (`"classif.rpart"`) is evaluated on a random partitioning (`"repeated_cv"`) with four folds and two repetitions.
+The chosen evaluation measure is "classification error" (`"classif.ce"`).
+The only difference in the spatial setting is that `"repeated_spcv_coords"` is chosen instead of `"repeated_cv"`.
+
+#### Non-Spatial CV {#nsp-cv}
+
+```{r 07-special-spatiotemp-001}
+library("mlr3")
+library("mlr3spatiotempcv")
+set.seed(42)
+
+# be less verbose
+lgr::get_logger("bbotk")$set_threshold("warn")
+lgr::get_logger("mlr3")$set_threshold("warn")
+
+task = tsk("ecuador")
+
+learner = lrn("classif.rpart", maxdepth = 3, predict_type = "prob")
+resampling_nsp = rsmp("repeated_cv", folds = 4, repeats = 2)
+rr_nsp = resample(
+  task = task, learner = learner,
+  resampling = resampling_nsp)
+
+rr_nsp$aggregate(measures = msr("classif.ce"))
+```
+
+#### Spatial CV {#sp-cv}
+
+```{r 07-special-spatiotemp-002}
+task = tsk("ecuador")
+
+learner = lrn("classif.rpart", maxdepth = 3, predict_type = "prob")
+resampling_sp = rsmp("repeated_spcv_coords", folds = 4, repeats = 2)
+rr_sp = resample(
+  task = task, learner = learner,
+  resampling = resampling_sp)
+
+rr_sp$aggregate(measures = msr("classif.ce"))
+```
+
+Here, the classification tree learner is around 0.05 percentage points worse when using Spatial Cross-Validation (SpCV) compared to Non-Spatial Cross-Validation (NSpCV).
+The magnitude of this difference is variable as it depends on the dataset, the magnitude of STAC and the learner itself.
+For algorithms with a higher tendency of overfitting to the training set, the difference between the two methods will be larger.
+
+#### Visualization of Spatiotemporal Partitions {#vis-spt-partitions}
+
+Every partitioning method in `r gh_pkg("mlr-org/mlr3spatiotemporal")` comes with a generic `plot()` method to visualize the created groups.
+In a 2D space this happens via `r cran_pkg("ggplot2")` while for spatiotemporal methods 3D visualizations via `r cran_pkg("plotly")` are created.
+
+```{r 07-special-spatiotemp-003, fig.asp=1}
+autoplot(resampling_sp, task, fold_id = c(1:4)) *
+  ggplot2::scale_y_continuous(breaks = seq(-3.97, -4, -0.01)) *
+  ggplot2::scale_x_continuous(breaks = seq(-79.06, -79.08, -0.01))
+
+```
+
+Unless specified by the user, the coordinate reference system (CRS) defaults to EPSG code 4326 (WGS84).
+This is because a lat/lon based CRS is better suited for plotting purposes than a Mercator (UTM) one.
+Note that setting the correct CRS for the given data *during construction* is very important.
+Even though EPSG 4326 is a good fallback and often used for visualization purposes, spatial offsets of up to multiple meters may occur if the wrong CRS was passed initially.
+
+This example used an already created task via the sugar function `tsk()`.
+In practice however, one needs to create a spatiotemporal task via `TaskClassifST()`/`TaskRegrST()` and set the `crs` argument.
+
+The spatial grouping of the k-means based approach above contrasts visually ver well compared to the NSpCV (random) partitioning:
+
+```{r 07-special-spatiotemp-004, fig.asp=1}
+autoplot(resampling_nsp, task, fold_id = c(1:4)) *
+  ggplot2::scale_y_continuous(breaks = seq(-3.97, -4, -0.01)) *
+  ggplot2::scale_x_continuous(breaks = seq(-79.06, -79.08, -0.01))
+```
+
+### Choosing a Resampling Method {#choose-spt-rsmp}
+
+While the example used the `"spcv_coords"` method, this does not mean that this method is the best or only method suitable for this task.
+Even though this method is quite popular, it was mainly chosen because of the clear visual grouping differences compared to random partitioning.
+
+In fact, most often multiple spatial partitioning methods can be used for a dataset.
+It is recommended (required) that users familiarize themselves with each implemented method and decide which method to choose based on the specific characteristics of the dataset.
+For almost all methods implemented in `r gh_pkg("mlr-org/mlr3spatiotemporal")`, there is a scientific publication describing the strengths and weaknesses of the respective approach (either linked in the help file of `r gh_pkg("mlr-org/mlr3spatiotemporal")` or its respective dependency packages).
+
+In the example above, a cross-validation without hyperparameter tuning was shown.
+If a nested CV is desired, it is recommended to use the same spatial partitioning method for the inner loop (= tuning level).
+See @schratz2019 for more details and chapter 11 of [Geocomputation with R](https://geocompr.robinlovelace.net/spatial-cv.html) [@lovelace2019]^[The chapter will soon be rewritten using the **mlr3** and **mlr3spatiotempcv** packages.].
+
+A list of all implemented methods in `r gh_pkg("mlr-org/mlr3spatiotemporal")` can be found in the [Getting Started](https://mlr3spatiotempcv.mlr-org.com/articles/mlr3spatiotempcv.html#resampling-methods) vignette of the package.
+
+If you want to learn even more about the field of spatial partitioning, STAC and the problems associated with it, the work of [Prof. Hanna Meyer](https://scholar.google.com/citations?user=9YibxW0AAAAJ&hl=en) is very much recommended for further reference.
