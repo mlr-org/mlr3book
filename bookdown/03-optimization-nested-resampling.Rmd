@@ -1,75 +1,56 @@
 ## Nested Resampling {#nested-resampling}
 
-In order to obtain unbiased performance estimates for learners, all parts of the model building (preprocessing and model selection steps) should be included in the resampling, i.e., repeated for every pair of training/test data.
-For steps that themselves require resampling like hyperparameter tuning or feature-selection (via the wrapper approach) this results in two nested resampling loops.
-
+Evaluating a machine learning model often requires an additional layer of resampling when hyperparameters or features have to be selected. 
+Nested resampling separates these model selection steps from the process estimating the performance of the model. 
+If the same data is used for the model selection steps and the evaluation of the model itself, the resulting performance estimate of the model might be severely biased. 
+Once reason is that the repeated evaluation of the model on the test data could leak information about its structure into the model, what results in over-optimistic performance estimates. 
+Keep in mind that nested resampling is a statistical procedure to estimate the predictive performance of the model trained on the full dataset. 
+Nested resampling is not a procedure to select optimal hyperparameters.
+The resampling produces many hyperparameter configurations which should be not used to construct a final model [@Simon2007].
 ```{r 03-optimization-nested-resampling-001, echo = FALSE, out.width="98%"}
 knitr::include_graphics("images/nested_resampling.png")
 ```
 
-The graphic above illustrates nested resampling for parameter tuning with 3-fold cross-validation in the outer and 4-fold cross-validation in the inner loop.
+The graphic above illustrates nested resampling for hyperparameter tuning with 3-fold cross-validation in the outer and 4-fold cross-validation in the inner loop.
 
 In the outer resampling loop, we have three pairs of training/test sets.
 On each of these outer training sets parameter tuning is done, thereby executing the inner resampling loop.
 This way, we get one set of selected hyperparameters for each outer training set.
 Then the learner is fitted on each outer training set using the corresponding selected hyperparameters.
-Subsequently, we can evaluate the performance of the learner on the outer test sets.
-
-In `r mlr_pkg("mlr3")`, you can run nested resampling for free without programming any loops by using the `r ref("mlr3tuning::AutoTuner")` class.
-This works as follows:
-
-1. Generate a wrapped Learner via class `r ref("mlr3tuning::AutoTuner")` or `mlr3filters::AutoSelect` (not yet implemented).
-2. Specify all required settings - see section ["Automating the Tuning"](#autotuner) for help.
-3. Call function `r ref("resample()")` or `r ref("benchmark()")` with the created `r ref("Learner")`.
-
-You can freely combine different inner and outer resampling strategies.
-
-A common setup is prediction and performance evaluation on a fixed outer test set.
-This can be achieved by passing the `r ref("Resampling")` strategy (`rsmp("holdout")`) as the outer resampling instance to either `r ref("resample()")` or `r ref("benchmark()")`.
-
-The inner resampling strategy could be a cross-validation one (`rsmp("cv")`) as the sizes of the outer training sets might differ.
-Per default, the inner resample description is instantiated once for every outer training set.
-
-Note that nested resampling is computationally expensive.
-For this reason we use relatively small search spaces and a low number of resampling iterations in the examples shown below.
-In practice, you normally have to increase both.
-As this is computationally intensive you might want to have a look at the section on [Parallelization](#parallelization).
+Subsequently, we can evaluate the performance of the learner on the outer test sets. 
+The aggregated performance on the outer test sets is the unbiased performance estimate of the model.
 
 ### Execution {#nested-resamp-exec}
 
-To optimize hyperparameters or conduct feature selection in a nested resampling you need to create learners using either:
+The previous [section](#tuning) examined the optimization of a simple classification tree on the [Pima Indians Diabetes data set](https://mlr3.mlr-org.com/reference/mlr_tasks_pima.html).
+We continue the example and estimate the predictive performance of the model with nested resampling.
 
-* the `r ref("AutoTuner")` class, or
-* the `mlr3filters::AutoSelect` class (not yet implemented)
-
-We use the example from section ["Automating the Tuning"](#autotuner) and pipe the resulting learner into a `r ref("resample()")` call.
-
+We use a 4-fold cross-validation in the inner resampling loop.
+The `r ref("AutoTuner")` executes the hyperparameter tuning and is stopped after 10 evaluations.
+The hyperparameter configurations are proposed by random search.
 ```{r 03-optimization-nested-resampling-002}
-library("mlr3tuning")
-task = tsk("iris")
-learner = lrn("classif.rpart")
-resampling = rsmp("holdout")
-measure = msr("classif.ce")
-search_space = paradox::ParamSet$new(
-  params = list(paradox::ParamDbl$new("cp", lower = 0.001, upper = 0.1)))
-terminator = trm("evals", n_evals = 5)
-tuner = tnr("grid_search", resolution = 10)
+search_space = ps(cp = p_dbl(lower = 0.001, upper = 0.1))
+inner_resampling = rsmp("cv", folds = 4)
 
 at = AutoTuner$new(
-  learner = learner,
-  resampling = resampling,
-  measure = measure,
+  learner = lrn("classif.rpart"),
+  resampling = inner_resampling,
+  measure = msr("classif.ce"),
   search_space = search_space,
-  terminator = terminator,
-  tuner = tuner
+  terminator = trm("evals", n_evals = 10),
+  tuner = tnr("random_search")
 )
 ```
 
-Now construct the `r ref("resample()")` call:
+A 3-fold cross-validation is used in the outer resampling loop. 
+On each of the three train sets hyperparameter tuning is done and we receive three optimized hyperparameter configurations.
+To execute the nested resampling, we pass the `r ref("AutoTuner")` to the `r ref("resample()")` function.
+We have to set `store_models = TRUE` because we need the `r ref("AutoTuner")` models to investigate the inner tuning.
+```{r 03-optimization-nested-resampling-002}
+task = tsk("pima")
+outer_resampling = rsmp("cv", folds = 3)
 
-```{r 03-optimization-nested-resampling-003}
-resampling_outer = rsmp("cv", folds = 3)
-rr = resample(task = task, learner = at, resampling = resampling_outer)
+rr = resample(task, at, outer_resampling, store_models = TRUE)
 ```
 
 ### Evaluation {#nested-resamp-eval}
@@ -77,20 +58,29 @@ rr = resample(task = task, learner = at, resampling = resampling_outer)
 With the created `r ref("ResampleResult")` we can now inspect the executed resampling iterations more closely.
 See the section on [Resampling](#resampling) for more detailed information about `r ref("ResampleResult")` objects.
 
-For example, we can query the aggregated performance result:
+We check the inner tuning results for stable hyperparameters.
+This means that the selected hyperparameters should not vary too much.
+We might observe unstable models in this example because the small data set and the low number of resampling iterations might introduces too much randomness.
+Usually, we aim for the selection of stable hyperparameters for all outer training sets.
+```{r 03-optimization-nested-resampling-002}
+library(data.table)
+rbindlist(lapply(rr$learners, function(x) x$tuning_result))
+```
 
-```{r 03-optimization-nested-resampling-004}
+Next, we want to compare the predictive performances estimated on the outer resampling to the inner resampling.
+Significantly lower predictive performances on the outer resampling indicate that the models with the optimized hyperparameters overfit the data.
+```{r}
+rr$score()
+```
+
+The aggregated performance of all outer resampling iterations is essentially the unbiased performance of the model with optimal hyperparameter found by random search. 
+```{r}
 rr$aggregate()
 ```
 
-Check for any errors in the folds during execution (if there is not output, warnings or errors recorded, this is an empty `data.table()`:
+Note that nested resampling is computationally expensive.
+For this reason we use relatively small number of hyperparameter configurations and a low number of resampling iterations in this example.
+In practice, you normally have to increase both.
+As this is computationally intensive you might want to have a look at the section on [Parallelization](#parallelization).
 
-```{r 03-optimization-nested-resampling-005}
-rr$errors
-```
 
-Or take a look at the confusion matrix of the joined predictions:
-
-```{r 03-optimization-nested-resampling-006}
-rr$prediction()$confusion
-```
