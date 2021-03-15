@@ -1,90 +1,207 @@
 ## Adding new Learners {#extending-learners}
 
-Here, we show how to create a custom mlr3learner step-by-step.
-If you want to add a new learner, please follow the instructions on how to ["Add a new learner"](https://github.com/mlr-org/mlr3learners#requestingadding-additional-learners).
+Here, we show how to create a custom mlr3learner step-by-step using `r ref("mlr3extralearners::create_learner")`.
 
-**Resources for adding a new learner (summary)**
-
-- [mlr3learners.template](https://github.com/mlr-org/mlr3learners.template)
-- [mlr3book section "Adding new learners" including FAQ](https://mlr3book.mlr-org.com/extending-learners.html)
-- [Checklist prior to requesting a review](https://github.com/mlr-org/mlr3learners.template/issues/5)
+**It is strongly recommended** that you **first** open a [learner request issue](https://github.com/mlr-org/mlr3extralearners/issues/new?assignees=&labels=new+learner&template=learner-request-template.md&title=%5BLRNRQ%5D+Add+%3Calgorithm%3E+from+package+%3Cpackage%3E) to discuss the learner you want to implement if you plan on creating a pull request to the mlr-org. This allows us to discuss the purpose and necessity of the learner before you start to put the real work in!
 
 This section gives insights on how a mlr3learner is constructed and how to troubleshoot issues.
 See the [Learner FAQ subsection](#learner-faq) for help.
 
-**(Do not copy/paste the code shown in this section. Use the {mlr3learners.template} to start.)**
+**Summary of steps for adding a new learner**
+
+1. Check the learner does not already exist [here](https://mlr3extralearners.mlr-org.com/articles/learners/list_learners.html).
+2. [Fork, clone and load](#setup) `mlr3extralearners`.
+3. [Run](#create-learner) `r ref("mlr3extralearners::create_learner")`.
+4. Add the learner [`param_set`](#param-set).
+5. Manually add [`.train`](#learner-train) and [`.predict`](#learner-predict) private methods to the learner.
+6. If applicable add `importance` and `oob_error` public methods to the learner.
+7. If applicable add references to the learner.
+8. Check [unit tests](#learner-test) and [paramtests](#learner-test) pass (these are automatically created).
+9. Run [cleaning functions](#cleaning)
+10. Open a [pull request](https://github.com/mlr-org/mlr3extralearners/pulls) with the new learner template.
+
+**(Do not copy/paste the code shown in this section. Use the create_learner to start.)**
+
+### Setting-up mlr3extralearners {#setup}
+
+In order to use the `r ref("mlr3extralearners::create_learner")` function you must have a local copy of the `mlr3extralearners` repository and must specify the correct path to the package. To do so, follow these steps:
+
+1. [Fork](https://docs.github.com/en/free-pro-team@latest/github/getting-started-with-github/fork-a-repo) the [repository](https://github.com/mlr-org/mlr3extralearners)
+2. [Clone](https://docs.github.com/en/free-pro-team@latest/github/creating-cloning-and-archiving-repositories/cloning-a-repository) a local copy of your forked repository.
+
+Then do one of:
+
+* Open a new R session, call `library(mlr3extralearners)` (install if you haven't already), and then [run](#create-learner) `r ref("mlr3extralearners::create_learner")` with the `pkg` argument set as the path (the folder location) to the package directory.
+* Open a new R session, set your working directory as your newly cloned repository, run `r ref("devtools::load_all")`, and then [run](#create-learner) `r ref("mlr3extralearners::create_learner")`, leaving `pkg = "."`.
+* In your newly cloned repository, open the R project, which will automatically set your working directory, run `r ref("devtools::load_all")`, and then [run](#create-learner) `r ref("mlr3extralearners::create_learner")`, leaving `pkg = "."`.
+
+We recommend the last option. It is also important that you are familiar with the three `devtools` commands:
+
+* `r ref("devtools::document")` - Generates roxygen documentation for your new learner.
+* `r ref("devtools::load_all")` - Loads all functions from `mlr3extralearners` locally, including hidden helper functions.
+* `r ref("devtools::check")` - Checks that the package still passes all tests locally.
+
+
+### Calling create_learner {#create-learner}
+
+The learner `classif.rpart` will be used as a running example throughout this section.
 
 ```{r 06-extending-learners-001, eval = FALSE, tidy = FALSE}
-Learner<type><algorithm> = R6Class("Learner<type><algorithm>",
-  inherit = Learner<type>,
+library(mlr3extralearners)
+create_learner(
+  pkg = ".",
+  classname = "Rpart",
+  algorithm = "decision tree",
+  type = "classif",
+  key = "rpart",
+  package = "rpart",
+  caller = "rpart",
+  feature_types = c("logical", "integer", "numeric", "factor", "ordered"),
+  predict_types = c("response", "prob"),
+  properties = c("importance", "missings", "multiclass", "selected_features", "twoclass", "weights"),
+  references = TRUE,
+  gh_name = "RaphaelS1"
+)
+```
+
+The full documentation for the function arguments is in `r ref("mlr3extralearners::create_learner")`, in this example we are doing the following:
+
+1. `pkg = "."` - Set the package root to the current directory (assumes `mlr3extralearners` already set as the working directory)
+2. `classname = "Rpart"` - Set the R6 class name to LearnerClassifRpart (classif is below)
+3. `algorithm = "decision tree"` - Create the title as "Classification Decision Tree Learner", where "Classification" is determined automatically from `type` and "Learner" is added for all learners.
+4. `type = "classif"` - Setting the learner as a classification learner, automatically filling the title, class name, id ("classif.rpart") and task type.
+5. `key = "rpart"` - Used with `type` to create the unique ID of the learner, `classif.rpart`.
+6. `package = "rpart"` - Setting the package from which the learner is implemented, this fills in things like the training function (along with `caller`) and the `man` field.
+7. `caller = "rpart"` - This tells the `.train` function, and the description which function is called to run the algorithm, with `package` this automatically fills `rpart::rpart`.
+8. `feature_types = c("logical", "integer", "numeric", "factor", "ordered")` - Sets the type of features that can be handled by the learner. See [meta information](#learner-meta-information).
+9. `predict_types = c("response", "prob"),` - Sets the possible prediction types as response (deterministic) and prob (probabilistic). See [meta information](#learner-meta-information).
+10. `properties = c("importance", "missings", "multiclass", "selected_features", "twoclass", "weights")` - Sets the properties that are handled by the learner, by including `"importance"` a public method called `importance` will be created that must be manually filled. See [meta information](#learner-meta-information).
+11. `references = TRUE` - Tells the template to add a "references" tag that must be filled manually.
+12. `gh_name = "RaphaelS1"` - Fills the "author" tag with my GitHub handle, this is required as it identifies the maintainer of the learner.
+
+The sections below demonstrate what happens after the function has been run and the files that are created.
+
+### learner_package_type_key.R
+
+The first script to complete after running `create_learner` is the file with the form `learner_package_type_key.R`, in our case this will actually be `learner_rpart_classif_rpart.key`. **This name must not be changed** as triggering automated tests rely on a strict naming scheme. For our example, the resulting script looks like this:
+
+```{r 06-extending-learners-002, eval = FALSE, tidy = FALSE}
+#' @title Classification Decision Tree Learner
+#' @author RaphaelS1
+#' @name mlr_learners_classif.rpart
+#'
+#' @template class_learner
+#' @templateVar id classif.rpart
+#' @templateVar caller rpart
+#'
+#' @references
+#' <FIXME - DELETE THIS AND LINE ABOVE IF OMITTED>
+#'
+#' @template seealso_learner
+#' @template example
+#' @export
+LearnerClassifRpart = R6Class("LearnerClassifRpart",
+  inherit = LearnerClassif,
 
   public = list(
-
     #' @description
     #' Creates a new instance of this [R6][R6::R6Class] class.
     initialize = function() {
-      ps = ParamSet$new(
-        params = list(
-          <params>
-        )
-      )
+      # FIXME - MANUALLY ADD PARAM_SET BELOW AND THEN DELETE THIS LINE
+      ps = <param_set>
+
+      # FIXME - MANUALLY UPDATE PARAM VALUES BELOW IF APPLICABLE THEN DELETE THIS LINE.
+      # OTHERWISE DELETE THIS AND LINE BELOW.
+      ps$values = list(<param_vals>)
 
       super$initialize(
-        id = "<type>.<algorithm>",
-        packages = "<package>",
-        feature_types = "<feature types>"
-        predict_types = "<predict types>"
+        id = "classif.rpart",
+        packages = "rpart",
+        feature_types = c("logical", "integer", "numeric", "factor", "ordered"),
+        predict_types = c("response", "prob"),
         param_set = ps,
-        properties = "<properties>",
-        man = "<pkgname>::<help file name>"
+        properties = c("importance", "missings", "multiclass", "selected_features", "twoclass", "weights"),
+        man = "mlr3extralearners::mlr_learners_classif.rpart"
       )
     },
 
-    # optional
-    importance = function() {
+    # FIXME - ADD IMPORTANCE METHOD HERE AND DELETE THIS LINE.
+    # <See LearnerRegrRandomForest for an example>
+    #' @description
+    #' The importance scores are extracted from the slot <FIXME>.
+    #' @return Named `numeric()`.
+    importance = function() { }
 
-    },
-
-    # optional
-    oob_error = function() {
-
-    }
   ),
 
   private = list(
 
-    .train = function()
-    .predict = function()
+    .train = function(task) {
+      pars = self$param_set$get_values(tags = "train")
 
+
+      # set column names to ensure consistency in fit and predict
+      self$state$feature_names = task$feature_names
+
+      # FIXME - <Create objects for the train call
+      # <At least "data" and "formula" are required>
+      formula = task$formula()
+      data = task$data()
+
+      # FIXME - <here is space for some custom adjustments before proceeding to the
+      # train call. Check other learners for what can be done here>
+
+      # use the mlr3misc::invoke function (it's similar to do.call())
+      mlr3misc::invoke(rpart::rpart,
+                       formula = formula,
+                       data = data,
+                       .args = pars)
+    },
+
+    .predict = function(task) {
+      # get parameters with tag "predict"
+      pars = self$param_set$get_values(tags = "predict")
+      # get newdata
+      newdata = task$data(cols = task$feature_names)
+
+
+      pred = mlr3misc::invoke(predict, self$model, newdata = newdata,
+                              type = type, .args = pars)
+
+      # FIXME - ADD PREDICTIONS TO LIST BELOW
+      list(...)
+    }
+  )
+)
+
+.extralrns_dict$add("classif.rpart", LearnerClassifRpart)
 ```
 
-In the first line of the template, we create a new `r cran_pkg("R6")` class of the learner.
-The next line determines the parent class:
-Depending on which type of learner we are creating, we need o inherit from its parent class, e.g. for a classification learner from `r ref("LearnerClassif")`.
+Now we have to do the following (from top to bottom):
 
-A learner consists of the following parts:
-
-1. [Meta information](#learner-meta-information) about the learners
-1. [`.train()`](#learner-train) which takes a (filtered) `r ref("TaskClassif")` and returns a model
-1. [`.predict()`](#learner-predict) which operates on the model in `self$model` (stored during `$train()`) and a (differently subsetted) `r ref("TaskClassif")` to return a named list of  predictions.
-1. (optional) A public `importance()` or `oob_error()` method if the learner supports this.
+1. Fill in the references under "references" and delete the tag that starts "FIXME"
+2. Replace `<param_set>` with a [parameter set](#param-set)
+3. Optionally [change default values](#param-set) for parameters in `<param_vals>`
+4. As we included "importance" in `properties` we have to add a function to the public method `importance`
+5. Fill in the private [`.train`](#learner-train) method, which takes a (filtered) `r ref("Task")` and returns a model.
+6. Fill in the private [`.predict`](#learner-predict) method, which operates on the model in `self$model` (stored during `$train()`) and a (differently subsetted) `r ref("Task")` to return a named list of predictions.
 
 ### Meta-information {#learner-meta-information}
 
 In the constructor (`initialize()`) the constructor of the super class (e.g. `r ref("LearnerClassif")`) is called with meta information about the learner which should be constructed.
 This includes:
 
-* `id`: The ID of the new learner. Usually consists of `<type>.<algorithm>`, for example: `"classif.C5.0"`.
+* `id`: The ID of the new learner. Usually consists of `<type>.<algorithm>`, for example: `"classif.rpart"`.
 * `packages`: The upstream package name of the implemented learner.
 * `param_set`: A set of hyperparameters and their descriptions provided as a `r ref("paradox::ParamSet")`.
-  For each hyperparameter the appropriate class needs to be chosen:
-  * `r ref("paradox::ParamLgl")` for scalar logical hyperparameters.
-  * `r ref("paradox::ParamInt")` for scalar integer hyperparameters.
-  * `r ref("paradox::ParamDbl")` for scalar numeric hyperparameters.
-  * `r ref("paradox::ParamFct")` for scalar factor hyperparameters (this includes characters).
-  * `r ref("paradox::ParamUty")` for everything else (e.g. vector paramters or list parameters).
+  For each hyperparameter the appropriate class needs to be chosen. When using the `r ref("paradox::ps")` shortcut, a short constructor of the form `p_***` can be used:
+  * `r ref("paradox::ParamLgl")` / `r ref("paradox::p_lgl")` for scalar logical hyperparameters.
+  * `r ref("paradox::ParamInt")` / `r ref("paradox::p_int")` for scalar integer hyperparameters.
+  * `r ref("paradox::ParamDbl")` / `r ref("paradox::p_dbl")` for scalar numeric hyperparameters.
+  * `r ref("paradox::ParamFct")` / `r ref("paradox::p_fct")` for scalar factor hyperparameters (this includes characters).
+  * `r ref("paradox::ParamUty")` / `r ref("paradox::p_uty")` for everything else (e.g. vector paramters or list parameters).
 * `predict_types`: Set of predict types the learner is able to handle.
-  These differ depending on the type of the learner.
+  These differ depending on the type of the learner. See `r ref("mlr_reflections", text = "mlr_reflections$learner_predict_types")` for the full list of feature types supported by `mlr3`.
   * `LearnerClassif`
     * `response`: Only predicts a class label for each observation in the test set.
     * `prob`: Also predicts the posterior probability for each class for each observation in the test set.
@@ -93,7 +210,7 @@ This includes:
     * `se`: Also predicts the standard error for each value of response for each observation in the test set.
 * `feature_types`: Set of feature types the learner is able to handle.
   See `r ref("mlr_reflections", text = "mlr_reflections$task_feature_types")` for feature types supported by `mlr3`.
-* `properties`: Set of properties of the learner. Possible properties include:
+* `properties`: Set of properties of the learner. See `r ref("mlr_reflections", text = "mlr_reflections$learner_properties")` for the full list of feature types supported by `mlr3`. Possible properties include:
   * `"twoclass"`: The learner works on binary classification problems.
   * `"multiclass"`: The learner works on multi-class classification problems.
   * `"missings"`: The learner can natively handle missing values.
@@ -106,34 +223,61 @@ This includes:
     If this property is set, you must also implement a public method `selected_features()` to retrieve the set of used features from the model.
 * `man`: The roxygen identifier of the learner.
   This is used within the `$help()` method of the super class to open the help page of the learner.
-  This argument follows the structure `"mlr3learners.<package>::mlr_learners_<type>.<algorithm>"`.
 
-For a simplified `r ref("rpart::rpart()")`, the initialization could look like this:
+### ParamSet {#param-set}
 
-```{r 06-extending-learners-002, eval = FALSE}
-initialize = function(id = "classif.rpart") {
-    ps = ParamSet$new(list(
-      ParamDbl$new(id = "cp", default = 0.01, lower = 0, upper = 1, tags = "train"),
-      ParamInt$new(id = "xval", default = 10L, lower = 0L, tags = "train")
-    ))
+The `param_set` is the set of hyperparameters used in model training and predicting, this is given as a `r ref("paradox::ParamSet")`. The set consists of a list of hyperparameters, each has a specific class for the hyperparameter type (see above).
 
-    super$initialize(
-        id = id,
-        packages = "rpart",
-        feature_types = c("logical", "integer", "numeric", "factor"),
-        predict_types = c("response", "prob"),
-        param_set = ps,
-        properties = c("twoclass", "multiclass", "weights", "missings")
-        man = "mlr3learners.rpart::mlr_learners_classif.rpart"
-    )
-}
+For `classif.rpart` the following replace `<param_set>` above:
+
+```{r 06-extending-learners-003, eval = FALSE}
+ps = ParamSet$new(list(
+  ParamInt$new(id = "minsplit", default = 20L, lower = 1L, tags = "train"),
+  ParamInt$new(id = "minbucket", lower = 1L, tags = "train"),
+  ParamDbl$new(id = "cp", default = 0.01, lower = 0, upper = 1, tags = "train"),
+  ParamInt$new(id = "maxcompete", default = 4L, lower = 0L, tags = "train"),
+  ParamInt$new(id = "maxsurrogate", default = 5L, lower = 0L, tags = "train"),
+  ParamInt$new(id = "maxdepth", default = 30L, lower = 1L, upper = 30L, tags = "train"),
+  ParamInt$new(id = "usesurrogate", default = 2L, lower = 0L, upper = 2L, tags = "train"),
+  ParamInt$new(id = "surrogatestyle", default = 0L, lower = 0L, upper = 1L, tags = "train"),
+  ParamInt$new(id = "xval", default = 0L, lower = 0L, tags = "train"),
+  ParamLgl$new(id = "keep_model", default = FALSE, tags = "train")
+))
+ps$values = list(xval = 0L)
 ```
 
-We only have specified a small subset of the available hyperparameters:
+Within mlr3 packages we suggest to stick to the lengthly definition for consistency, however the `<param_set>` can be written shorter, using the `r ref("paradox::ps")` shortcut:
+```{r 06-extending-learners-003-1, eval = FALSE}
+ps = ps(
+  minsplit = p_int(lower = 1L, default = 20L, tags = "train"),
+  minbucket = p_int(lower = 1L, tags = "train"),
+  cp = p_dbl(lower = 0, upper = 1, default = 0.01, tags = "train"),
+  maxcompete = p_int(lower = 0L, default = 4L, tags = "train"),
+  maxsurrogate = p_int(lower = 0L, default = 5L, tags = "train"),
+  maxdepth = p_int(lower = 1L, upper = 30L, default = 30L, tags = "train"),
+  usesurrogate = p_int(lower = 0L, upper = 2L, default = 2L, tags = "train"),
+  surrogatestyle = p_int(lower = 0L, upper = 1L, default = 0L, tags = "train"),
+  xval = p_int(lower = 0L, default = 0L, tags = "train"),
+  keep_model = p_lgl(default = FALSE, tags = "train")
+)
+```
 
-* The complexity `"cp"` is numeric, has a feasible range of `[0,1]` and defaults to `0.01`.
+You should read though the learner documentation to find the full list of available parameters. Just looking at some of these in this example:
+
+* `"cp"` is numeric, has a feasible range of `[0,1]` and defaults to `0.01`.
   The parameter is used during `"train"`.
-* The complexity `"xval"` is integer has a lower bound of `0`, a default of `0` and the parameter is used during `"train"`.
+* `"xval"` is integer has a lower bound of `0`, a default of `0` and the parameter is used during `"train"`.
+* `"keep_model"` is logical with a default of `FALSE` and is used during `"train"`.
+
+In some rare cases you may want to change the default parameter values. You can do this by passing a list to `<param_vals>` in the template script above. You can see we have done this for `"classif.rpart"` where the default for `xval` is changed to `0`. Note that the default in the `ParamSet` is recorded as our changed default (0), and not the original (10). It is strongly recommended to only change the defaults if absolutely required, when this is the case add the following to the learner documentation:
+
+```r
+#' @section Custom mlr3 defaults:
+#' - `<parameter>`:
+#'   - Actual default: <value>
+#'   - Adjusted default: <value>
+#'   - Reason for change: <text>
+```
 
 ### Train function {#learner-train}
 
@@ -144,7 +288,7 @@ Let's say we want to translate the following call of `rpart::rpart()` into code 
 
 First, we write something down that works completely without `mlr3`:
 
-```{r 06-extending-learners-003}
+```{r 06-extending-learners-004,eval=FALSE}
 data = iris
 model = rpart::rpart(Species ~ ., data = iris, xval = 0)
 ```
@@ -157,11 +301,15 @@ The dataset is extracted from the `r ref("Task")`.
 Last, we call the upstream function `rpart::rpart()` with the data and pass all hyperparameters via argument `.args` using the `mlr3misc::invoke()` function.
 The latter is simply an optimized version of `do.call()` that we use within the mlr3 ecosystem.
 
-```{r 06-extending-learners-008}
+```{r 06-extending-learners-005,eval=FALSE}
 .train = function(task) {
   pars = self$param_set$get_values(tags = "train")
-  mlr3misc::invoke(rpart::rpart, task$formula(),
-    data = task$data(), .args = pars)
+  formula = task$formula()
+  data = task$data()
+  mlr3misc::invoke(rpart::rpart,
+                   formula = formula,
+                   data = data,
+                   .args = pars)
 }
 ```
 
@@ -173,7 +321,7 @@ The return value is a `r ref("Prediction")` object.
 We proceed analogously to what we did in the previous section.
 We start with a version without any `mlr3` objects and continue to replace objects until we have reached the desired interface:
 
-```{r 06-extending-learners-010}
+```{r 06-extending-learners-006,eval=FALSE}
 # inputs:
 task = tsk("iris")
 self = list(model = rpart::rpart(task$formula(), data = task$data()))
@@ -185,31 +333,35 @@ prob = predict(self$model, newdata = data, type = "prob")
 
 The `r ref("rpart::predict.rpart()")` function predicts class labels if argument `type` is set to to `"class"`, and class probabilities if set to `"prob"`.
 
-Next, we transition from `data` to a `task` again and construct a proper `r ref("PredictionClassif")` object which should be returned.
-Additionally, as we do not want to run the prediction twice, we differentiate what type of prediction is requested by querying the chosen predict type of the learner.
-The predict type is stored in the `$predict_type` slot of a learner class.
+Next, we transition from `data` to a `task` again and construct a list with the return type requested by the user, this is stored in the `$predict_type` slot of a learner class. Note that the `task` is automatically passed to the prediction object, so all you need to do is return the predictions! Make sure the list names are identical to the task predict types.
 
-The final `.predict()` method looks like this:
+The final `.predict()` method is below, we could omit the `pars` line as there are no parameters with the `"predict"` tag but we keep it here to be consistent:
 
-```{r 06-extending-learners-011}
+```{r 06-extending-learners-007, eval = FALSE}
 .predict = function(task) {
-  self$predict_type = "response"
-
+  pars = self$param_set$get_values(tags = "predict")
+  # get newdata and ensure same ordering in train and predict
+  newdata = task$data(cols = self$state$feature_names)
   if (self$predict_type == "response") {
-    response = predict(self$model, newdata = task$data(), type = "class")
-  } else {
-    prob = predict(self$model, newdata = task$data(), type = "prob")
-  }
+    response = mlr3misc::invoke(predict,
+                            self$model,
+                            newdata = newdata,
+                            type = "class",
+                            .args = pars)
 
-  PredictionClassif$new(task, response = response, prob = prob)
+    return(list(response = response))
+  } else {
+    prob = mlr3misc::invoke(predict,
+                            self$model,
+                            newdata = newdata,
+                            type = "prob",
+                            .args = pars)
+    return(list(prob = prob))
+  }
 }
 ```
 
-Note that if the learner would need to handle hyperparameters during the predict step, we would proceed analogously to the `.train()` step and use `self$params$get_values(tags = "predict")` in combination with `r ref("mlr3misc::invoke()")`.
-
-Also note that you cannot rely on the column order of the data returned by `task$data()`: The order of columns may be different from the order of the columns during `$train()`.
-You have to make sure that your learner accesses columns by name, not by position (like some algorithms with a matrix interface do).
-You may have to restore the order manually here, see learner ["classif.svm"](https://github.com/mlr-org/mlr3learners/blob/master/R/LearnerClassifSVM.R) for an example.
+Note that you cannot rely on the column order of the data returned by `task$data()` as the order of columns may be different from the order of the columns during `$.train`. The `newdata` line ensures the ordering is the same by calling the saved order set in `$.train`, don't delete either of these lines!
 
 ### Control objects/functions of learners {#learner-control}
 
@@ -233,50 +385,134 @@ mlr3misc::invoke([...], .args = train_pars, control = control_pars)
 
 ### Testing the learner {#learner-test}
 
-#### Train and Predict
+Once your learner is created, you are ready to start testing if it works, there are three types of tests: [manual](#learner-test-manual), [unit](#learner-test-unit) and [parameter](#learner-test-parameter).
+
+#### Train and Predict {#learner-test-manual}
 
 For a bare-bone check you can just try to run a simple `train()` call locally.
 
-```{r 06-extending-learners-012, eval = FALSE}
+```{r 06-extending-learners-008, eval = FALSE}
 task = tsk("iris") # assuming a Classif learner
+lrn = lrn("classif.rpart")
 lrn$train(task)
 p = lrn$predict(task)
 p$confusion
 ```
 
+If it runs without erroring, that's a very good start!
+
+#### Autotest {#learner-test-unit}
+
 To ensure that your learner is able to handle all kinds of different properties and feature types, we have written an "autotest" that checks the learner for different combinations of such.
 
-The "autotest" setup is already included in the mlr3learners.template skeleton.
+The "autotest" setup is generated automatically by `create_learner` and will open after running the function, it will have a name with the form `test_package_type_key.R`, in our case this will actually be `test_rpart_classif_rpart.key`. **This name must not be changed** as triggering automated tests rely on a strict naming scheme. In our example this will create the following script, for which no changes are required to pass (assuming the learner was correctly created):
+
+```{r 06-extending-learners-009, eval = FALSE}
+install_learners("classif.rpart")
+
+test_that("autotest", {
+  learner = LearnerClassifRpart$new()
+  expect_learner(learner)
+  result = run_autotest(learner)
+  expect_true(result, info = result$error)
+})
+```
+
 For some learners that have required parameters, it is needed to set some values for required parameters after construction so that the learner can be run in the first place.
 
-You can also exclude some specific test arrangements within the "autotest" via argument `exclude` in the `run_autotest()` function.
+You can also exclude some specific test arrangements within the "autotest" via the argument `exclude` in the `run_autotest()` function.
 Currently the `run_autotest()` function lives in [inst/testthat](https://github.com/mlr-org/mlr3/blob/f16326bf34bcac59c3b0a2fdbcf90dbebb3b4bbc/inst/testthat/helper_autotest.R) of the `mlr_plkg("mlr3")` and still lacks documentation.
 This should change in the near future.
 
 To finally run the test suite, call `devtools::test()` or hit `CTRL + Shift + T` if you are using RStudio.
 
-#### Checking Parameters
+#### Checking Parameters {#learner-test-parameter}
 
 Some learners have a high number of parameters and it is easy to miss out on some during the creation of a new learner.
 In addition, if the maintainer of the upstream package changes something with respect to the arguments of the algorithm, the learner is in danger to break.
 Also, new arguments could be added upstream and manually checking for new additions all the time is tedious.
 
-Therefore we have written a "Parameter Check" that runs for every learner asynchronously to the R CMD Check of the package itself.
-This "Parameter Check" compares the parameters of the mlr3 ParamSet against all arguments available in the upstream function that is called during `$train()`.
+Therefore we have written a "Parameter Check" that runs for every learner asynchronously to the R CMD Check of the package itself. This "Parameter Check" compares the parameters of the mlr3 ParamSet against all arguments available in the upstream function that is called during `$train()` and `$predict()`. Again the file is automatically created and opened by `create_learner`, this will be named like `test_paramtest_package_type_key.R`, so in our example `test_paramtest_rpart_classif_rpart.R`.
 
-It comes with an `exclude` argument that should be used to _exclude and explain_ why certain arguments of the upstream function are not within the ParamSet of the mlr3learner.
-This argument needs essentially to be used by every learner because arguments like `x`, `target` or `data` are handled by the mlr3 interface and are therefore not included within the ParamSet.
+The test comes with an `exclude` argument that should be used to _exclude and explain_ why certain arguments of the upstream function are not within the ParamSet of the mlr3learner. This will likely be required for all learners as common arguments like `x`, `target` or `data` are handled by the mlr3 interface and are therefore not included within the ParamSet.
 
-However, there might be more parameters that need to be excluded:
+However, there might be more parameters that need to be excluded, for example:
 
 - Type dependent parameters, i.e. parameters that only apply for classification or regression learners.
 - Parameters that are actually deprecated by the upstream package and which were therefore not included in the mlr3 ParamSet.
 
-The "Parameter Check" should run for each implemented learner.
 All excluded parameters should have a comment justifying their exclusion.
 
-Whenever the "Parameter Check" breaks in the CI run, maintainers can be sure that a new parameter was added or removed in the upstream package.
-Also, people taking over a learner package can instantly see why certain parameters were not included into the ParamSet initially.
+In our example, the final paramtest script looks like:
+
+```{r 06-extending-learners-010, eval = FALSE}
+library(mlr3extralearners)
+install_learners("classif.rpart")
+
+test_that("classif.rpart train", {
+  learner = lrn("classif.rpart")
+  fun = rpart::rpart
+  exclude = c(
+    "formula",# handled internally
+    "model", # handled internally
+    "data", # handled internally
+    "weights", # handled by task
+    "subset", # handled by task
+    "na.action", # handled internally
+    "method", # handled internally
+    "x", # handled internally
+    "y", # handled internally
+    "parms", # handled internally
+    "control", # handled internally
+    "cost" # handled internally
+  )
+
+  ParamTest = run_paramtest(learner, fun, exclude)
+  expect_true(ParamTest, info = paste0(
+    "Missing parameters:",
+    paste0("- '", ParamTest$missing, "'", collapse = "
+")))
+})
+
+test_that("classif.rpart predict", {
+  learner = lrn("classif.rpart")
+  fun = rpart:::predict.rpart
+    exclude = c(
+      "object", # handled internally
+      "newdata", # handled internally
+      "type", # handled internally
+      "na.action" # handled internally
+    )
+
+  ParamTest = run_paramtest(learner, fun, exclude)
+  expect_true(ParamTest, info = paste0(
+    "Missing parameters:",
+    paste0("- '", ParamTest$missing, "'", collapse = "
+")))
+})
+
+```
+
+### Package Cleaning {#cleaning}
+
+Once all tests are passing, run the following functions to ensure that the package remains clean and tidy
+
+1. `devtools::document(roclets = c('rd', 'collate', 'namespace'))`
+1. If you haven't done this before run: `remotes::install_github('pat-s/styler@mlr-style')`
+1. `styler::style_pkg(style = styler::mlr_style)`
+1. `usethis::use_tidy_description()`
+1. `lintr::lint_package()`
+
+Please fix any errors indicated by `lintr` before creating a pull request. Finally ensure that all `FIXME` are resolved and deleted in the generated files.
+
+You are now ready to add your learner to the mlr3 ecosystem! Simply open a pull request to \url{https://github.com/mlr-org/mlr3extralearners/pulls} with the new learner template and complete the checklist in there. Once the pull request is approved and merged, your learner will automatically appear on the [package website](https://mlr3extralearners.mlr-org.com/).
+
+### Thanks and Maintenance
+
+Thank you for contributing to the mlr3 ecosystem!
+
+When you created the learner you would have given your GitHub handle, meaning that you are now listed as the learner author and maintainer. This means that if the learner breaks it is your responsibility to fix the learner - you can view the status of your learner [here](https://mlr3extralearners.mlr-org.com/articles/learners/learner_status.html).
+
 
 ### Learner FAQ {#learner-faq}
 
@@ -286,7 +522,7 @@ How to deal with Parameters which have no default?
 
 **Answer**
 
-Do not set a default in the ParamSet and add `tags = "required"` to the Parameter.
+If the learner does not work without providing a value, set a reasonable default in `param_set$values`, add tag `"required"` to the parameter and document your default properly.
 
 **Question 2**
 
@@ -348,3 +584,20 @@ Here, all parameters besides the ones set in the list would be unset.
 See `paradox::ParamSet` for more information.
 If a parameter is tagged as `"required"` in the ParamSet, the call above would error and prompt the user that required parameters are missing.
 
+**Question 6**
+
+What is this error when I run `devtools::load_all()`
+
+```r
+> devtools::load_all(".")
+Loading mlr3extralearners
+Warning message:
+.onUnload failed in unloadNamespace() for 'mlr3extralearners', details:
+  call: vapply(hooks, function(x) environment(x)$pkgname, NA_character_)
+  error: values must be length 1,
+ but FUN(X[[1]]) result is length 0 
+```
+
+**Answer**
+
+This is not an error but a warning and you can safely ignore it!

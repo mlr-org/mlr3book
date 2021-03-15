@@ -33,8 +33,8 @@ library("mlr3")
 library("mlr3proba")
 library("survival")
 
-TaskSurv$new(id = "interval_censored", backend = survival::bladder2[,-c(1, 7)],
-                    time = "start", time2 = "stop", type = "interval2")
+TaskSurv$new(id = "interval_censored", backend = survival::bladder2[, -1L],
+                    time = "start", time2 = "stop", type = "interval")
 
 # type = "right" is default
 task = TaskSurv$new(id = "right_censored", backend = survival::rats,
@@ -68,7 +68,7 @@ Note that for linear proportional hazards models, the ranking (but not necessari
 The example below uses the `r ref("mlr_tasks_rats", text = "rats")` task shipped with `r mlr_pkg("mlr3proba")`.
 
 ```{r 07-special-survival-002}
-task = tsk("rats")
+task = mlr_tasks$get("rats")
 learn = lrn("surv.coxph")
 
 train_set = sample(task$nrow, 0.8 * task$nrow)
@@ -89,31 +89,32 @@ See `r mlr_pkg("mlr3pipelines")` for full tutorials and details on `PipeOp`s.
 
 ```{r 07-special-survival-003}
 library(mlr3pipelines)
+library(mlr3learners)
 # PipeOpDistrCompositor - Train one model with a baseline distribution,
 # (Kaplan-Meier or Nelson-Aalen), and another with a predicted linear predictor.
 task = tsk("rats")
-leaner_lp = lrn("surv.gbm", bag.fraction = 1, n.trees = 50L)
-leaner_distr = lrn("surv.kaplan")
-prediction_lp = leaner_lp$train(task)$predict(task)
-prediction_distr = leaner_distr$train(task)$predict(task)
+# remove the factor column for support with glmnet
+task$select(c("litter", "rx"))
+learner_lp = lrn("surv.glmnet")
+learner_distr = lrn("surv.kaplan")
+prediction_lp = learner_lp$train(task)$predict(task)
+prediction_distr = learner_distr$train(task)$predict(task)
 prediction_lp$distr
 
 # Doesn't need training. Base = baseline distribution. ph = Proportional hazards.
 
-pod = po("distrcompose", param_vals = list(form = "ph", overwrite = FALSE))
+pod = po("compose_distr", param_vals = list(form = "ph", overwrite = FALSE))
 prediction = pod$predict(list(base = prediction_distr, pred = prediction_lp))$output
 
 # Now we have a predicted distr!
 
 prediction$distr
 
-# This can all be simplified by using the distrcompose wrapper
+# This can all be simplified by using the distrcompose pipeline
 
-gbm.distr = distrcompositor(learner = lrn("surv.gbm", bag.fraction = 1, n.trees = 50L),
-                             estimator = "kaplan",
-                             form = "aft",
-                             overwrite = FALSE)
-gbm.distr$train(task)$predict(task)
+glm.distr = ppl("distrcompositor", learner = lrn("surv.glmnet"),
+                estimator = "kaplan", form = "ph", overwrite = FALSE, graph_learner = TRUE)
+glm.distr$train(task)$predict(task)
 ```
 
 ### Benchmark Experiment
@@ -121,6 +122,8 @@ gbm.distr$train(task)$predict(task)
 Finally, we conduct a small benchmark study on the `r ref("mlr_tasks_rats", text = "rats")` task using some of the integrated survival learners:
 
 ```{r 07-special-survival-004}
+library(mlr3learners)
+
 task = tsk("rats")
 
 # some integrated learners
@@ -128,7 +131,7 @@ learners = lrns(c("surv.coxph", "surv.kaplan", "surv.ranger"))
 print(learners)
 
 # Harrell's C-Index for survival
-measure = msr("surv.harrellC")
+measure = msr("surv.cindex")
 print(measure)
 
 set.seed(1)

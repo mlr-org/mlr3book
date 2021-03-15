@@ -1,12 +1,13 @@
 ## Hyperparameter Tuning {#tuning}
 
-Hyperparameters are second-order parameters of machine learning models that, while often not explicitly optimized during the model estimation process, can have important impacts on the outcome and predictive performance of a model.
+
+Hyperparameters are second-order parameters of machine learning models that, while often not explicitly optimized during the model estimation process, can have an important impact on the outcome and predictive performance of a model.
 Typically, hyperparameters are fixed before training a model.
 However, because the output of a model can be sensitive to the specification of hyperparameters, it is often recommended to make an informed decision about which hyperparameter settings may yield better model performance.
 In many cases, hyperparameter settings may be chosen _a priori_, but it can be advantageous to try different settings before fitting your model on the training data.
-This process is often called 'tuning' your model.
+This process is often called model 'tuning'.
 
-Hyperparameter tuning is supported via the extension package `r mlr_pkg("mlr3tuning")`.
+Hyperparameter tuning is supported via the `r mlr_pkg("mlr3tuning")` extension package.
 Below you can find an illustration of the process:
 
 ```{r 03-optimization-tuning-001, echo = FALSE}
@@ -18,7 +19,7 @@ At the heart of `r mlr_pkg("mlr3tuning")` are the R6 classes:
 * `r ref("TuningInstanceSingleCrit")`, `r ref("TuningInstanceMultiCrit")`: These two classes describe the tuning problem and store the results.
 * `r ref("Tuner")`: This class is the base class for implementations of tuning algorithms.
 
-### The `TuningInstance` Classes {#tuning-optimization}
+### The `TuningInstance*` Classes {#tuning-optimization}
 
 The following sub-section examines the optimization of a simple classification tree on the `r ref("mlr_tasks_pima", text = "Pima Indian Diabetes")` data set.
 
@@ -40,15 +41,15 @@ Here, we opt to tune two parameters:
 * The complexity `cp`
 * The termination criterion `minsplit`
 
-The tuning space has to be bound, therefore one has to set lower and upper bounds:
+The tuning space needs to be bounded, therefore one has to set lower and upper bounds:
 
 ```{r 03-optimization-tuning-004}
 library("paradox")
-tune_ps = ParamSet$new(list(
-  ParamDbl$new("cp", lower = 0.001, upper = 0.1),
-  ParamInt$new("minsplit", lower = 1, upper = 10)
-))
-tune_ps
+search_space = ps(
+  cp = p_dbl(lower = 0.001, upper = 0.1),
+  minsplit = p_int(lower = 1, upper = 10)
+)
+search_space
 ```
 
 Next, we need to specify how to evaluate the performance.
@@ -73,14 +74,14 @@ For this short introduction, we specify a budget of 20 evaluations and then put 
 ```{r 03-optimization-tuning-006}
 library("mlr3tuning")
 
-evals20 = term("evals", n_evals = 20)
+evals20 = trm("evals", n_evals = 20)
 
 instance = TuningInstanceSingleCrit$new(
   task = task,
   learner = learner,
   resampling = hout,
   measure = measure,
-  search_space = tune_ps,
+  search_space = search_space,
   terminator = evals20
 )
 instance
@@ -89,13 +90,14 @@ instance
 To start the tuning, we still need to select how the optimization should take place.
 In other words, we need to choose the **optimization algorithm** via the `r ref("Tuner")` class.
 
-### The `Tuner` Class
+### The `Tuner` Class {#tuning-algorithms}
 
 The following algorithms are currently implemented in `r mlr_pkg("mlr3tuning")`:
 
 * Grid Search (`r ref("TunerGridSearch")`)
 * Random Search (`r ref("TunerRandomSearch")`) [@bergstra2012]
 * Generalized Simulated Annealing (`r ref("TunerGenSA")`)
+* Non-Linear Optimization (`r ref("TunerNLoptr")`)
 
 In this example, we will use a simple grid search with a grid resolution of 5.
 
@@ -105,7 +107,7 @@ tuner = tnr("grid_search", resolution = 5)
 
 Since we have only numeric parameters, `r ref("TunerGridSearch")` will create an equidistant grid between the respective upper and lower bounds.
 As we have two hyperparameters with a resolution of 5, the two-dimensional grid consists of $5^2 = 25$ configurations.
-Each configuration serves as hyperparameter setting for the previously defined `r ref("Learner")` and triggers a 3-fold cross validation on the task.
+Each configuration serves as a hyperparameter setting for the previously defined `r ref("Learner")` which is then fitted on the task using the provided `r ref("Resampling")`.
 All configurations will be examined by the tuner (in a random order), until either all configurations are evaluated or the `r ref("Terminator")` signals that the budget is exhausted.
 
 ### Triggering the Tuning {#tuning-triggering}
@@ -119,26 +121,38 @@ The tuner proceeds as follows:
 3. The `r ref("Terminator")` is queried if the budget is exhausted.
    If the budget is not exhausted, restart with 1) until it is.
 4. Determine the configuration with the best observed performance.
-5. Store the best configurations as result in the instance object. 
-   The best hyperparameter settings (`$result_learner_param_vals`) and the corresponding measured performance (`$result_y`) can be acessed from the instance.
+5. Store the best configurations as result in the instance object.
+   The best hyperparameter settings (`$result_learner_param_vals`) and the corresponding measured performance (`$result_y`) can be accessed from the instance.
 
 ```{r 03-optimization-tuning-008}
-tuner$optimize(instance) #should return invisible(NULL)
+tuner$optimize(instance)
 instance$result_learner_param_vals
 instance$result_y
 ```
 
-One can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("TuningInstanceSingleCrit")` and can be accessed through `$data()` method:
+One can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("TuningInstanceSingleCrit")` and can be accessed by using `as.data.table()`:
 
 ```{r 03-optimization-tuning-009}
-instance$archive$data()
+as.data.table(instance$archive)
 ```
 
 In sum, the grid search evaluated 20/25 different configurations of the grid in a random order before the `r ref("Terminator")` stopped the tuning.
 
-Now the optimized hyperparameters can take the previously created `r ref("Learner")`, set the returned hyperparameters and train it on the full dataset.
+The associated resampling iterations can be accessed in the `r ref("BenchmarkResult")`:
 
 ```{r 03-optimization-tuning-010}
+instance$archive$benchmark_result
+```
+
+The `uhash` column links the resampling iterations to the evaluated configurations stored in `instance$archive$data`. This allows e.g. to score the included `r ref("ResampleResult")`s on a different measure.
+
+```{r 03-optimization-tuning-011}
+instance$archive$benchmark_result$score(msr("classif.acc"))
+```
+
+Now the optimized hyperparameters can take the previously created `r ref("Learner")`, set the returned hyperparameters and train it on the full dataset.
+
+```{r 03-optimization-tuning-012}
 learner$param_set$values = instance$result_learner_param_vals
 learner$train(task)
 ```
@@ -147,7 +161,7 @@ The trained model can now be used to make a prediction on external data.
 Note that predicting on observations present in the `task`,  should be avoided.
 The model has seen these observations already during tuning and therefore results would be statistically biased.
 Hence, the resulting performance measure would be over-optimistic.
-Instead, to get statistically unbiased performance estimates for the current task, [nested resampling](#nested-resamling) is required.
+Instead, to get statistically unbiased performance estimates for the current task, [nested resampling](#nested-resampling) is required.
 
 ### Automating the Tuning {#autotuner}
 
@@ -157,23 +171,23 @@ Analogously to the previous subsection, a new classification tree learner is cre
 This classification tree learner automatically tunes the parameters `cp` and `minsplit` using an inner resampling (holdout).
 We create a terminator which allows 10 evaluations, and use a simple random search as tuning algorithm:
 
-```{r 03-optimization-tuning-011}
+```{r 03-optimization-tuning-013}
 library("paradox")
 library("mlr3tuning")
 
 learner = lrn("classif.rpart")
-tune_ps = ParamSet$new(list(
-  ParamDbl$new("cp", lower = 0.001, upper = 0.1),
-  ParamInt$new("minsplit", lower = 1, upper = 10)
-))
-terminator = term("evals", n_evals = 10)
+search_space = ps(
+  cp = p_dbl(lower = 0.001, upper = 0.1),
+  minsplit = p_int(lower = 1, upper = 10)
+)
+terminator = trm("evals", n_evals = 10)
 tuner = tnr("random_search")
 
 at = AutoTuner$new(
   learner = learner,
   resampling = rsmp("holdout"),
   measure = msr("classif.ce"),
-  search_space = tune_ps,
+  search_space = search_space,
   terminator = terminator,
   tuner = tuner
 )
@@ -187,9 +201,9 @@ The learner then undertakes predictions using the test set of the outer resampli
 This yields unbiased performance measures, as the observations in the test set have not been used during tuning or fitting of the respective learner.
 This is called [nested resampling](#nested-resampling).
 
-To compare the tuned learner with the learner using its default, we can use `r ref("benchmark()")`:
+To compare the tuned learner with the learner that uses default values, we can use `r ref("benchmark()")`:
 
-```{r 03-optimization-tuning-012}
+```{r 03-optimization-tuning-014}
 grid = benchmark_grid(
   task = tsk("pima"),
   learner = list(at, lrn("classif.rpart")),
@@ -197,7 +211,7 @@ grid = benchmark_grid(
 )
 
 # avoid console output from mlr3tuning
-logger = lgr::get_logger("mlr3tuning")
+logger = lgr::get_logger("bbotk")
 logger$set_threshold("warn")
 
 bmr = benchmark(grid)
@@ -210,4 +224,3 @@ Note that we do not expect any differences compared to the non-tuned approach fo
 * the task is rather small, and thus prone to overfitting
 * the tuning budget (10 evaluations) is small
 * `r cran_pkg("rpart")` does not benefit that much from tuning
-
