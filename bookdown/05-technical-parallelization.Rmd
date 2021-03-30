@@ -2,18 +2,63 @@
 
 Parallelization refers to the process of running multiple jobs in parallel, simultaneously.
 This process allows for significant savings in computing power.
+We distinguish between implicit parallelism and explicit parallelism.
 
-`r mlr_pkg("mlr3")` uses the abstraction implemented in `r cran_pkg("future")` for parallelization.
-One of the most used cases is to parallelize the iterations performed via `r ref("resample()")`, as described in [Resampling](#resampling).
+### Implicit Parallelization
 
-In this section, we will use the _spam_ task and a simple classification tree (`r ref("mlr_learners_classif.rpart")`) to showcase parallelization.
-We use the `r cran_pkg("future")` package to parallelize the resampling by selecting a parallel backend via the function `r ref("future::plan()")`.
-For this example, the `r ref("future::multisession")` parallel backend is selected which should work on all systems.
+We talk about implicit parallelization in this context if we call external code (i.e., code from foreign CRAN packages) which runs in parallel.
+Many machine learning algorithms can parallelize their model fit using threading, e.g. `r ref("mlr_learners_classif.ranger", text = "ranger")`
+or `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
+Unfortunately, threading often conflicts with explicit parallelization, causing the system to be overutilized in the best case and causing hangs or segfaults in the worst case.
+For this reason, we introduced the convention that implicit parallelization is turned off in the defaults, but can be enabled via a special hyperparameter which is tagged with the label `"threads"`.
+
+```{r}
+library("mlr3verse")
+
+learner = lrn("classif.ranger")
+learner$param_set$ids(tags = "threads")
+```
+
+To enable the parallelization for this learner, we simply can call the helper function `r ref("set_threads()"`):
+```{r}
+# set to use 4 CPUs
+set_threads(learner, n = 4)
+
+# auto-detect cores on the local machine
+set_threads(learner)
+```
+This also works for filters from `r mlr_pkg("mlr3filters")` and lists of objects:
+```{r}
+# retrieve 2 filters
+filters = flts(c("variance", "mrmr"))
+
+# set threads for all filters which support it
+set_threads(filters, n = 4)
+
+# unchanged, no threading supported for the variance filter
+filters[[1]]$param_set
+
+# threads set to 4
+filters[[2]]$param_set
+```
+
+
+### Explicit Parallelization
+
+We talk about explicit parallelization in mlr3 if mlr3 starts the parallelization itself.
+The abstraction implemented in `r cran_pkg("future")` is used to support a broad range of parallel backends.
+There are two use cases where mlr3 calls future: `r ref("resample()")` and `r ref("benchmark()")`.
+During resampling, all resampling iterations can be executed in parallelization.
+The same holds for benchmarking, where additionally all combinations in the provided design are also independent.
+These loops are performed by `r cran_pkg("future")` using the parallel backend configured with `r ref("future::plan()")`.
+Extension packages like `r mlr_pkg("mlr3tuning")` internally call `benchmark()` during tuning and thus work in parallel, too.
+
+
+In this section, we will use the `r ref("mlr_tasks_spam", text = "spam task")` and a simple `r ref("mlr_learners_classif.rpart", text = "classification tree")` to showcase the explicit parallelization.
+In this example, the `r ref("future::multisession")` parallel backend is selected which should work on all systems.
 
 
 ```{r 05-technical-parallelization-001, eval = FALSE}
-library("mlr3")
-
 # select the multisession backend
 future::plan("multisession")
 
@@ -27,14 +72,12 @@ Sys.time() - time
 ```
 By default, all CPUs of your machine are used unless you specify argument `workers` in `r ref("future::plan()")`.
 
-On most systems you should see a decrease in the reported elapsed time, but in practice you cannot expect the runtimes to go down linearly with the number of cores ([Amdahl's law](https://www.wikiwand.com/en/Amdahl%27s_law)).
+On most systems you should see a decrease in the reported elapsed time, but in practice you cannot expect the runtime to fall linearly as the number of cores increases ([Amdahl's law](https://www.wikiwand.com/en/Amdahl%27s_law)).
 Depending on the parallel backend, the technical overhead for starting workers, communicating objects, sending back results and shutting down the workers can be quite large.
 Therefore, it is advised to only enable parallelization for resamplings where each iteration runs at least some seconds.
 
-**Choosing the parallelization level**
-
 If you are transitioning from `r cran_pkg("mlr")`, you might be used to selecting different parallelization levels, e.g. for resampling, benchmarking or tuning.
-In `r mlr_pkg("mlr3")` this is no longer required.
+In `r mlr_pkg("mlr3")` this is no longer required (except for nested resampling, briefly described in the following section).
 All kind of events are rolled out on the same level.
 Therefore, there is no need to decide whether you want to parallelize the tuning OR the resampling.
 
