@@ -64,7 +64,11 @@ ref = function(topic, text = topic) {
 #' @export
 cran_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
-  sprintf("[%1$s](https://cran.r-project.org/package=%1$s)", trimws(pkg))
+  if (pkg %in% c("stats", "graphics")) {
+    sprintf("%1$s", trimws(pkg))
+  } else {
+    sprintf("[%1$s](https://cran.r-project.org/package=%1$s)", trimws(pkg))
+  }
 }
 
 #' @title Hyperlink to mlr3 Package
