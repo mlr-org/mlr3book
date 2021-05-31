@@ -125,7 +125,7 @@ lrn = makeLearner("classif.rpart")
 # Wrap this learner in a FilterWrapper
 lrn.wrp = makeFilterWrapper(lrn, fw.abs = 2L)
 # And wrap the resulting wrapped learner into an ImputeWrapper.
-lrn.wrp = makeImputeWrapper(lrn.wrp)
+lrn.wrp = makeImputeWrapper(lrn.wrp, classes = list(factor = imputeConstant("missing")))
 
 # Afterwards, we can train the resulting learner on a task
 train(lrn, iris.task)
@@ -138,14 +138,14 @@ library("mlr3")
 library("mlr3pipelines")
 library("mlr3filters")
 
-impute = po("impute")
-filter = po("filter", filter = FilterVariance$new(), param_vals = list(filter.nfeat = 2L))
+impute = po("imputeoor")
+filter = po("filter", filter = flt("variance"), param_vals = list(filter.nfeat = 2L))
 rpart = po("learner", lrn("classif.rpart"))
 
 # Assemble the Pipeline
 pipeline = impute %>>% filter %>>% rpart
 # And convert to a 'GraphLearner'
-learner = as_learner(id = "Pipeline", pipeline)
+learner = as_learner(pipeline)
 ```
 
 The fact that **mlr's** wrappers have to be applied inside-out, i.e. in the reverse order is often confusing.
@@ -220,30 +220,38 @@ iris = tsk("iris")
 # Build the steps
 copy = po("copy", 2)
 pca = po("pca")
-selection = po("filter", filter = FilterVariance$new())
+selection = po("filter", filter = flt("variance"))
 union = po("featureunion", 2)
-svm = po("learner", lrn("classif.svm", param_vals = list(kernel = "linear")))
+svm = po("learner", lrn("classif.svm", kernel = "linear", type = "C-classification"))
 
 # Assemble the Pipeline
 pipeline = copy %>>% gunion(list(pca, selection)) %>>% union %>>% svm
-learner = as_learner(id = "Pipeline", pipeline)
+learner = as_learner(pipeline)
 
 # For tuning, we define the resampling and the Parameter Space
-resampling = rsmp("cv", param_vals = list(folds = 5L))
+resampling = rsmp("cv", folds = 5L)
 
 library("paradox")
-param_set = ps(
+search_space = ps(
   classif.svm.cost = p_dbl(lower = 0.1, upper = 1),
-  pca.rank = p_int(lower = 1, upper = 3),
+  pca.rank. = p_int(lower = 1, upper = 3),
   variance.filter.nfeat = p_int(lower = 1, upper = 2)
-))
+)
 
-pe = PerformanceEvaluator$new(iris, learner, resampling, param_set)
-terminator = TerminatorEvaluations$new(60)
-tuner = TunerGridSearch$new(pe, terminator, resolution = 10)$tune()
+instance = TuningInstanceSingleCrit$new(
+  task = iris,
+  learner = learner,
+  resampling = resampling,
+  measure = msr("classif.ce"),
+  terminator = trm("none"),
+  search_space = search_space
+)
 
-# Set the learner to the optimal values and train
-learner$param_set$values = tuner$tune_result()$values
+tuner = tnr("grid_search", resolution = 10)
+tuner$optimize(instance)
+
+Set the learner to the optimal values and train
+learner$param_set$values = instance$result_learner_param_vals
 ```
 
 In summary, we can achieve similar results with a comparable number of lines, while at the same time offering greater flexibility with respect to which kinds of pipelines we want to optimize over.
@@ -323,8 +331,7 @@ task = as_task_classif(credit_data, target = "Status")
 g = po("imputesample", id = "impute") %>>%
   po("encode", param_vals = list(method = "one-hot")) %>>%
   po("scale") %>>%
-  po("learner", lrn("classif.ranger",
-    param_vals = list(num.trees = 200, mtry = 12))
+  po("learner", lrn("classif.ranger", num.trees = 200, mtry = 12))
 
 # We can visualize what happens to the data using the `plot` function:
 g$plot()
