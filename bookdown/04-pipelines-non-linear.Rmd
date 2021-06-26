@@ -10,10 +10,10 @@ These channels make it possible to create non-linear Graphs with alternative pat
 
 Possible types are:
 
-- [Branching](#pipe-model-ensembles-branching):
+- [Branching](#pipe-model-ensembles-branching-copying):
   Splitting of a node into several paths, e.g. useful when comparing multiple feature-selection methods (pca, filters).
   Only one path will be executed.
-- [Copying](#pipe-model-ensembles-copying):
+- [Copying](#pipe-model-ensembles-branching-copying):
   Splitting of a node into several paths, all paths will be executed (sequentially).
   Parallel execution is not yet supported.
 - [Stacking](#pipe-model-ensembles-stacking):
@@ -46,11 +46,11 @@ It is important to "unbranch" again after "branching", so that the outputs are m
 In the following we first create the branched graph and then show what happens if the "unbranching" is not applied:
 
 ```{r 04-pipelines-non-linear-003, eval = TRUE}
-graph = mlr_pipeops$get("branch", c("nop", "pca", "scale")) %>>%
+graph = po("branch", c("nop", "pca", "scale")) %>>%
   gunion(list(
-      mlr_pipeops$get("nop", id = "null1"),
-      mlr_pipeops$get("pca"),
-      mlr_pipeops$get("scale")
+      po("nop", id = "null1"),
+      po("pca"),
+      po("scale")
   ))
 ```
 
@@ -63,7 +63,7 @@ graph$plot(html = FALSE)
 Now when "unbranching", we obtain the following results:
 
 ```{r 04-pipelines-non-linear-005}
-(graph %>>% mlr_pipeops$get("unbranch", c("nop", "pca", "scale")))$plot(html = FALSE)
+(graph %>>% po("unbranch", c("nop", "pca", "scale")))$plot(html = FALSE)
 ```
 
 The same can be achieved using a shorter notation:
@@ -86,7 +86,7 @@ This allows us to form powerful graphs.
 Before we go into details, we split the task into train and test indices.
 
 ```{r 04-pipelines-non-linear-007}
-task = mlr_tasks$get("iris")
+task = tsk("iris")
 train.idx = sample(seq_len(task$nrow), 120)
 test.idx = setdiff(seq_len(task$nrow), train.idx)
 ```
@@ -113,8 +113,8 @@ knitr::include_graphics("images/nonlinear_pipeops.svg")
 First, we create a simple pipeline, that uses `r ref("PipeOpSubsample")` before a `r ref("PipeOpLearner")` is trained:
 
 ```{r 04-pipelines-non-linear-009}
-single_pred = PipeOpSubsample$new(param_vals = list(frac = 0.7)) %>>%
-  PipeOpLearner$new(mlr_learners$get("classif.rpart"))
+single_pred = po("subsample", frac = 0.7) %>>%
+   po("learner", lrn("classif.rpart"))
 ```
 
 We can now copy this operation 10 times using `r ref("pipeline_greplicate")`.
@@ -129,7 +129,7 @@ Afterwards we need to aggregate the 10 pipelines to form a single model:
 
 ```{r 04-pipelines-non-linear-011}
 bagging = pred_set %>>%
-  PipeOpClassifAvg$new(innum = 10L)
+  po("classifavg", innum = 10)
 ```
 
 Now we can plot again to see what happens:
@@ -141,7 +141,7 @@ bagging$plot(html = FALSE)
 This pipeline can again be used in conjunction with `r ref("GraphLearner")`  in order for Bagging to be used like a `r ref("Learner")`:
 
 ```{r 04-pipelines-non-linear-013}
-baglrn = GraphLearner$new(bagging)
+baglrn = as_learner(bagging)
 baglrn$train(task, train.idx)
 baglrn$predict(task, test.idx)
 ```
@@ -175,8 +175,8 @@ Additionally, we `clone()` the learner object to obtain a copy of the learner.
 Subsequently, one sets a custom id for the `r ref("PipeOp")` .
 
 ```{r 04-pipelines-non-linear-015, eval = FALSE}
-lrn = mlr_learners$get("classif.rpart")
-lrn_0 = PipeOpLearnerCV$new(lrn$clone())
+lrn = lrn("classif.rpart")
+lrn_0 = po("learner_cv", lrn$clone())
 lrn_0$id = "rpart_cv"
 ```
 
@@ -184,24 +184,24 @@ We use `r ref("PipeOpNOP")`  in combination with `r ref("gunion")`, in order to 
 There it is combined with the predictions from our decision tree learner.
 
 ```{r 04-pipelines-non-linear-016, eval = FALSE}
-level_0 = gunion(list(lrn_0, PipeOpNOP$new()))
+level_0 = gunion(list(lrn_0, po("nop")))
 ```
 
 Afterwards, we want to concatenate the predictions from `r ref("PipeOpLearnerCV")`  and the original Task using `r ref("PipeOpFeatureUnion")` :
 
 ```{r 04-pipelines-non-linear-017, eval = FALSE}
-combined = level_0 %>>% PipeOpFeatureUnion$new(2)
+combined = level_0 %>>% po("featureunion", 2)
 ```
 
 Now we can train another learner on top of the combined features:
 
 ```{r 04-pipelines-non-linear-018, fig.width=7.5, eval = FALSE}
-stack = combined %>>% PipeOpLearner$new(lrn$clone())
+stack = combined %>>% po("learner", lrn$clone())
 stack$plot(html = FALSE)
 ```
 
 ```{r 04-pipelines-non-linear-019, eval = FALSE}
-stacklrn = GraphLearner$new(stack)
+stacklrn = as_learner(stack)
 stacklrn$train(task, train.idx)
 stacklrn$predict(task, test.idx)
 ```
@@ -231,37 +231,36 @@ rprt = lrn("classif.rpart", predict_type = "prob")
 glmn = lrn("classif.glmnet", predict_type = "prob")
 
 #  Create Learner CV Operators
-lrn_0 = PipeOpLearnerCV$new(rprt, id = "rpart_cv_1")
+lrn_0 = po("learner_cv", rprt, id = "rpart_cv_1")
 lrn_0$param_set$values$maxdepth = 5L
-lrn_1 = PipeOpPCA$new(id = "pca1") %>>% PipeOpLearnerCV$new(rprt, id = "rpart_cv_2")
+lrn_1 = po("pca", id = "pca1") %>>% po("learner_cv", rprt, id = "rpart_cv_2")
 lrn_1$param_set$values$rpart_cv_2.maxdepth = 1L
-lrn_2 = PipeOpPCA$new(id = "pca2") %>>% PipeOpLearnerCV$new(glmn)
+lrn_2 = po("pca", id = "pca2") %>>% po("learner_cv", glmn)
 
 # Union them with a PipeOpNULL to keep original features
-level_0 = gunion(list(lrn_0, lrn_1,lrn_2, PipeOpNOP$new(id = "NOP1")))
+level_0 = gunion(list(lrn_0, lrn_1,lrn_2, po("nop", id = "NOP1")))
 
 # Cbind the output 3 times, train 2 learners but also keep level
 # 0 predictions
 level_1 = level_0 %>>%
-  PipeOpFeatureUnion$new(4) %>>%
-  PipeOpCopy$new(3) %>>%
+  po("featureunion", 4) %>>%
+  po("copy", 3) %>>%
   gunion(list(
-    PipeOpLearnerCV$new(rprt, id = "rpart_cv_l1"),
-    PipeOpLearnerCV$new(glmn, id = "glmnt_cv_l1"),
-    PipeOpNOP$new(id = "NOP_l1")
+    po("learner_cv", rprt, id = "rpart_cv_l1"),
+    po("learner_cv", glmn, id = "glmnt_cv_l1"),
+    po("nop", id = "NOP_l1")
   ))
 
 # Cbind predictions, train a final learner
 level_2 = level_1 %>>%
-  PipeOpFeatureUnion$new(3, id = "u2") %>>%
-  PipeOpLearner$new(rprt,
-    id = "rpart_l2")
+  po("featureunion", 3, id = "u2") %>>%
+  po("learner", rprt, id = "rpart_l2")
 
 # Plot the resulting graph
 level_2$plot(html = FALSE)
 
 task = tsk("iris")
-lrn = GraphLearner$new(level_2)
+lrn = as_learner(level_2)
 ```
 
 And we can again call `.$train` and `.$predict`:
