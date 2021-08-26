@@ -14,7 +14,7 @@ render_mlr3book = function(format = "html", ...) {
 
   withr::with_dir(source_dir, {
     if ("html" %in% format) {
-      bookdown::render_book(input = "index.Rmd", "bookdown::gitbook", envir = new.env(), ...)
+      bookdown::render_book(input = "index.Rmd", "bookdown::bs4_book", envir = new.env(), ...)
     }
 
     if ("pdf" %in% format) {
