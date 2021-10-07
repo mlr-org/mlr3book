@@ -1,7 +1,9 @@
 ## Resampling {#resampling}
 
-Resampling strategies are usually used to assess the performance of a learning algorithm.
-`mlr3` entails the following predefined [resampling](#resampling) strategies:
+When evaluating the performance of a model, we are interested in its generalization performance -- how well will it perform on new data that has not been seen during training?
+We can estimate the generalization performance by evaluating a model on a test set, as we have done above, that was created to contain only observations that are not contained in the training set.
+There are many different strategies for partitioning a data set into training and test; in `mlr3` we call these strategies "resampling".
+`mlr3` includes the following predefined [resampling](#resampling) strategies:
 
 - `r ref("mlr_resamplings_cv", text = "cross validation")` (`"cv"`),
 - `r ref("mlr_resamplings_loo", text = "leave-one-out cross validation")` (`"loo"`),
@@ -12,9 +14,12 @@ Resampling strategies are usually used to assess the performance of a learning a
 - `r ref("mlr_resamplings_insample", text = "in-sample resampling")` (`"insample"`), and
 - `r ref("mlr_resamplings_custom", text = "custom resampling")` (`"custom"`).
 
-The following sections provide guidance on how to set and select a resampling strategy and how to subsequently instantiate the resampling process.
+In particular, it is often desirable to repeatedly split the entire data in different ways to ensure that a "lucky" or "unlucky" split does not bias the generalization performance estimate.
+Without resampling strategies like the ones we provide here, this is a tedious and error-prone process.
 
-Here is a graphical illustration of the resampling process:
+The following sections provide guidance on how to select a resampling strategy and how to use it.
+
+Here is a graphical illustration of the resampling process in general:
 
 ```{r 02-basics-resampling-001, echo=FALSE}
 knitr::include_graphics("images/ml_abstraction.svg")
@@ -22,7 +27,7 @@ knitr::include_graphics("images/ml_abstraction.svg")
 
 ### Settings {#resampling-settings}
 
-In this example we use the `r ref("mlr_tasks_penguins", text = "penguins")` task and a simple classification tree from the `r cran_pkg("rpart")` package once again.
+We will use the `r ref("mlr_tasks_penguins", text = "penguins")` task and a simple classification tree from the `r cran_pkg("rpart")` package as an example here.
 
 ```{r 02-basics-resampling-002}
 library("mlr3verse")
@@ -32,15 +37,15 @@ learner = lrn("classif.rpart")
 ```
 
 When performing resampling with a dataset, we first need to define which approach should be used.
-`r mlr_pkg("mlr3")` resampling strategies and their parameters can be queried by looking at the `data.table` output of the `mlr_resamplings` dictionary:
+`r mlr_pkg("mlr3")` resampling strategies and their parameters can be queried by looking at the `data.table` output of the `mlr_resamplings` dictionary; this also lists the parameters that can be changed to affect the behavior of each strategy:
 
 ```{r 02-basics-resampling-003}
 as.data.table(mlr_resamplings)
 ```
-Additional resampling methods for special use cases will be available via extension packages, such as `r gh_pkg("mlr-org/mlr3spatiotemporal")` for spatial data.
+Additional resampling methods for special use cases are available via extension packages, such as `r gh_pkg("mlr-org/mlr3spatiotemporal")` for spatial data.
 
-The model fit conducted in the [train/predict/score](#train-predict) chapter is equivalent to a "holdout resampling", so let's consider this one first.
-Again, we can retrieve elements from the dictionary `r ref("mlr_resamplings")` via `$get()` or with the convenience function`r ref("rsmp()")`:
+What we showed in the [train/predict/score](#train-predict) part is the equivalent of holdout resampling, done manually, so let's consider this one first.
+We can retrieve elements from the dictionary `r ref("mlr_resamplings")` via `$get()` or the convenience function`r ref("rsmp()")`:
 
 ```{r 02-basics-resampling-004}
 resampling = rsmp("holdout")
@@ -48,11 +53,10 @@ print(resampling)
 ```
 
 Note that the `$is_instantiated` field is set to `FALSE`.
-This means we did not actually apply the strategy on a dataset yet.
-Applying the strategy on a dataset is done in the next section [Instantiation](#resampling-inst).
+This means we did not actually apply the strategy to a dataset yet.
 
-By default we get a .66/.33 split of the data.
-There are two ways in which the ratio can be changed:
+By default we get a .66/.33 split of the data into training and test.
+There are two ways in which this ratio can be changed:
 
 1. Overwriting the slot in `$param_set$values` using a named list:
 
@@ -68,30 +72,28 @@ rsmp("holdout", ratio = 0.8)
 
 ### Instantiation {#resampling-inst}
 
-So far we just set the stage and selected the resampling strategy.
+So far we have only chosen a resampling strategy; we now need to instantiate it with data.
 
-To actually perform the splitting and obtain indices for the training and the test split the resampling needs a `r ref("Task")`.
+To actually perform the splitting and obtain indices for the training and the test split, the resampling needs a `r ref("Task")`.
 By calling the method `instantiate()`, we split the indices of the data into indices for training and test sets.
 These resulting indices are stored in the `r ref("Resampling")` objects.
-To better illustrate the following operations, we switch to a `r ref("mlr_resamplings_cv", text = "3-fold cross-validation")`:
 
 ```{r 02-basics-resampling-007}
-resampling = rsmp("cv", folds = 3)
 resampling$instantiate(task)
-resampling$iters
 str(resampling$train_set(1))
 str(resampling$test_set(1))
 ```
 
-Note that if you want to compare multiple [Learners](#learners) in a fair manner, using the same instantiated resampling for each learner is mandatory.
-A way to greatly simplify the comparison of multiple learners is discussed in the [next section on benchmarking](#benchmarking).
+Note that if you want to compare multiple [Learners](#learners) in a fair manner, using the same instantiated resampling for each learner is mandatory, such that each learner gets exactly the same training data and the performance of the trained model is evaluated in exactly the same test set.
+A way to greatly simplify the comparison of multiple learners is discussed in the [section on benchmarking](#benchmarking).
 
 
 ### Execution {#resampling-exec}
 
-With a `r ref("Task")`, a `r ref("Learner")` and a `r ref("Resampling")` object we can call `r ref("resample()")`, which repeatedly fits the learner to the task at hand according to the given resampling strategy.
-This in turn creates a `r ref("ResampleResult")` object.
-We tell `r ref("resample()")` to keep the fitted models by setting the `store_models` option to `TRUE`and then start the computation:
+With a `r ref("Task")`, a `r ref("Learner")`, and a `r ref("Resampling")` object we can call `r ref("resample()")`, which fits the learner on the training set and evaluates it on the test set.
+This may happen multiple times, depending on the given resampling strategy.
+The result of running the `r ref("resample()")` function is a `r ref("ResampleResult")` object.
+We can tell `r ref("resample()")` to keep the fitted models (for example for later inspection) by setting the `store_models` option to `TRUE`and then starting the computation:
 
 ```{r 02-basics-resampling-008}
 task = tsk("penguins")
@@ -102,9 +104,11 @@ rr = resample(task, learner, resampling, store_models = TRUE)
 print(rr)
 ```
 
-The returned `r ref("ResampleResult")` stored as `rr` provides various getters to access the stored information:
+Here we use a three-fold cross-validation resampling, which trains and evaluates on three different training and test sets.
+The returned `r ref("ResampleResult")`, stored as `rr`, provides various getters to access and aggregate the stored information.
+Here are a few examples:
 
-- Calculate the average performance across all resampling iterations:
+- Calculate the average performance across all resampling iterations, in terms of classification error:
 
     ```{r 02-basics-resampling-009}
     rr$aggregate(msr("classif.ce"))
@@ -114,13 +118,16 @@ The returned `r ref("ResampleResult")` stored as `rr` provides various getters t
     ```{r 02-basics-resampling-010}
     rr$score(msr("classif.ce"))
     ```
+
+  This is useful to check if one (or more) of the iterations are very different from the average.
+
 - Check for warnings or errors:
 
     ```{r 02-basics-resampling-011}
     rr$warnings
     rr$errors
     ```
-- Extract and inspect the resampling splits:
+- Extract and inspect the resampling splits; this allows to see in detail which observations were used for what purpose when:
 
     ```{r 02-basics-resampling-012}
     rr$resampling
@@ -128,19 +135,19 @@ The returned `r ref("ResampleResult")` stored as `rr` provides various getters t
     str(rr$resampling$test_set(1))
     str(rr$resampling$train_set(1))
     ```
-- Retrieve the [learner](#learners) of a specific iteration and inspect it:
+- Retrieve the model trained in a specific iteration and inspect it, for example to investigate why the performance in this iteration was very different from the average:
 
     ```{r 02-basics-resampling-013}
     lrn = rr$learners[[1]]
     lrn$model
     ```
-- Extract the predictions:
+- Extract the individual predictions:
 
     ```{r 02-basics-resampling-014}
     rr$prediction() # all predictions merged into a single Prediction object
-    rr$predictions()[[1]] # prediction of first resampling iteration
+    rr$predictions()[[1]] # predictions of first resampling iteration
     ```
-- Filter to only keep specified iterations:
+- Filter the result to only keep specified resampling iterations:
 
     ```{r 02-basics-resampling-015}
     rr$filter(c(1, 3))
@@ -165,26 +172,15 @@ resampling$test_set(1)
 
 ### Resampling with (predefined) groups
 
-One can denote that certain observations should be grouped during resampling, meaning they will always either belong to the train or test set.
-This characteristic must be defined via column role `"group"` during Task creation (see also the [help page](https://mlr3.mlr-org.com/reference/Resampling.html#grouping-blocking) on this column role).
-In {mlr} this was previously called "blocking".
+In some cases, it is desirable to keep observations together, i.e. to not separate them into training and test set.
+This can be defined through the column role `"group"` during Task creation, i.e. a special column in the data specifies the groups (see also the [help page](https://mlr3.mlr-org.com/reference/Resampling.html#grouping-blocking) on this column role).
+In `mlr` this was called "blocking".
 See also the mlr3gallery post on [this topic](https://mlr3gallery.mlr-org.com/posts/2020-03-30-stratification-blocking/) for a practical example.
-
-An even more strict approach is to supply a custom grouping structure which solely makes up one fold.
-{mlr3} supports this via the `"custom_cv"` resampling method.
-This method accepts a factor vector with the same length as `task$nrow()` or a string of an existing variable in the data.
-Note that this approach does not allow setting the "folds" argument because the number of folds is determined by the number of factor levels.
-This predefined approach was called "grouping" in mlr2.
-
-```{block, type='rmdcaution'}
-The term "blocking" is overloaded in the resampling context.
-In the field of spatial resampling (see `r mlr_pkg("mlr3spatiotempcv")`), "blocking" is used as a general concept for grouping observations while on the other hand there are also specific resampling methods which have "blocking" in their name (`"spcv_block") and focus on rectangular partitioning.
-```
 
 ### Plotting Resample Results {#autoplot-resampleresult}
 
-`r mlr_pkg("mlr3viz")` provides a `r ref("ggplot2::autoplot()", text = "autoplot()")` method.
-To showcase some of the plots, we create a binary classification task with two features, perform a resampling with a 10-fold cross validation and visualize the results:
+`r mlr_pkg("mlr3viz")` provides a `r ref("ggplot2::autoplot()", text = "autoplot()")` method for resampling results.
+As an example, we create a binary classification task with two features, perform a resampling with a 10-fold cross-validation and visualize the results:
 
 ```{r 02-basics-resampling-017}
 task = tsk("pima")
@@ -197,26 +193,15 @@ autoplot(rr, measure = msr("classif.auc"))
 
 # ROC curve, averaged over 10 folds
 autoplot(rr, type = "roc")
+```
 
-# learner predictions for first fold
+We can also plot the predictions of individual models:
+
+
+```{r 02-basics-resampling-017-1}
+# learner predictions for the first fold
 rr$filter(1)
 autoplot(rr, type = "prediction")
 ```
 
 All available plot types are listed on the manual page of `r ref("autoplot.ResampleResult()")`.
-
-### Plotting Resample Partitions {#autoplot-resample-partition}
-
-`r mlr_pkg("mlr3spatiotempcv")` provides `autoplot()` methods to visualize resampling partitions of spatiotemporal datasets.
-See the [function reference](https://mlr3spatiotempcv.mlr-org.com/reference) and vignette ["Spatiotemporal visualization"](https://mlr3spatiotempcv.mlr-org.com/articles/spatiotemp-viz.html) for more info.
-
-```{r 02-basics-resampling-018, echo=FALSE}
-library("mlr3spatiotempcv")
-task = tsk("ecuador")
-resampling = rsmp("cv")
-resampling$instantiate(task)
-
-autoplot(resampling, task, fold_id = c(1, 2), crs = 4326) *
-  ggplot2::scale_x_continuous(breaks = seq(-79.085, -79.055, 0.01))
-```
-
