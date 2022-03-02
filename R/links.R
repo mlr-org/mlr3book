@@ -73,10 +73,11 @@ ref = function(topic, text = topic, format = "markdown") {
 ref_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
+  pkg = trimws(pkgs)
 
   if (grepl("/", pkg, fixed = TRUE)) {
     gh_pkg(pkg, format = format)
-  } else if (trimws(pkg) %in% db$hosted) {
+  } else if (pkg %in% db$hosted) {
     mlr_pkg(pkg, format = format)
   } else {
     cran_pkg(pkg, format = format)
@@ -141,8 +142,9 @@ mlr_pkg = function(pkg, format = "markdown") {
 gh_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
+  pkg = trimws(pkg)
 
-  parts = strsplit(trimws(pkg), "/", fixed = TRUE)[[1L]]
+  parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://github.com/%s", pkg)
   switch(format,
     "markdown" = sprintf("[%s](%s)", parts[2L], url),
