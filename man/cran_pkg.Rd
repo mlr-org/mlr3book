@@ -4,10 +4,12 @@
 \alias{cran_pkg}
 \title{Hyperlink to CRAN Package}
 \usage{
-cran_pkg(pkg)
+cran_pkg(pkg, format = "markdown")
 }
 \arguments{
-\item{pkg}{Name of the CRAN package.}
+\item{pkg}{Name of the package.}
+
+\item{format}{Either markdown or HTML.}
 }
 \value{
 (\code{character(1)}) markdown link.
