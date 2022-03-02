@@ -13,14 +13,16 @@ update_db = function() {
 #'
 #' @param topic Name of the topic to link against.
 #' @param text Text to use for the link. Defaults to the topic name.
+#' @param format Either markdown or HTML.
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = topic) {
+ref = function(topic, text = topic, format = "markdown") {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
   checkmate::assert_string(text, min.chars = 1L)
+  checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
   text = trimws(text)
@@ -47,10 +49,15 @@ ref = function(topic, text = topic) {
   }
 
   if (pkg %in% db$hosted) {
-    sprintf("[`%s`](https://%s.mlr-org.com/reference/%s.html)", text, pkg, name)
+    url = sprintf("https://%s.mlr-org.com/reference/%s.html", pkg, name)
   } else {
-    sprintf("[`%s`](https://www.rdocumentation.org/packages/%s/topics/%s)", text, pkg, name)
+    url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
+
+  switch(format,
+    "markdown" = sprintf("[`%s`](%s)", text, url),
+    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
+  )
 }
 
 #' @title Hyperlink to CRAN Package
