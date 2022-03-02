@@ -66,6 +66,7 @@ ref = function(topic, text = topic, format = "markdown") {
 #' Links either to respective mlr3 website or to CRAN page.
 #'
 #' @param pkg Name of the package.
+#' @inheritParams ref
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
@@ -73,7 +74,9 @@ ref_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
 
-  if (trimws(pkg) %in% db$hosted) {
+  if (grepl("/", pkg, fixed = TRUE)) {
+    gh_pkg(pkg, format = format)
+  } else if (trimws(pkg) %in% db$hosted) {
     mlr_pkg(pkg, format = format)
   } else {
     cran_pkg(pkg, format = format)
@@ -85,19 +88,23 @@ ref_pkg = function(pkg, format = "markdown") {
 #' @description
 #' Creates a markdown link to a CRAN package.
 #'
-#' @param pkg Name of the CRAN package.
+#' @inheritParams ref_pkg
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
 cran_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
+  pkg = trimws(pkg)
 
   if (pkg %in% c("stats", "graphics", "datasets")) {
-    trimws(pkg)
-  } else {
-    sprintf("[%1$s](https://cran.r-project.org/package=%1$s)", trimws(pkg))
+    return(pkg)
   }
+  url = sprintf("https://cran.r-project.org/package=%s", pkg)
+  switch(format,
+    "markdown" = sprintf("[%s](%s)", pkg, url),
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
+  )
 }
 
 #' @title Hyperlink to mlr3 Package
@@ -105,15 +112,20 @@ cran_pkg = function(pkg, format = "markdown") {
 #' @description
 #' Creates a markdown link to a mlr3 package with a "mlr-org.com" subdomain.
 #'
-#' @param pkg Name of the mlr3 package.
+#' @inheritParams ref_pkg
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
 mlr_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
+  pkg = trimws(pkg)
 
-  sprintf("[%1$s](https://%1$s.mlr-org.com)", trimws(pkg))
+  url = sprintf("https://%1$s.mlr-org.com", pkg)
+  switch(format,
+    "markdown" = sprintf("[%s](%s)", pkg, url),
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
+  )
 }
 
 #' @title Hyperlink to GitHub Repository
@@ -122,11 +134,18 @@ mlr_pkg = function(pkg, format = "markdown") {
 #' Creates a markdown link to GitHub repository.
 #'
 #' @param pkg Name of the repository specified as "{repo}/{name}".
+#' @inheritParams ref_pkg
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
 gh_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
+  checkmate::assert_choice(format, c("markdown", "html"))
+
   parts = strsplit(trimws(pkg), "/", fixed = TRUE)[[1L]]
-  sprintf("[%s](https://github.com/%s)", parts[2L], pkg)
+  url = sprintf("https://github.com/%s", pkg)
+  switch(format,
+    "markdown" = sprintf("[%s](%s)", parts[2L], url),
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
+  )
 }

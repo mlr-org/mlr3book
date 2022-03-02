@@ -4,10 +4,12 @@
 \alias{mlr_pkg}
 \title{Hyperlink to mlr3 Package}
 \usage{
-mlr_pkg(pkg)
+mlr_pkg(pkg, format = "markdown")
 }
 \arguments{
-\item{pkg}{Name of the mlr3 package.}
+\item{pkg}{Name of the package.}
+
+\item{format}{Either markdown or HTML.}
 }
 \value{
 (\code{character(1)}) markdown link.

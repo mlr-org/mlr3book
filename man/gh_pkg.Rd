@@ -4,10 +4,12 @@
 \alias{gh_pkg}
 \title{Hyperlink to GitHub Repository}
 \usage{
-gh_pkg(pkg)
+gh_pkg(pkg, format = "markdown")
 }
 \arguments{
 \item{pkg}{Name of the repository specified as "{repo}/{name}".}
+
+\item{format}{Either markdown or HTML.}
 }
 \value{
 (\code{character(1)}) markdown link.
