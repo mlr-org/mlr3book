@@ -60,6 +60,26 @@ ref = function(topic, text = topic, format = "markdown") {
   )
 }
 
+#' @title Hyperlink to Package
+#'
+#' @description
+#' Links either to respective mlr3 website or to CRAN page.
+#'
+#' @param pkg Name of the package.
+#'
+#' @return (`character(1)`) markdown link.
+#' @export
+ref_pkg = function(pkg, format = "markdown") {
+  checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
+  checkmate::assert_choice(format, c("markdown", "html"))
+
+  if (trimws(pkg) %in% db$hosted) {
+    mlr_pkg(pkg, format = format)
+  } else {
+    cran_pkg(pkg, format = format)
+  }
+}
+
 #' @title Hyperlink to CRAN Package
 #'
 #' @description
@@ -69,10 +89,12 @@ ref = function(topic, text = topic, format = "markdown") {
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-cran_pkg = function(pkg) {
+cran_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
+  checkmate::assert_choice(format, c("markdown", "html"))
+
   if (pkg %in% c("stats", "graphics", "datasets")) {
-    sprintf("%1$s", trimws(pkg))
+    trimws(pkg)
   } else {
     sprintf("[%1$s](https://cran.r-project.org/package=%1$s)", trimws(pkg))
   }
@@ -87,8 +109,10 @@ cran_pkg = function(pkg) {
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-mlr_pkg = function(pkg) {
+mlr_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
+  checkmate::assert_choice(format, c("markdown", "html"))
+
   sprintf("[%1$s](https://%1$s.mlr-org.com)", trimws(pkg))
 }
 
@@ -101,7 +125,7 @@ mlr_pkg = function(pkg) {
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-gh_pkg = function(pkg) {
+gh_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
   parts = strsplit(trimws(pkg), "/", fixed = TRUE)[[1L]]
   sprintf("[%s](https://github.com/%s)", parts[2L], pkg)
