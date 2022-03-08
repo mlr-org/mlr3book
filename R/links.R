@@ -73,7 +73,7 @@ ref = function(topic, text = topic, format = "markdown") {
 ref_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
-  pkg = trimws(pkgs)
+  pkg = trimws(pkg)
 
   if (grepl("/", pkg, fixed = TRUE)) {
     gh_pkg(pkg, format = format)
