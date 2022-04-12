@@ -2,34 +2,63 @@
 
 ```{r 04-pipelines-special-pipeops-001, include = FALSE}
 library("mlr3pipelines")
+library("mlr3")
 ```
 
 This section introduces some special operators, that might be useful in numerous further applications.
 
 ### Imputation: `PipeOpImpute`
 
-An often occurring setting is the imputation of missing data.
-Imputation methods range from relatively simple imputation using either *mean*, *median* or histograms to way more involved methods including using machine learning algorithms in order to predict missing values.
+Often you will be using data sets that have missing values. There are many methods of dealing with this issue, from relatively simple imputation using either mean, median or histograms to way more involved methods including using machine learning algorithms in order to predict missing values. These methods are called imputation.
 
 The following `PipeOp`s, `r ref("PipeOpImpute")`:
 
+- Add an indicator column marking whether a value for a given feature was missing or not (numeric only)
 - Impute numeric values from a histogram
-- Adds a new level for factors
-- Add a column marking whether a value for a given feature was missing or not (numeric only)
-- We use `po("featureunion")` to cbind the missing indicator features.
+- Impute categorical values using a learner
+- We use `po("featureunion")` and `po("nop")` to cbind the missing indicator features. In other words to combine the indicator columns with the rest of the data.
 
 ```{r 04-pipelines-special-pipeops-002}
+# Imputation example
+task = tsk("penguins")
+task$missings()
+
+# Add missing indicator columns ("dummy columns") to the Task
 pom = po("missind")
-pon = po("imputehist", id = "imputer_num", affect_columns = is.numeric)
-pof = po("imputeoor", id = "imputer_fct", affect_columns = is.factor)
-imputer = pom %>>% pon %>>% pof
+# Simply pushes the input forward
+nop = po("nop")
+# Imputes numerical features by histogram.
+pon = po("imputehist", id = "imputer_num")
+# combines features (used here to add indicator columns to original data)
+pou = po("featureunion")
+# Impute categorical features by fitting a Learner ("classif.rpart") for each feature.
+pof = po("imputelearner", lrn("classif.rpart"), id = "imputer_fct", affect_columns = selector_type("factor"))
+```
+
+Now we construct the graph.
+
+```{r 04-pipelines-special-pipeops-003}
+impgraph = list(
+  pom,
+  nop
+) %>>% pou %>>% pof %>>% pon  
+
+impgraph$plot()
+```
+
+Now we get the new task and we can see that all of the missing values have been imputed.
+
+```{r 04-pipelines-special-pipeops-004}
+new_task = impgraph$train(task)[[1]]
+
+new_task$missings()
 ```
 
 A learner can thus be equipped with automatic imputation of missing values by adding an imputation Pipeop.
 
-```{r 04-pipelines-special-pipeops-003}
+```{r 04-pipelines-special-pipeops-005}
 polrn = po("learner", lrn("classif.rpart"))
-lrn = as_learner(imputer %>>% polrn)
+lrn = as_learner(impgraph %>>% polrn)
 ```
 
 ### Feature Engineering: `PipeOpMutate`
@@ -39,7 +68,16 @@ The operator evaluates one or multiple expressions provided in an `alist`.
 In this example, we compute some new features on top of the `iris` task.
 Then we add them to the data as illustrated below:
 
-```{r 04-pipelines-special-pipeops-004}
+`iris` dataset looks like this:
+
+```{r 04-pipelines-special-pipeops-006}
+task = task = tsk("iris")
+head(as.data.table(task))
+```
+
+Once we do the mutations, you can see the new columns:
+
+```{r 04-pipelines-special-pipeops-007}
 pom = po("mutate")
 
 # Define a set of mutations
@@ -49,6 +87,9 @@ mutations = list(
   Sepal.Petal.Ratio = ~ (Sepal.Length / Petal.Length)
 )
 pom$param_set$values$mutation = mutations
+
+new_task = pom$train(list(task))[[1]]
+head(as.data.table(new_task))
 ```
 
 If outside data is required, we can make use of the `env` parameter.
@@ -63,25 +104,25 @@ After undertaking these steps, we aggregate the models.
 In this example, we split our data into 4 parts using `r ref("PipeOpChunk")` .
 Additionally, we create 4 `r ref("PipeOpLearner")`  POS, which are then trained on each split of the data.
 
-```{r 04-pipelines-special-pipeops-005}
+```{r 04-pipelines-special-pipeops-007}
 chks = po("chunk", 4)
 lrns = ppl("greplicate", po("learner", lrn("classif.rpart")), 4)
 ```
 
 Afterwards we can use `r ref("PipeOpClassifAvg")`  to aggregate the predictions from the 4 different models into a new one.
 
-```{r 04-pipelines-special-pipeops-006}
+```{r 04-pipelines-special-pipeops-008}
 mjv = po("classifavg", 4)
 ```
 
 We can now connect the different operators and visualize the full graph:
 
-```{r 04-pipelines-special-pipeops-007, fig.width=7.5, fig.height = 9}
+```{r 04-pipelines-special-pipeops-009, fig.width=7.5, fig.height = 9}
 pipeline = chks %>>% lrns %>>% mjv
 pipeline$plot(html = FALSE)
 ```
 
-```{r 04-pipelines-special-pipeops-008}
+```{r 04-pipelines-special-pipeops-010}
 task = tsk("iris")
 train.idx = sample(seq_len(task$nrow), 120)
 test.idx = setdiff(seq_len(task$nrow), train.idx)
@@ -100,7 +141,7 @@ This is often required when the data has a large amount of features.
 
 A `PipeOp` for filters is `r ref("PipeOpFilter")`:
 
-```{r 04-pipelines-special-pipeops-009}
+```{r 04-pipelines-special-pipeops-011}
 po("filter", mlr3filters::flt("information_gain"))
 ```
 
