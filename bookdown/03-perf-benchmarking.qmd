@@ -1,0 +1,154 @@
+## Benchmarking {#benchmarking}
+
+Comparing the performance of different learners on multiple tasks and/or different resampling schemes is a common task.
+This operation is usually referred to as "benchmarking" in the field of machine learning.
+The `r mlr3book::mlr_pkg("mlr3")` package offers the `"benchmark()"` convenience function that takes care of most of the work of repeatedly training and evaluating models under the same conditions.
+
+### Design Creation {#bm-design}
+
+Benchmark experiments in `mlr3` are specified through a design.
+Such a design is essentially a table of scenarios to be evaluated; in particular unique combinations of `"Task")`, `"Learner")` and `"Resampling")` triplets.
+
+We use the `"benchmark_grid()"` function to create an exhaustive design (that evaluates each learner on each task with each resampling) and instantiate the resampling properly, so that all learners are executed on the same train/test split for each tasks.
+We set the learners to predict probabilities and also tell them to predict for the observations of the training set (by setting `predict_sets` to `c("train", "test")`).
+Additionally, we use `"tsks()"`, `"lrns()"`, and `"rsmps()"` to retrieve lists of `"Task")`, `"Learner")` and `"Resampling")` in the same fashion as `"tsk()"`, `"lrn()"` and `"rsmp()"`.
+
+```{r 02-basics-benchmarking-001}
+library("mlr3verse")
+
+design = benchmark_grid(
+  tasks = tsks(c("spam", "german_credit", "sonar")),
+  learners = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"),
+    predict_type = "prob", predict_sets = c("train", "test")),
+  resamplings = rsmps("cv", folds = 3)
+)
+print(design)
+```
+
+The created `design` can be passed to `"benchmark()"` to start the computation.
+It is also possible to create a custom design manually, for example to exclude certain task-learner combinations.
+However, if you create a custom task with `data.table()`, the train/test splits will be different for each row of the design if you do not [**manually instantiate**](#resampling-inst) the resampling before creating the design.
+See the help page on `"benchmark_grid()"` for an example.
+
+
+### Execution and Aggregation of Results {#bm-exec}
+
+After the [benchmark design](#bm-design) is ready, we can call `"benchmark()"` on it:
+
+```{r 02-basics-benchmarking-002}
+bmr = benchmark(design)
+```
+
+Note that we did not have to instantiate the resampling manually.
+`"benchmark_grid()"` took care of it for us: each resampling strategy is instantiated once for each task during the construction of the exhaustive grid.
+
+Once the benchmarking is done (and, depending on the size of your design, this can take quite some time), we can aggregate the performance with `$aggregate()`.
+We create two measures to calculate the area under the curve (AUC) for the training and the test set:
+
+```{r 02-basics-benchmarking-003}
+measures = list(
+  msr("classif.auc", predict_sets = "train", id = "auc_train"),
+  msr("classif.auc", id = "auc_test")
+)
+
+tab = bmr$aggregate(measures)
+print(tab)
+```
+
+We can aggregate the results even further.
+For example, we might be interested to know which learner performed best across all tasks.
+Simply aggregating the performances with the mean is usually not statistically sound.
+Instead, we calculate the rank statistic for each learner, grouped by task.
+Then the calculated ranks, grouped by learner, are aggregated with the `r mlr3book::cran_pkg("data.table")` package.
+As larger AUC scores are better, we multiply the values by $-1$ such that the best learner has a rank of $1$.
+
+```{r 02-basics-benchmarking-004}
+library("data.table")
+# group by levels of task_id, return columns:
+# - learner_id
+# - rank of col '-auc_train' (per level of learner_id)
+# - rank of col '-auc_test' (per level of learner_id)
+ranks = tab[, .(learner_id, rank_train = rank(-auc_train), rank_test = rank(-auc_test)), by = task_id]
+print(ranks)
+
+# group by levels of learner_id, return columns:
+# - mean rank of col 'rank_train' (per level of learner_id)
+# - mean rank of col 'rank_test' (per level of learner_id)
+ranks = ranks[, .(mrank_train = mean(rank_train), mrank_test = mean(rank_test)), by = learner_id]
+
+# print the final table, ordered by mean rank of AUC test
+ranks[order(mrank_test)]
+```
+
+Unsurprisingly, the featureless learner is worse overall.
+The winner is the classification forest, which outperforms a single classification tree.
+
+
+### Plotting Benchmark Results {#autoplot-benchmarkresult}
+
+Similar to [tasks](#autoplot-task), [predictions](#autoplot-prediction), or [resample results](#autoplot-resampleresult), `r mlr3book::mlr_pkg("mlr3viz")` also provides a `"ggplot2::autoplot()", text = "autoplot()"` method for benchmark results.
+
+```{r 02-basics-benchmarking-005}
+autoplot(bmr) + ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+```
+
+Such a plot gives a nice overview of the overall performance and how learners compare on different tasks in an intuitive way.
+
+We can also plot ROC (receiver operating characteristics) curves.
+We filter the `"BenchmarkResult")` to only contain a single `"Task")`, then we simply plot the result:
+
+```{r 02-basics-benchmarking-006}
+bmr_small = bmr$clone()$filter(task_id = "german_credit")
+autoplot(bmr_small, type = "roc")
+```
+
+All available plot types are listed on the manual page of `"autoplot.BenchmarkResult()"`.
+
+### Extracting ResampleResults {#bm-resamp}
+
+A `"BenchmarkResult")` object is essentially a collection of multiple `"ResampleResult")` objects.
+As these are stored in a column of the aggregated `data.table()`, we can easily extract them:
+
+```{r 02-basics-benchmarking-007}
+tab = bmr$aggregate(measures)
+rr = tab[task_id == "german_credit" & learner_id == "classif.ranger"]$resample_result[[1]]
+print(rr)
+```
+
+We can now investigate this resampling and even single resampling iterations using one of the approaches shown in [the previous section](#resampling):
+
+```{r 02-basics-benchmarking-008}
+measure = msr("classif.auc")
+rr$aggregate(measure)
+
+# get the iteration with worst AUC
+perf = rr$score(measure)
+i = which.min(perf$classif.auc)
+
+# get the corresponding learner and training set
+print(rr$learners[[i]])
+head(rr$resampling$train_set(i))
+```
+
+### Converting and Merging
+
+A `"ResampleResult")` can be converted to a `"BenchmarkResult")` with the function `"as_benchmark_result()"`.
+We can also merge two `"BenchmarkResult", text = "BenchmarkResults")` into a larger result object, for example for two related benchmarks that were done on different machines.
+
+
+```{r 02-basics-benchmarking-009}
+task = tsk("iris")
+resampling = rsmp("holdout")$instantiate(task)
+
+rr1 = resample(task, lrn("classif.rpart"), resampling)
+rr2 = resample(task, lrn("classif.featureless"), resampling)
+
+# Cast both ResampleResults to BenchmarkResults
+bmr1 = as_benchmark_result(rr1)
+bmr2 = as_benchmark_result(rr2)
+
+# Merge 2nd BMR into the first BMR
+bmr1$combine(bmr2)
+
+bmr1
+```
