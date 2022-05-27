@@ -18,7 +18,7 @@ install:
 			-e 'devtools::install()'
 
 serve:
-	Rscript -e 'bookdown::serve_book("bookdown")'
+	quarto preview
 
 clean:
 	$(RM) -r book/_book book/_bookdown_files book/mlr3book_files;\
@@ -26,10 +26,10 @@ clean:
 	find -regex '^./bookdown.*files$$' -exec rm -rf {} +;
 
 html:
-	Rscript -e 'mlr3book::render_mlr3book("html")'
+	quarto render --to html
 
 pdf:
-	Rscript -e 'mlr3book::render_mlr3book("pdf")'
+	quarto render --to pdf
 
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
