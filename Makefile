@@ -21,7 +21,7 @@ serve:
 	Rscript -e 'bookdown::serve_book("bookdown")'
 
 clean:
-	$(RM) -r bookdown/_book bookdown/_bookdown_files bookdown/mlr3book_files;\
+	$(RM) -r book/_book book/_bookdown_files book/mlr3book_files;\
 	find -regex '^./bookdown.*cache$$' -exec rm -rf {} +;\
 	find -regex '^./bookdown.*files$$' -exec rm -rf {} +;
 
@@ -35,6 +35,6 @@ names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
 
 bibtex:
-	biber --tool --output-align --output-indent=2 --output-fieldcase=lower bookdown/book.bib -O bookdown/book.bib
-	rm bookdown/book.bib.blg
+	biber --tool --output-align --output-indent=2 --output-fieldcase=lower book/book.bib -O book/book.bib
+	rm book/book.bib.blg
 
