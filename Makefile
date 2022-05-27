@@ -26,10 +26,10 @@ clean:
 	find -regex '^./*_files$$' -exec rm -rf {} +;
 
 html:
-	quarto render book/index.qml --to html
+	quarto render book/index.qmd --to html
 
 pdf:
-	quarto render book/index.qml --to pdf
+	quarto render book/index.qmd --to pdf
 
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
