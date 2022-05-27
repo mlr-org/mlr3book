@@ -21,15 +21,15 @@ serve:
 	quarto preview
 
 clean:
-	$(RM) -r book/_book book/_bookdown_files book/mlr3book_files;\
+	$(RM) -r book/_book book/.quarto book/mlr3book_files;\
 	find -regex '^./bookdown.*cache$$' -exec rm -rf {} +;\
-	find -regex '^./bookdown.*files$$' -exec rm -rf {} +;
+	find -regex '^./*_files$$' -exec rm -rf {} +;
 
 html:
-	quarto render --to html
+	quarto render book/index.qml --to html
 
 pdf:
-	quarto render --to pdf
+	quarto render book/index.qml --to pdf
 
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
