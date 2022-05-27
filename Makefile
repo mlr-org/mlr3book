@@ -21,7 +21,7 @@ serve:
 	quarto preview
 
 clean:
-	$(RM) -r book/_book book/.quarto book/mlr3book_files;\
+	$(RM) -r book/_book book/.quarto book/*_files;\
 	find -regex '^./bookdown.*cache$$' -exec rm -rf {} +;\
 	find -regex '^./*_files$$' -exec rm -rf {} +;
 
