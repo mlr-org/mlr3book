@@ -18,7 +18,7 @@ install:
 			-e 'devtools::install()'
 
 serve:
-	quarto preview
+	quarto preview book/
 
 clean:
 	$(RM) -r book/_book book/.quarto book/*_files;\
