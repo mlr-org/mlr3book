@@ -22,8 +22,8 @@ serve:
 
 clean:
 	$(RM) -r book/_book book/.quarto book/site_libs;\
-	rm book/*.ps$';\
-	rm book/*.dvis$';\
+	find . -name "*.ps" -type f -delete;
+	find . -name "*.dvi" -type f -delete;
 
 html:
 	quarto render book/index.qmd --to html
