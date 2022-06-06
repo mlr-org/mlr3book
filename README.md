@@ -4,7 +4,7 @@
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 [![Mattermost](https://img.shields.io/badge/chat-mattermost-orange.svg)](https://lmmisld-lmu-stats-slds.srv.mwn.de/mlr_invite/)
 
-Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](https://quarto.io).
+Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](https://quarto.org).
 
 ## Rendered Versions
 
@@ -14,21 +14,23 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
 ## Building the book
 
-To install all necessary dependencies for the book, install this R package using [remotes](https://cran.r-project.org/package=remotes):
+1. Install all necessary dependencies for the book
 
-```r
-remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
-```
+   ```r
+   remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
+   ```
 
-To build the book, run one of the following commands:
+1. Install [quarto](https://quarto.org/docs/get-started/)
 
-```bash
-# HTML
-quarto render --to html book/
+1. To build the book, run one of the following commands:
 
-# PDF
-quarto render --to pdf book/
-```
+   ```bash
+   # HTML
+   quarto render --to html book/
+
+   # PDF
+   quarto render --to pdf book/
+   ```
 
 ## Serve the book
 
