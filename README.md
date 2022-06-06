@@ -4,7 +4,7 @@
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 [![Mattermost](https://img.shields.io/badge/chat-mattermost-orange.svg)](https://lmmisld-lmu-stats-slds.srv.mwn.de/mlr_invite/)
 
-Package to build the [mlr3](https://mlr3.mlr-org.com) [bookdown](https://bookdown.org/) book.
+Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](https://quarto.io).
 
 ## Rendered Versions
 
@@ -22,40 +22,37 @@ remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
 
 To build the book, run one of the following commands:
 
-```r
+```bash
 # HTML
-withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
-  output_format = "bookdown::gitbook"))
+quarto render --to html book/
 
 # PDF
-withr::with_dir("bookdown", bookdown::render_book("index.Rmd",
-  output_format = "bookdown::pdf_book"))
+quarto render --to pdf book/
 ```
 
-### Serve the book
+## Serve the book
 
 Alternatively, you "serve" the book via a local server:
 
-```r
-bookdown::serve_book("bookdown")
+```bash
+quarto preview book/
 ```
 
-The command above starts a service which automatically (re-)compiles the bookdown sources in the background whenever a file is modified.
-If your browser does not open automatically, go to http://127.0.0.1:4321/.
+The command above starts a service which automatically (re-)compiles the book sources in the background whenever a file is modified.
 
-### Makefile approach
+## Makefile approach
 
 Alternatively, you can use the provided `Makefile` (c.f. see `make help`).
 This way, you can
 
 - install dependencies
 - build the HTML book -> `make html`
-- build the PDF book (`bookdown:pdf_book`) -> `make pdf`
+- build the PDF book -> `make pdf`
 
 ## File system structure
 
 The root directory is a regular R package.
-The book itself is in the subdirectory "bookdown".
+The book itself is in the subdirectory "book".
 
 ## Style Guide
 
@@ -79,10 +76,10 @@ You have to options to include a figure:
 
 1) Vector graphic
   - In the `Rmd`: `knitr::include_graphics("images/some_figure.svg")`
-  - Add `bookdown/images/some_figure.svg` **and** `bookdown/images/some_figure.pdf` to the repository.
+  - Add `book/images/some_figure.svg` **and** `book/images/some_figure.pdf` to the repository.
 2) Pixel graphic
   - In the `Rmd`: `knitr::include_graphics("images/some_figure.png")`
-  - Add **only** `bookdown/images/some_figure.png` to the repository.
+  - Add **only** `book/images/some_figure.png` to the repository.
 
 * Do not use markdown syntax `[](<figure>)` to include figures.
 * Do not include `pdf` in the `Rmd`: `knitr::include_graphics("images/some_figure.pdf")`.
@@ -91,7 +88,7 @@ You have to options to include a figure:
 
 To add a new figure into the repository consider the following rules:
 
-* Add the file in the `bookdown/images` folder without any subdirectory.
+* Add the file in the `book/images` folder without any subdirectory.
 * Store the original figure as a `svg` file if possible, i.e. if it is a vector graphic.
   This allows us to re-use or modify images in the future.
 * `png` files should have reasonable resolution, i.e. the width of a pixel graphic should be between `400px` and `2000px`.
