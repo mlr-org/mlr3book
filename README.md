@@ -75,14 +75,14 @@ or alternatively executing `make names` from the terminal.
 You have to options to include a figure:
 
 1) Vector graphic
-  - In the `Rmd`: `knitr::include_graphics("images/some_figure.svg")`
+  - In the `qmd`: `knitr::include_graphics("images/some_figure.svg")`
   - Add `book/images/some_figure.svg` **and** `book/images/some_figure.pdf` to the repository.
 2) Pixel graphic
-  - In the `Rmd`: `knitr::include_graphics("images/some_figure.png")`
+  - In the `qmd`: `knitr::include_graphics("images/some_figure.png")`
   - Add **only** `book/images/some_figure.png` to the repository.
 
 * Do not use markdown syntax `[](<figure>)` to include figures.
-* Do not include `pdf` in the `Rmd`: `knitr::include_graphics("images/some_figure.pdf")`.
+* Do not include `pdf` in the `qmd`: `knitr::include_graphics("images/some_figure.pdf")`.
 
 #### Adding a new figure
 
