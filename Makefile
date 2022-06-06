@@ -21,9 +21,9 @@ serve:
 	quarto preview book/
 
 clean:
-	$(RM) -r book/_book book/.quarto book/*_files;\
-	find -regex '^./bookdown.*cache$$' -exec rm -rf {} +;\
-	find -regex '^./*_files$$' -exec rm -rf {} +;
+	$(RM) -r book/_book book/.quarto book/site_libs;\
+	rm book/*.ps$';\
+	rm book/*.dvis$';\
 
 html:
 	quarto render book/index.qmd --to html
