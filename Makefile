@@ -27,10 +27,10 @@ clean:
 	find . -type d -name "*_files" -exec rm -rf {} \;
 
 html:
-	quarto render book/index.qmd --to html
+	quarto render book/ --to html
 
 pdf:
-	quarto render book/index.qmd --to pdf
+	quarto render book/ --to pdf
 
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
