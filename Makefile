@@ -18,23 +18,24 @@ install:
 			-e 'devtools::install()'
 
 serve:
-	Rscript -e 'bookdown::serve_book("bookdown")'
+	quarto preview book/
 
 clean:
-	$(RM) -r bookdown/_book bookdown/_bookdown_files bookdown/mlr3book_files;\
-	find -regex '^./bookdown.*cache$$' -exec rm -rf {} +;\
-	find -regex '^./bookdown.*files$$' -exec rm -rf {} +;
+	$(RM) -r book/_book book/.quarto book/site_libs;\
+	find . -name "*.ps" -type f -delete;
+	find . -name "*.dvi" -type f -delete;
+	find . -type d -name "*_files" -exec rm -rf {} \;
 
 html:
-	Rscript -e 'mlr3book::render_mlr3book("html")'
+	quarto render book/ --to html
 
 pdf:
-	Rscript -e 'mlr3book::render_mlr3book("pdf")'
+	quarto render book/ --to pdf
 
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
 
 bibtex:
-	biber --tool --output-align --output-indent=2 --output-fieldcase=lower bookdown/book.bib -O bookdown/book.bib
-	rm bookdown/book.bib.blg
+	biber --tool --output-align --output-indent=2 --output-fieldcase=lower book/book.bib -O book/book.bib
+	rm book/book.bib.blg
 

@@ -1,0 +1,84 @@
+# Adding new Tuners {#extending-tuners}
+
+```{r 07-extending-tuner-001, include = F}
+library(mlr3)
+library(mlr3book)
+```
+
+In this section, we show how to implement a custom tuner for `r mlr3book::mlr_pkg("mlr3tuning")`.
+The main task of a tuner is to iteratively propose new hyperparameter configurations that we want to evaluate for a given task, learner and validation strategy.
+The second task is to decide which configuration should be returned as a tuning result - usually it is the configuration that led to the best observed performance value.
+If you want to implement your own tuner, you have to implement an R6-Object that offers an  [`.optimize`](#tuner-optimize) method that implements the iterative proposal and you are free to implement [`.assign_result`](#tuner-add-result) to differ from the before-mentioned default process of determining the result.
+
+Before you start with the implementation make yourself familiar with the main R6-Objects in `r mlr3book::mlr_pkg("bbotk")` (Black-Box Optimization Toolkit).
+This package does not only provide basic black box optimization algorithms and but also the objects that represent the optimization problem (`r ref("OptimInstance")`) and the log of all evaluated configurations (`r ref("Archive")`).
+
+There are two ways to implement a new tuner:
+a ) If your new tuner can be applied to any kind of optimization problem it should be implemented as a `r ref("Optimizer")`.
+Any `r ref("Optimizer")` can be easily transformed to a `r ref("Tuner")`.
+b) If the new custom tuner is only usable for hyperparameter tuning, for example because it needs to access the task, learner or resampling objects it should be directly implemented in `r mlr3book::mlr_pkg("mlr3tuning")` as a `r ref("Tuner")`.
+
+## Adding a new Tuner {#extending-tuners-summary}
+
+This is a summary of steps for adding a new tuner.
+The fifth step is only required if the new tuner is added via `r mlr3book::mlr_pkg("bbotk")`.
+
+1. Check the tuner does not already exist as a [`r ref("Optimizer")`](https://github.com/mlr-org/bbotk/tree/master/R) or [`r ref("Tuner")`](https://github.com/mlr-org/mlr3tuning/tree/master/R) in the GitHub repositories.
+1. Use one of the existing optimizers / tuners as a [template](#tuner-template).
+1. Overwrite the [`.optimize`](#tuner-optimize) private method of the optimizer / tuner.
+1. Optionally, overwrite the default [`.assign_result`](#tuner-add-result) private method.
+1. Use the [`mlr3tuning::TunerFromOptimizer`](#tuner-from-optimizer) class to transform the `r ref("Optimizer")` to a `r ref("Tuner")`.
+1. Add [unit tests](#tuner-test) for the tuner and optionally for the optimizer.
+1. Open a new pull request for the [`r ref("Tuner")`](https://github.com/mlr-org/mlr3tuning/pulls) and optionally a second one for the [`r ref("Optimizer")`](https://github.com/mlr-org/bbotk/pulls).
+
+## Template {#tuner-template}
+
+If the new custom tuner is implemented via `r mlr3book::mlr_pkg("bbotk")`, use one of the existing optimizer as a template e.g. [`bbotk::OptimizerRandomSearch`](https://github.com/mlr-org/bbotk/blob/master/R/OptimizerRandomSearch.R). There are currently only two tuners that are not based on a `r ref("Optimizer")`: [`mlr3hyperband::TunerHyperband`](https://github.com/mlr-org/mlr3hyperband/blob/master/R/TunerHyperband.R) and [`mlr3tuning::TunerIrace`](https://github.com/mlr-org/mlr3tuning/blob/master/R/TunerIrace.R). Both are rather complex but you can still use the documentation and class structure as a template. The following steps are identical for optimizers and tuners.
+
+Rewrite the meta information in the documentation and create a new class name.
+Scientific sources can be added in `R/bibentries.R` which are added under `@source` in the documentation.
+The example and dictionary sections of the documentation are auto-generated based on the `@templateVar id <tuner_id>`.
+Change the parameter set of the optimizer / tuner and document them under `@section Parameters`.
+Do not forget to change `mlr_optimizers$add()` / `mlr_tuners$add()` in the last line which adds the optimizer / tuner to the dictionary.
+
+## Optimize method {#tuner-optimize}
+
+The `$.optimize()` private method is the main part of the tuner.
+It takes an instance, proposes new points and calls the `$eval_batch()` method of the instance to evaluate them.
+Here you can go two ways: Implement the iterative process yourself or call an external optimization function that resides in another package.
+
+### Writing a custom iteration
+
+Usually, the proposal and evaluation is done in a `repeat`-loop which you have to implement.
+Please consider the following points:
+
+- You can evaluate one or multiple points per iteration
+- You don't have to care about termination, as `$eval_batch()` won't allow more evaluations then allowed by the `bbotk::Terminator`. This implies, that code after the `repeat`-loop will not be executed.
+- You don't have to care about keeping track of the evaluations as every evaluation is automatically stored in `inst$archive`.
+- If you want to log additional information for each evaluation of the `r ref("Objective")` in the `r ref("Archive")` you can simply add columns to the `data.table` object that is passed to `$eval_batch()`.
+
+### Calling an external optimization function
+
+Optimization functions from external packages usually take an objective function as an argument.
+In this case, you can pass `inst$objective_function` which internally calls `$eval_batch()`.
+Check out [`OptimizerGenSA`](https://github.com/mlr-org/bbotk/blob/master/R/OptimizerGenSA.R) for an example.
+
+## Assign result method {#tuner-add-result}
+
+The default `$.assign_result()` private method simply obtains the best performing result from the archive.
+The default method can be overwritten if the new tuner determines the result of the optimization in a different way.
+The new function must call the `$assign_result()` method of the instance to write the final result to the instance.
+See [`mlr3tuning::TunerIrace`](https://github.com/mlr-org/mlr3tuning/blob/master/R/TunerIrace.R) for an implementation of `$.assign_result()`.
+
+## Transform optimizer to tuner {#tuner-from-optimizer}
+
+This step is only needed if you implement via `r mlr3book::mlr_pkg("bbotk")`.
+The `mlr3tuning::TunerFromOptimizer` class transforms a `r ref("Optimizer")` to a `r ref("Tuner")`.
+Just add the `r ref("Optimizer")` to the `optimizer` field.
+See [`mlr3tuning::TunerRandomSearch`](https://github.com/mlr-org/mlr3tuning/blob/master/R/TunerRandomSearch.R) for an example.
+
+## Add unit tests {#tuner-test}
+
+The new custom tuner should be thoroughly tested with unit tests.
+`r ref("Tuner")`s can be tested with the `test_tuner()` helper function.
+If you added the Tuner via a `r ref("Optimizer")`, you should additionally test the `r ref("Optimizer")` with the `test_optimizer()` helper function.
