@@ -166,6 +166,94 @@ To extract the complete data from the task, one can also convert it to a `data.t
 summary(as.data.table(task_mtcars))
 ```
 
+### Task Mutators {#tasks-mutators}
+
+It is often necessary to create tasks that encompass subsets of other tasks' data, for example to manually create train-test-splits, or to fit models on a subset of given features. Restricting tasks to a given set of features can be done by calling `$select()` with the desired feature names. Restriction to rows is done with `$filter()` with the row-IDs.
+
+```{r 02-basics-tasks-021}
+task_penguins_small = tsk("penguins")
+task_penguins_small$select(c("body_mass", "flipper_length")) # keep only these features
+task_penguins_small$filter(2:4) # keep only these rows
+task_penguins_small$data()
+```
+
+These methods are so-called *mutators*, they modify the given `Task` in-place. If you want to have an unmodified version of the task, you need to use the `$clone()` method to create a copy first.
+
+```{r 02-basics-tasks-021-2}
+task_penguins_smaller = task_penguins_small$clone()
+task_penguins_smaller$filter(2)
+task_penguins_smaller$data()
+task_penguins_small$data()  # this task is unmodified
+```
+
+Note also how the last call to `$filter(2)` did not select the second row of the `task_penguins_small`, but selected the row with ID 2, which is the *first* row of `task_penguins_small`.
+
+While the methods above allow us to subset the data, the methods `$rbind()` and `$cbind()` allow to add extra rows and columns to a task.
+
+```{r 02-basics-tasks-022}
+task_penguins_smaller$rbind(  # add another row
+  data.frame(body_mass = 1e9, flipper_length = 1e9, species = "GigaPeng")
+)
+task_penguins_smaller$cbind(data.frame(letters = letters[2:3])) # add column letters
+task_penguins_smaller$data()
+```
+
+### Roles (Rows and Columns) {#tasks-roles}
+
+We have seen that certain columns are designated as "targets" and "features" during task creation, their "roles":
+Target refers to the variable we want to predict and features are the predictors (also called co-variates) for the target.
+Besides these two, there are other possible roles for columns, see the documentation of `r ref("Task")`. These roles affect the behavior of the task for different operations.
+
+For example, the previously-constructed `task_penguins_small` task has the following column roles:
+
+```{r 02-basics-tasks-018}
+task_penguins_small$col_roles
+```
+
+Columns can have have multiple roles. It is also possible for a column to have no role at all, in which case they are ignored. This is, in fact, how `$select()` and `$filter()` operate: They unassign the `"feature"` (for columns) or `"use"` (for rows) role, the underlying data is still present in the data:
+
+```{r 02-basics-tasks-018-2}
+task_penguins_small$backend
+```
+
+There are two main ways to manipulate the col roles of a `Task`:
+1. Use the `r ref("Task")` method `$set_col_roles()` (recommended).
+1. Simply modify the field `$col_roles`, which is a named list of vectors of column names.
+   Each vector in this list corresponds to a column role, and the column names contained in that vector have that role.
+
+Just as `$select()`/`$filter()`, these are in-place operations, so the task object itself is modified. To retain another unmodified version of a task, use `$clone()`.
+
+Changing the column or row roles, whether by `$select()`/`$filter()` or directly, does not change the underlying data, it just updates the view on it.
+Because the underlying data is still there, as seen in the `$backend`, we can add the `"bill_length"` column back into the task by setting its col role to `"feature"`.
+```{r 02-basics-tasks-018-3}
+task_penguins_small$set_col_roles("bill_length", roles = "feature")
+task_penguins_small$feature_names  # bill_length is now a feature again
+task_penguins_small$data()
+```
+
+Supported column roles can be found in the manual of `r ref("Task")`, or just by printing the names of the field `$col_roles`:
+
+```{r 02-basics-tasks-020}
+# supported column roles, see ?Task
+names(task_penguins_small$col_roles)
+```
+
+Just like columns, it is also possible to assign different roles to rows. Rows can have two different roles:
+
+1. Role `use`:
+  Rows that are generally available for model fitting (although they may also be used as test set in resampling).
+  This role is the default role. The `$filter()` call changes this role, in the same way that `$select()` changes the `"feature"` role.
+1. Role `validation`:
+  Rows that are not used for training.
+  Rows that have missing values in the target column during task creation are automatically set to the validation role.
+
+There are several reasons to hold some observations back or treat them differently:
+
+1. It is often good practice to validate the final model on an external validation set to identify possible overfitting.
+1. Some observations may be unlabeled, e.g. in competitions like [Kaggle](https://www.kaggle.com/).
+
+These observations cannot be used for training a model, but can be used to get predictions.
+
 ### Binary classification {#binary-classification}
 
 Classification problems with a target variable with only two classes are called binary classification tasks.
@@ -180,103 +268,6 @@ task = as_task_classif(Sonar, target = "Class", positive = "R")
 
 # switch positive class to level 'M'
 task$positive = "M"
-```
-
-### Roles (Rows and Columns) {#tasks-roles}
-
-We have seen that during task creation, certain columns are designated as targets and features, their "roles":
-Target refers to the variable we want to predict and features are the predictors (also called co-variates) for the target.
-Besides these two, there are other possible roles for columns, see the documentation of `r ref("Task")`. These roles affect the behavior of the task for different operations.
-
-For example, the previously-constructed `task_mtcars` task has the following column roles:
-
-```{r 02-basics-tasks-018}
-task_mtcars$col_roles
-```
-
-Columns can have have multiple roles. It is also possible for a column to have no role at all, in which case they are ignored.
-To add the row names of `task_mtcars` as an additional feature, we first add them to the underlying data as regular column and then recreate the task with the new column.
-
-```{r 02-basics-tasks-019}
-# with `keep.rownames`, data.table stores the row names in an extra column "rn"
-data = as.data.table(datasets::mtcars[, 1:3], keep.rownames = TRUE)
-task_mtcars = as_task_regr(data, target = "mpg", id = "cars")
-
-# there is a new feature called "rn"
-task_mtcars$feature_names
-```
-
-The row names are now a feature whose values are stored in the column `"rn"`.
-We include this column here for educational purposes only.
-Generally speaking, there is no point in having a feature that uniquely identifies each row.
-Furthermore, the character data type will cause problems with many types of machine learning algorithms.
-
-The identifier may be useful to label points in plots, for example to identify outliers.
-To achieve this, we will change the role of the `rn` column by removing it from the list of features and assign the new role `"name"`.
-There are two ways to do this:
-
-1. Use the `r ref("Task")` method `$set_col_roles()` (recommended).
-1. Simply modify the field `$col_roles`, which is a named list of vectors of column names.
-   Each vector in this list corresponds to a column role, and the column names contained in that vector have that role.
-
-Supported column roles can be found in the manual of `r ref("Task")`, or just by printing the names of the field `$col_roles`:
-
-```{r 02-basics-tasks-020}
-# supported column roles, see ?Task
-names(task_mtcars$col_roles)
-
-# assign column "rn" the role "name", remove from other roles
-task_mtcars$set_col_roles("rn", roles = "name")
-
-# note that "rn" not listed as feature anymore
-task_mtcars$feature_names
-
-# "rn" also does not appear anymore when we access the data
-task_mtcars$data(rows = 1:2)
-```
-
-Changing the role does not change the underlying data, it just updates the view on it.
-The data is not copied in the code above.
-The view is changed in-place though, i.e. the task object itself is modified.
-
-Just like columns, it is also possible to assign different roles to rows.
-
-Rows can have two different roles:
-
-1. Role `use`:
-  Rows that are generally available for model fitting (although they may also be used as test set in resampling).
-  This role is the default role.
-
-1. Role `validation`:
-  Rows that are not used for training.
-  Rows that have missing values in the target column during task creation are automatically set to the validation role.
-
-There are several reasons to hold some observations back or treat them differently:
-
-1. It is often good practice to validate the final model on an external validation set to identify possible overfitting.
-1. Some observations may be unlabeled, e.g. in competitions like [Kaggle](https://www.kaggle.com/).
-
-These observations cannot be used for training a model, but can be used to get predictions.
-
-### Task Mutators {#tasks-mutators}
-
-As shown above, modifying `$col_roles` or `$row_roles` (either via `set_col_roles()`/`set_row_roles()` or directly by modifying the named list) changes the view on the data.
-The additional convenience method `$filter()` subsets the current view based on row IDs and `$select()` subsets the view based on feature names.
-
-```{r 02-basics-tasks-021}
-task_penguins = tsk("penguins")
-task_penguins$select(c("body_mass", "flipper_length")) # keep only these features
-task_penguins$filter(1:3) # keep only these rows
-task_penguins$head()
-```
-
-While the methods above allow us to subset the data, the methods `$rbind()` and `$cbind()` allow to add extra rows and columns to a task.
-Again, the original data is not changed.
-The additional rows or columns are only added to the view of the data.
-
-```{r 02-basics-tasks-022}
-task_penguins$cbind(data.frame(letters = letters[1:3])) # add column letters
-task_penguins$head()
 ```
 
 ## Plotting Tasks {#autoplot-task}
