@@ -1,0 +1,329 @@
+# Pipelines {#pipelines}
+
+Machine learning toolkits often try to abstract away the processes happening inside machine learning algorithms.
+This makes it easy for the user to switch out one algorithm for another without having to worry about what is happening inside it, what kind of data it is able to operate on etc.
+The benefit of using `r mlr3book::mlr_pkg("mlr3")`, for example, is that one can create a `r ref("Learner")`, a `r ref("Task")`, a `r ref("Resampling")` etc. and use them for typical machine learning operations.
+In the following code snippet, for example, it would be trivial to swap in a different `r ref("Learner")` than `"classif.rpart"` without having to worry about implementation details of the Learners involved:
+```{r 05-pipelines-in-depth-002, eval = FALSE}
+task = as_task_classif(iris, target = "Species")
+lrn = lrn("classif.rpart")
+rsmp = rsmp("holdout")
+resample(task, lrn, rsmp)
+```
+
+However, this modularity breaks down as soon as the learning algorithm encompasses more than just model fitting, like data preprocessing, ensembles or even more complicated meta-models.
+`r mlr3book::cran_pkg("mlr3pipelines")` takes modularity one step further than `r mlr3book::mlr_pkg("mlr3")`: it makes it possible to build individual steps within a `r ref("Learner")` out of building blocks called `r ref("PipeOp")`s.
+
+`r mlr3book::mlr_pkg("mlr3pipelines")` [@mlr3pipelines] is a dataflow programming toolkit for `r mlr3book::mlr_pkg("mlr3")`.
+It provides an expressive and intuitive language for defining processes such as data preprocessing, model fitting, ensemble learning and prediction post-processsing.
+Individual, frequently encountered building blocks, such as missing value imputation or majority vote ensembling, are provided as (R6-)objects, so-called PipeOps.
+These PipeOps can be connected using directed edges inside a Graph (or Pipeline) to represent the flow of data between operations.
+
+Some examples of what can be implemented with `r mlr3book::mlr_pkg("mlr3pipelines")` are:
+
+* Data manipulation and preprocessing operations, e.g. PCA, feature filtering, imputation.
+* Task subsampling for speed and outcome class imbalance handling.
+* `r mlr3book::mlr_pkg("mlr3")` Learner operations for prediction and stacking.
+* Ensemble methods and aggregation of predictions.
+
+A very simple sequential Graph that does various preprocessing operations before fitting a Learner looks like the following:
+```{r 05-pipelines-002, echo=FALSE, fig.align='center', out.width="98%"}
+knitr::include_graphics("images/single_pipe.svg")
+```
+
+An example for a more elaborate Pipeline that does alternative path branching and can therefore be [tuned](#optimization) to use the best preprocessing operation `r mlr3book::mlr_pkg("mlr3pipelines")` is depicted here:
+```{r 05-pipelines-003, echo = FALSE, width = 10, height = 10, eval = TRUE, message=FALSE}
+# This just produces a plot, not visible to the user.
+library("mlr3pipelines")
+
+graph = po("branch", c("nop", "pca", "scale")) %>>%
+  gunion(list(
+    po("nop", id = "null1"),
+    po("pca"),
+    po("scale")
+  ))
+gr = graph %>>%
+  po("unbranch", c("nop", "pca", "scale")) %>>%
+  po("learner", lrn("classif.rpart"))
+
+gr$plot(html = FALSE)
+```
+
+In the following, we will # TODO
+
+# Quick Introduction{#pipelines-quick-introduction}
+
+While the following chapters will give an in-depth introduction to `r mlr3book::mlr_pkg("mlr3pipelines")` that explain its concepts in detail, the following will present a quick introduction sufficient to get started with it.
+To use `mlr3pipelines`, it suffices to load the package:
+```{r pipeop-quickstart-library}
+library("mlr3pipelines")
+```
+
+## Creating and Configuring `PipeOP`s
+
+`PipeOp`s can easily be created using the `po()` short access function.
+Just like `Learner`s, they have hyperparameters that can be set during construction as well as using the `$param_set$values` slot.
+The ID of a `PipeOp` can be set during construction as well; this may be necessary to avoid nameclashes later on, because when `PipeOp`s are combined in a `Graph`, they need to have differing IDs.
+
+```{r pipeop-quickstart-construction-1}
+pca = po("pca", scale. = TRUE)
+pca
+pca2 = po("pca", id = "pca2")
+pca2$param_set$values$center = FALSE
+pca2
+```
+
+An `mlr3` `Learner` can be turned into a `PipeOp` (a `PipeOpLearner`, in fact) using `as_pipeop()`.
+This is, however, often not necessary since this happens automatically in most places where a `PipeOp` is expected.
+```{r pipeop-quickstart-construction-2}
+lp = as_pipeop(lrn("classif.rpart"))
+lp
+```
+
+More about `PipeOp`s and how they are created and configured is described in Chapter TODO.
+
+## Creating `Graph`s
+
+The easiest way to combine `PipeOp`s is to use the `%>>%`-operator.
+It combines its left hand side with its right hand side sequentially, so that the right hand side gets the result from its left hand side as input.
+The `$plot()` method can be used to show what `Graph` was created:
+
+```{r pipeop-quickstart-graphs-1}
+gr = pca %>>% lp
+gr$plot(html = FALSE)
+```
+
+Chapter TODO gives a more in-depth introduction into how simple `Graph`s are constructed.
+
+## Using `Graph`s as `Learners`s
+
+`Graph`s in which the last operation is a `PipeOpLearner` can be turned into a `Learner` (a `GraphLearner`, to be precise) that performs the operations represented by the `Graph` in order by using `as_learner()`.
+
+```{r pipeop-quickstart-graphlearner-1}
+gl = as_learner(gr)
+gl
+gl$train(tsk("iris"))
+gl$model$classif.rpart$model
+```
+
+The `Learner` can be `resample()`d, `benchmark()`d and `tune()`d just as a normal `Learner`.
+
+```{r pipeop-quickstart-graphlearner-2}
+rr = resample(tsk("iris"), gl, rsmp("cv"))
+rr$aggregate()
+```
+
+When evaluating the performance of a machine learning process consisting e.g. of preprocessing, followed by model fitting, it is strongly advised to always put the entire preprocessing operation *inside* the resampling loop, as is done here.
+Making a PCA on the entire dataset (i.e. `tsk("iris")`), followed by resampling the `"classif.rpart"` `Learner` on it, would effectively leak information from the training set to the test set, leading to biased results.
+`mlr3pipelines` encourages this more accurate approach.
+
+See Chapter TODO about how to effectively use `Graph`s as `Learner`s in `mlr3`.
+
+
+## Tuning `GraphLearner`s
+
+`mlr3pipelines` is well suited for tuning entire machine learning pipelines.
+For one because performance evaluations are more accurate, see above, but also because the constructed `Graph` objects have a combined hyperparameter space that can be tuned together.
+Notice how the hyperparameters of both the `"pca"` `PipeOp`, as well as of the `"classif.rpart"` `Learner`, are present.
+They are prefixed by each object's ID to avoid possible name clashes.
+
+```{r pipeop-quickstart-graphlearner-2}
+gl$param_set
+```
+
+This `GraphLearner` behaves like any other `Learner` for the sake of tuning. The following tunes the number of principal components to use, along with the tree size to use:
+```{r pipeop-quickstart-tuning-1}
+gl$param_set$values$pca.rank. = to_tune(1, 4)
+gl$param_set$values$classif.rpart.maxdepth = to_tune(2, 6)
+
+tr = tune(tnr("grid_search"), tsk("iris"), gl, rsmp("cv"))
+tr$result
+```
+
+Chapter TODO gives more details on the topic of tuning `Graph`s.
+
+## Non-Sequential `Graph`s
+
+One distinguishing feature of `mlr3pipelines` is that it can represent `Graph`s with parallel paths, for example alternative preprocessing operations that then get combined together in a "`cbind`"-operation. To arrange `Graph`s in parallel, the `gunion()`-function can be used. The `%>>%` operator tries to automatically connect all outputs of its left hand side to all inputs of its right hand side. The following fits a model on both the centered and the non-centered principal components of the `iris` dataset. The features get combined using the `"featureunion"` `PipeOp` and then given to the `"classif.rpart"` `Learner`.
+```{r pipeop-quickstart-nonseq-1}
+gr2 = gunion(list(po("pca", center = TRUE), po("pca", center = FALSE, id = "pca2"))) %>>%
+  po("featureunion", innum = c("centered", "noncentered")) %>>% lrn("classif.rpart")
+gr2$keep_results = TRUE
+gr2$plot(html = FALSE)
+gl2 = as_learner(gr2)
+gl2$train(tsk("iris"))
+```
+This already shows some advanced usage necessary for this scenario: The ID of one of the `"pca"` `PipeOp`s needs to be changed to avoid name collisions, and the `innum` construction argument of `"featureunion"` is set to a vector of column prefixes to use, as both `"pca"` `PipeOp`s produce columns with the same name.
+Setting the`$keep_results` debug-flag of the `Graph` is not necessary, but it allows us to find out what was actually returned by the `"featureunion"` `PipeOp` during training:
+```{r pipeop-quickstart-nonseq-2}
+gl2$graph_model$pipeops$featureunion$.result
+```
+We can also look at the trained `"classif.rpart"`-model to see that both centered as well as noncentered features were used
+```{r pipeop-quickstart-nonseq-2}
+gl2$model$classif.rpart$model
+```
+
+See Chapter TODO for more on non-sequential `Graph`s.
+
+## Common `Graph` Patterns
+
+There are various patterns that frequently occur when building machine learning pipelines that consist of more than just a single `PipeOp` operation. A collection is provided in the `mlr_graphs`-`Dictionary` and can be accessed using the `ppl()` short access function. Examples are `"robustify"`, which does preprocessing that ensures that a given `Task` is compatible with a given `Learner`, `"branch"`, which does alternative path branching and introduces a hyperparameter that controls which part of a `Graph` gets executed, and `"stacking"`, which uses the prediction of one or more `Learner`s to support the training of another `Learner`.
+
+The following is an example, using the `"classif.ranger"` and `"classif.multinom"` model predictions as features for a `"classif.rpart"` model:
+```{r pipeop-quickstart-ppl-1}
+library("mlr3learners")
+gr3 = ppl("stacking", lrns(c("classif.ranger", "classif.multinom")), lrn("classif.rpart"))
+gr3$plot(html = FALSE)
+```
+
+The `mlr_graphs` `Dictionary` is presented in Chapter TODO.
+
+# `r ref("PipeOp")`: Pipeline Operators
+
+The most basic unit of functionality within `r mlr3book::cran_pkg("mlr3pipelines")` is the `r ref("PipeOp")`, short for "pipeline operator", which represents a transformative operation on input (for example a training dataset) leading to output.
+It can therefore be seen as a generalized notion of a function, with a certain twist: `r ref("PipeOp")`s behave differently during a "training phase" and a "prediction phase".
+The training phase will typically generate a certain model of the data that is saved as internal state.
+The prediction phase will then operate on the input data depending on the trained model.
+
+An example of this behavior is the *principal component analysis* operation ("`r ref("PipeOpPCA")`"):
+```{r pipeop-intro-1}
+pca = po("pca")
+pca
+```
+
+Training is done using the `$train()`-method. Unlike the `Learner`'s `$train()` method, the `PipeOp`'s `$train()` can have multiple inputs, as well as multiple outputs. This is realized through `list`s: Both the `$train()` input as well as output of a `PipeOp` is always a `list`; depending on the operation, these lists have one or more elements. To use the `"pca"` `PipeOp`, for example, it is called with a list with a single element, the training `Task`. In return it produces the resulting `Task` with features replaced by their principal components.
+
+```{r 05-pipelines-in-depth-003}
+poin = list(task)
+poout = pca$train(poin)
+poout
+poout[[1]]$data()
+```
+
+During training, the PCA transforms incoming data by rotating it in a way that leads to uncorrelated features ordered by their contribution to total variance.
+The rotation matrix is also saved to be used for new data during the "prediction phase".
+This makes it possible to perform "prediction" with single rows of new data, where a row's scores on each of the principal components (the components of the training data!) is computed.
+
+Similarly to `$train()`, the `$predict()` function operates on `list`s:
+
+```{r 05-pipelines-in-depth-004}
+single_line_task = task$clone()$filter(1)
+single_line_task
+poin = list(single_line_task)
+poout = pca$predict(poin)
+poout[[1]]$data()
+```
+
+The internal state that is trained in the `$train()` call is saved in the `$state` property. It is comparable to the `$model` of a `Learner`, and its content depends on the class of `PipeOp` being used.
+
+```{r 05-pipelines-in-depth-005}
+pca$state
+```
+
+<!--
+It is important to take a moment and notice the importance of a `$state` variable and the `$train()` / `$predict()` dichotomy in a `r ref("PipeOp")`.
+There are many preprocessing methods, for example scaling of parameters or imputation, that could in theory just be applied to training data and prediction / validation data separately, or they could be applied to a task before resampling is performed.
+This would, however, be fallacious:
+
+* The preprocessing of each instance of prediction data should not depend on the remaining prediction dataset.
+A prediction on a single instance of new data should give the same result as prediction performed on a whole dataset.
+* If preprocessing is performed on a task *before* resampling is done, information about the test set can leak into the training set.
+Resampling should evaluate the generalization performance of the *entire* machine learning method, therefore the behavior of this entire method must only depend only on the content of the *training* split during resampling.
+-->
+
+
+<!--
+This shows the most important primitives incorporated in a `r ref("PipeOp")`:
+* **`$train()`**, taking a list of input arguments, turning them into a list of outputs, meanwhile saving a state in `$state`
+* **`$predict()`**, taking a list of input arguments, turning them into a list of outputs, making use of the saved `$state`
+* **`$state`**, the "model" trained with `$train()` and utilized during `$predict()`.
+-->
+
+<!--
+Schematically we can represent the `r ref("PipeOp")` like so:
+
+```{r 05-pipelines-in-depth-006, echo = FALSE}
+knitr::include_graphics("images/po_viz.png")
+```
+-->
+
+
+## Creating `r ref("PipeOp")`s
+
+Each `r ref("PipeOp")` is an instance of an "`R6`" class, many of which are provided by the `r mlr3book::cran_pkg("mlr3pipelines")` package itself.
+They can be retrieved from the `r ref("mlr_pipeops")` dictionary, most easily by using the short access function `po()`.
+
+```{r 05-pipelines-in-depth-008}
+po("pca")
+```
+
+Besides that, they can also be constructed explicitly ("`PipeOpPCA$new()`").
+When retrieving `r ref("PipeOp")`s from the `r ref("mlr_pipeops")` dictionary, it is also possible to give additional constructor arguments, such as an [id](#pipeop-ids-and-id-name-clashes) or [parameter values](#hyperparameters). Setting the ID explicitly is necessary when using multiple instances of the same class of `PipeOp` in a single `Graph`, since otherwise a name collision would occur, see [LINK](#ids-and-id-name-clashes)
+
+```{r 05-pipelines-in-depth-008}
+po("pca", rank. = 3, id = "pca2")
+```
+
+
+Calling `po()` by itself prints all available `PipeOp`s, and `as.data.table(po())` will give a more detailed list with more meta-data.
+```{r 05-pipelines-in-depth-007}
+po()
+```
+
+
+
+<!--
+
+Additionally, we implement several meta operators that can be used to construct powerful pipelines:
+
+* Simultaneous path branching (data going both ways)
+* Alternative path branching (data going one specific way, controlled by hyperparameters)
+
+An extensive introduction to creating custom **PipeOps** (PO's) can be found in the [technical introduction](#extending-pipeops).
+
+Using methods from `r mlr3book::mlr_pkg("mlr3tuning")`, it is even possible to simultaneously optimize parameters of multiple processing units.
+
+A predecessor to this package is the `r mlr3book::cran_pkg("mlrCPO")` package, which works with `r mlr3book::cran_pkg("mlr")` 2.x.
+Other packages that provide, to varying degree, some preprocessing functionality or machine learning domain specific language, are:
+
+* the `r mlr3book::cran_pkg("caret")` package and the related `r mlr3book::cran_pkg("recipes")`  project
+* the `r mlr3book::cran_pkg("dplyr")` package
+
+An example for a Pipeline that can be constructed using `r mlr3book::mlr_pkg("mlr3pipelines")` is depicted below:
+
+```{r 05-pipelines-003, echo = FALSE, width = 10, height = 10, eval = TRUE, message=FALSE}
+# This just produces a plot, not visible to the user.
+library("mlr3pipelines")
+
+graph = po("branch", c("nop", "pca", "scale")) %>>%
+  gunion(list(
+    po("nop", id = "null1"),
+    po("pca"),
+    po("scale")
+  ))
+gr = graph %>>%
+  po("unbranch", c("nop", "pca", "scale")) %>>%
+  po("learner", lrn("classif.rpart"))
+
+gr$plot(html = FALSE)
+```
+
+
+# Intro: abstrakter text ueber pipelines, training, prediction, embedding, evtl. sagen dass auch andere das machen
+## evtl quick intro quickstart beispiel
+# der pipeop 
+## sammeln aus deren und meinem text
+# "graphs: networks of pipeops" nodes, edges, graphs (channels nach hinten)
+## part 1
+## part 2 woanders
+# sequential pipelines and graph learners
+## "graphs as learners" hier auch rein
+## hyperparameters
+## wie greift man auf zwischenergebnisse zu, wie debuggt man pipelines
+# tuning von pipelines (vll auch non-linear)
+# non-linear, evtl. ist das graphs part 2, hier vll auch channels, evtl. ids and name clashes, evtl sternchen "advanced", vll noch andere komplizierte sachen
+## ids nameclashes
+## hyperparameters
+# ppls()
+# special ops (evtl. appendix)
+# verhaeltnis zu recipes, sklearn pipelines etc.
