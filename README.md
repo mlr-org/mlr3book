@@ -26,10 +26,10 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
    ```bash
    # HTML
-   quarto render --to html book/
+   quarto render book/ --to html
 
    # PDF
-   quarto render --to pdf book/
+   quarto render book/ --to pdf
    ```
 
 ## Serve the book

@@ -1,11 +1,12 @@
 ---
 author: "[Patrick Schratz](https://pat-s.me)"
 ---
+
+{{< include _setup.qmd >}}
+
 # Spatiotemporal Analysis {#spatiotemporal}
 
-```{r 08-special-spatiotemp-001, include = F}
-library(mlr3)
-library(mlr3book)
+```{r 08-special-spatiotemp-001, include = FALSE}
 library(mlr3spatiotempcv)
 ```
 
@@ -14,48 +15,56 @@ Spatial information is stored as coordinates, usually named "x" and "y" or "lat"
 Treating spatiotemporal data using non-spatial data methods can lead to over-optimistic performance estimates.
 Hence, methods specifically designed to account for the special nature of spatiotemporal data are needed.
 
-In the `r mlr3book::cran_pkg("mlr3")` framework, the following packages relate to this field:
+In the `r cran_pkg("mlr3")` framework, the following packages relate to this field:
 
-- `r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")` (biased-reduced performance estimation)
-- `r mlr3book::gh_pkg("mlr-org/mlr3forecasting")` (time-series support)
-- `r mlr3book::gh_pkg("mlr-org/mlr3spatial")` (spatial prediction support)
+- `r gh_pkg("mlr-org/mlr3spatiotemporal")` (biased-reduced performance estimation)
+- `r gh_pkg("mlr-org/mlr3temporal")` (time-series support)
+- `r gh_pkg("mlr-org/mlr3spatial")` (spatial prediction support)
 
 The following (sub-)sections introduce the potential pitfalls of spatiotemporal data in machine learning and how to account for it.
 Note that not all functionality will be covered, and that some of the used packages are still in early lifecycles.
 If you want to contribute to one of the packages mentioned above, please contact [Patrick Schratz](https://github.com/pat-s).
 
-## Creating a spatial Task
+## Creating a Spatial Task
 
-To make use of spatial resampling methods, a `r mlr3book::mlr_pkg("mlr3")` task that is aware of its spatial characteristic needs to be created.
-Two child classes exist in `r mlr3book::mlr_pkg("mlr3spatiotempcv")` for this purpose:
+To make use of spatial resampling methods, a `r mlr_pkg("mlr3")` task that is aware of its spatial characteristic needs to be created.
+Two child classes of `r ref("Task")` exist in `r mlr_pkg("mlr3spatiotempcv")` for this purpose:
 
 - `r ref("TaskClassifST")`
 - `r ref("TaskRegrST")`
 
-To create one of these, one can either pass a `sf` object as the "backend" directly:
+To create one of these, you have multiple options:
 
-```r
+1. Use the constructor of the `r ref("Task")` directly via `$new()`
+1. Use the `as_task_*` converters
+
+We recommend the latter, as these converters aim to make Task construction easier, e.g. by creating the `DataBackend` automatically and setting the `crs` and `coordinate_names` fields.
+Let's assume you start with an `sf` object, which is a common start scenario for spatial analysis in R:
+
+```{r 08-special-spatiotemp-002}
 # create 'sf' object
 data_sf = sf::st_as_sf(ecuador, coords = c("x", "y"), crs = 32717)
-# create mlr3 task
-task = TaskClassifST$new("ecuador_sf",
-  backend = data_sf, target = "slides", positive = "TRUE"
-)
+
+task = as_task_classif_st(data_sf, id = "ecuador_task",
+  target = "slides", positive = "TRUE")
 ```
 
-or use a plain `data.frame`.
-In this case, the constructor of `r ref("TaskClassifST")` needs a few more arguments:
+You can also use a plain `data.frame`.
+In this case, `crs` and `coordinate_names` need to be passed along explicitly as they cannot be inferred from the `sf` object as in the previous example:
 
-```r
-data = mlr3::as_data_backend(ecuador)
-task = TaskClassifST$new("ecuador",
-  backend = data, target = "slides",
-  positive = "TRUE", extra_args = list(coordinate_names = c("x", "y"),
-  crs = 32717)
-)
+```{r 08-special-spatiotemp-003}
+task = as_task_classif_st(ecuador, id = "ecuador_task",
+  target = "slides", positive = "TRUE",
+  coordinate_names = c("x", "y"), crs = 32717)
 ```
 
-Now this Task can be used as a normal `r mlr3book::mlr_pkg("mlr3")` task in any kind of modeling scenario.
+The `*ST` task family prints a subset of the coordinates by default:
+
+```{r 08-special-spatiotemp-004}
+task
+```
+
+All `*ST` tasks can be treated as their super class equivalents `TaskClassif` or `TaskRegr` in any upcoming modeling step.
 
 ## Autocorrelation {#spatiotemporal-intro}
 
@@ -71,16 +80,16 @@ If this assumption is violated, the reliability of the resulting performance est
 The magnitude of this decrease is linked to the magnitude of STAC in the dataset, which cannot be determined easily.
 
 One approach to account for the existence of STAC is to use dedicated resampling methods.
-`r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")` provides access to the most frequently used spatiotemporal resampling methods.
+`r gh_pkg("mlr-org/mlr3spatiotemporal")` provides access to the most frequently used spatiotemporal resampling methods.
 The following example showcases how a spatial dataset can be used to retrieve a bias-reduced performance estimate of a learner.
 
-The following examples use the [ecuador](https://mlr3spatiotempcv.mlr-org.com/reference/mlr_tasks_ecuador.html) dataset created by [Jannes Muenchow](https://scholar.google.com/citations?user=Slq94Y4AAAAJ&hl=de&authuser=1&oi=ao).
+The following examples use the `r ref("mlr_tasks_ecuador", text = "ecuador")` dataset created by [Jannes Muenchow](https://scholar.google.com/citations?user=Slq94Y4AAAAJ&hl=de&authuser=1&oi=ao).
 It contains information on the occurrence of landslides (binary) in the Andes of Southern Ecuador.
 The landslides were mapped from aerial photos taken in 2000.
 The dataset is well suited to serve as an example because it it relatively small and of course due to the spatial nature of the observations.
 Please refer to @muenchow2012 for a detailed description of the dataset.
 
-To account for the spatial autocorrelation probably present in the landslide data, we will make use one of the most used spatial partitioning methods, a cluster-based k-means grouping [@brenning2012], (`r ref("mlr_resamplings_spcv_coords", text = "spcv_coords")` in `r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")`).
+To account for the spatial autocorrelation probably present in the landslide data, we will make use one of the most used spatial partitioning methods, a cluster-based k-means grouping [@brenning2012], (`r ref("mlr_resamplings_spcv_coords", text = "spcv_coords")` in `r gh_pkg("mlr-org/mlr3spatiotemporal")`).
 This method performs a clustering in 2D space which contrasts with the commonly used random partitioning for non-spatial data.
 The grouping has the effect that train and test data are more separated in space as they would be by conducting a random partitioning, thereby reducing the effect of STAC.
 
@@ -88,17 +97,40 @@ By contrast, when using the classical random partitioning approach with spatial 
 This leads to a high similarity between train and test sets, resulting in "better" but biased performance estimates in every fold of a CV compared to the spatial CV approach.
 However, these low error rates are mainly caused due to the STAC in the observations and the lack of appropriate partitioning methods and not by the power of the fitted model.
 
-## Spatial CV vs. Non-Spatial CV {#sp-vs-nsp-cv}
+## Spatiotemporal Cross-Validation and Partitioning
 
-In the following a spatial and a non-spatial CV will be conducted to showcase the mentioned performance differences.
+One part of spatiotemporal machine learning is dealing with the spatiotemporal components of the data during performance estimation.
+Performance is commonly estimated via cross-validation and `r gh_pkg("mlr-org/mlr3spatiotemporal")` provides specialized resamplings methods for spatiotemporal data.
+The following chapters showcases how these methods can be applied and how they differ compared to non-spatial resampling methods, e.g. random partitioning.
+In addition, examples which show how resamplings with spatial information can be visualized using `r gh_pkg("mlr-org/mlr3spatiotemporal")`.
+
+Besides performance estimation, prediction on spatiotemporal data is another challenging task.
+See @sec-spatial-prediction for more information about how this topic is handled within the mlr3 framework.
+
+### Spatial CV vs. Non-Spatial CV {#sp-vs-nsp-cv}
+
+In the following a spatial and non-spatial CV will be applied to showcase the mentioned performance differences.
 
 The performance of a simple classification tree (`"classif.rpart"`) is evaluated on a random partitioning (`r ref("mlr_resamplings_repeated_cv", text = "repeated_cv")`) with four folds and two repetitions.
 The chosen evaluation measure is "classification error" (`"classif.ce"`).
-The only difference in the spatial setting is that `r ref("mlr_resamplings_repeated_spcv_coords", text = "repeated_spcv_coords")` is chosen instead of `r ref("mlr_resamplings_repeated_cv", text = "repeated_cv")`.
 
-### Non-Spatial CV {#nsp-cv}
+For the spatial example, `r ref("mlr_resamplings_repeated_spcv_coords", text = "repeated_spcv_coords")` is chosen whereas `r ref("mlr_resamplings_repeated_cv", text = "repeated_cv")` represents the non-spatial example.
 
-```{r 08-special-spatiotemp-002}
+:::{.callout-note}
+The selection of `r ref("mlr_resamplings_repeated_spcv_coords", text = "repeated_spcv_coords")` in this example is arbitrary.
+For your use case, you might want to use a different spatial partitioning method (but not necessarily!).
+Have a look at the ["Getting Started"](https://mlr3spatiotempcv.mlr-org.com/dev/articles/mlr3spatiotempcv.html#resampling-methods) vignette of `r gh_pkg("mlr-org/mlr3spatiotemporal")` to see all available methods and choose one which **fits your data and its prediction purpose**.
+:::
+
+#### Non-Spatial CV {#nsp-cv}
+
+In this example the `r ref("mlr_tasks_ecuador", text = "ecuador")` example task is taken to estimate the performance of an `rpart` learner with fixed parameters on it.
+
+:::{.callout-warning}
+In practice you usually might want to tune the hyperparameters of the learner in this case and apply a nested CV in which the inner loop is used for hyperparameter tuning.
+:::
+
+```{r 08-special-spatiotemp-005}
 library("mlr3")
 library("mlr3spatiotempcv")
 set.seed(42)
@@ -118,9 +150,9 @@ rr_nsp = resample(
 rr_nsp$aggregate(measures = msr("classif.ce"))
 ```
 
-### Spatial CV {#sp-cv}
+#### Spatial CV {#sp-cv}
 
-```{r 08-special-spatiotemp-003}
+```{r 08-special-spatiotemp-006}
 task = tsk("ecuador")
 
 learner = lrn("classif.rpart", maxdepth = 3, predict_type = "prob")
@@ -132,70 +164,209 @@ rr_sp = resample(
 rr_sp$aggregate(measures = msr("classif.ce"))
 ```
 
-Here, the classification tree learner is around 0.05 percentage points worse when using Spatial Cross-Validation (SpCV) compared to Non-Spatial Cross-Validation (NSpCV).
-The magnitude of this difference is variable as it depends on the dataset, the magnitude of STAC and the learner itself.
+Here, the performance of the classification tree learner is around 7 percentage points worse when using Spatial Cross-Validation (SpCV) compared to Non-Spatial Cross-Validation (NSpCV).
+The resulting difference in performance is variable as it depends on the dataset, the magnitude of STAC and the learner itself.
 For algorithms with a higher tendency of overfitting to the training set, the difference between the two methods will be larger.
 
-## Visualization of Spatiotemporal Partitions {#vis-spt-partitions}
+Now, what does it mean that the performance in the spatial case is worse?
+Should you ditch SpCV and keep using non-spatial partitioning?
+The answer is **NO**.
+The reason why the spatial partitioning scenario results in a lower predictive performance is because throughout the CV the model has been trained on data that is less similar than the test data compared against the non-spatial scenario.
+Or in other words: in the non-spatial scenario, train and test data are almost identical (due to spatial autocorrelation).
 
-Every partitioning method in `r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")` comes with a generic `plot()` method to visualize the created groups.
-In a 2D space this happens via `r mlr3book::cran_pkg("ggplot2")` while for spatiotemporal methods 3D visualizations via `r mlr3book::cran_pkg("plotly")` are created.
+This means that the result from the SpCV setting is more close to the true predictive power of the model - whereas the result from non-spatial CV is overoptimistic and biased.
 
-```{r 08-special-spatiotemp-004, fig.asp=0.8}
+:::{.callout-note}
+The result of the SpCV setting is by no means the absolute truth - it is also biased, but (most often) less compared to the non-spatial setting.
+:::
+
+### Visualization of Spatiotemporal Partitions {#vis-spt-partitions}
+
+Every partitioning method in `r gh_pkg("mlr-org/mlr3spatiotemporal")` comes with S3 methods for `plot()` and `autoplot()` to visualize the created groups.
+In a 2D space `r cran_pkg("ggplot2")` is used in the backgroudn while for spatiotemporal methods 3D visualizations via `r cran_pkg("plotly")` are created.
+
+The following examples shows how the `resampling_sp` object from the previous example can be visualized.
+In this case I want to look at the first four partitions of the first repetition.
+The point size is adjusted via argument `size`.
+After the plot creation, additional `scale_*` calls are used to adjust the coordinate labels on the x and y axes, respectively.
+
+```{r 08-special-spatiotemp-007, fig.asp=0.8}
 autoplot(resampling_sp, task, fold_id = c(1:4), size = 0.7) *
   ggplot2::scale_y_continuous(breaks = seq(-3.97, -4, -0.01)) *
-  ggplot2::scale_x_continuous(breaks = seq(-79.06, -79.08, -0.01))
+  ggplot2::scale_x_continuous(breaks = seq(-79.06, -79.08, -0.02))
 ```
 
-Note that setting the correct CRS for the given data is important which is done during task creation
+:::{.callout-warning}
+Note that setting the correct CRS for the given data is important which is done **during task creation**.
 Spatial offsets of up to multiple meters may occur if the wrong CRS is supplied initially.
+:::
 
-This example used an already created task via the sugar function `r ref("tsk()")`.
-In practice however, one needs to create a spatiotemporal task via `r ref("TaskClassifST")`/`r ref("TaskRegrST")` and set the `crs` argument.
+This example used a built-in mlr3 task via `r ref("tsk()")`.
+In practice however, one needs to create a spatiotemporal task via `r ref("TaskClassifST")`/`r ref("TaskRegrST")` and set the `crs` argument (unless a `sf` object is handed over).
 
-The spatial grouping of the k-means based approach above contrasts visually ver well compared to the NSpCV (random) partitioning:
+`r gh_pkg("mlr-org/mlr3spatiotemporal")` can also visualize non-spatial partitonings.
+This helps to visually compare differences.
+Let's use the objects from the previous example again, this time `resampling_nsp`.
 
-```{r 08-special-spatiotemp-005, fig.asp=0.8}
+```{r 08-special-spatiotemp-008, fig.asp=0.8}
 autoplot(resampling_nsp, task, fold_id = c(1:4), size = 0.7) *
   ggplot2::scale_y_continuous(breaks = seq(-3.97, -4, -0.01)) *
-  ggplot2::scale_x_continuous(breaks = seq(-79.06, -79.08, -0.01))
+  ggplot2::scale_x_continuous(breaks = seq(-79.06, -79.08, -0.02))
 ```
 
-## Spatial Block Visualization {#vis-spatial-block}
+The visualization show very well how close train and test observations are located next to each other.
 
-The `r ref("mlr_resamplings_spcv_block", text = "spcv_block")` method makes use of rectangular blocks to divide the study area into equally-sized parts.
-These blocks can be visualized by their spatial location and fold ID to get a better understanding how these influenced the final partitions.
+### Spatial Block Visualization {#vis-spatial-block}
 
-```{r 08-special-spatiotemp-006}
+This examples showcases another SpCV method: `r ref("mlr_resamplings_spcv_block", text = "spcv_block")`.
+This method makes use of rectangular blocks to divide the study area into equally-sized parts.
+{mlr3spatiotempcv} has support for visualizing the created blocks and displaying their respective fold ID to get a better understanding how the final folds were composed out of the partitions.
+E.g. the "Fold 1 Repetition 1" plot shows that the test set is composed out of two "blocks" with the ID "1" in this case.
+
+:::{.callout-note}
+The use of `range = 1000L` is arbitrary here and should not be copy-pasted into a real application.
+:::
+
+```{r 08-special-spatiotemp-009}
 task = tsk("ecuador")
 resampling = rsmp("spcv_block", range = 1000L)
-resampling$instantiate(task)
 
 # Visualize train/test splits of multiple folds
 autoplot(resampling, task, size = 0.7,
   fold_id = c(1, 2), show_blocks = TRUE, show_labels = TRUE) *
-  ggplot2::scale_x_continuous(breaks = seq(-79.085, -79.055, 0.01))
+  ggplot2::scale_x_continuous(breaks = seq(-79.085, -79.055, 0.02))
 ```
 
-## Choosing a Resampling Method {#choose-spt-rsmp}
+### Spatiotemporal Visualization
 
-While the example used the `r ref("mlr_resamplings_spcv_coords", text = "spcv_coords")` method, this does not mean that this method is the best or only method suitable for this task.
-Even though this method is quite popular, it was mainly chosen because of the clear visual grouping differences compared to random partitioning.
+When going spatiotemporal, two dimensions are not enough anymore.
+To visualize space and time together, a 3D solution is needed.
+{mlr3spatiotempcv} makes use of `r cran_pkg("plotly")` for this purpose.
+
+The following examples uses a modified version of the `cookfarm_mlr3` task for showcasing reasons.
+By adjusting some levels, the individual partitions can be recognized very well.
+
+:::{.callout-warning}
+In practice, you should not modify your data to achieve "good looking" visualizations as done in this example.
+This is only done for (visual) demonstration purposes.
+:::
+
+In the following we use the `r ref("mlr_resamplings_sptcv_cstf", text = "sptcv_cstf")` method after @meyer2018.
+Only the temporal variable is used in this first example, denoted by setting the column role "time" to variable "Date".
+This column role is then picked up by the resampling method.
+Last, `autoplot()` is called with an explicit definition of `plot3D = TRUE`.
+This is because `r ref("mlr_resamplings_sptcv_cstf", text = "sptcv_cstf")` can also be visualized in 2D (which only makes sense if the "space" column role is used for partitioning).
+
+Last, `sample_fold_n` is used to take a stratified random sample from all partitions.
+The call to `r ref("plotly::layout()")` only adjusts the default viewing angle of the plot - in interactive visualizations, this is not needed and the viewing angle can be adjusted with the mouse.
+
+:::{.callout-warning}
+This is done to reduce the final plot size and keep things small for demos like this one.
+We don't recommend doing this in actual studies - unless you prominently communicate this alongside the resulting plot.
+:::
+
+```{r 08-special-spatiotemp-010, eval = FALSE}
+data = cookfarm_mlr3
+set.seed(42)
+data$Date = sample(rep(c(
+  "2020-01-01", "2020-02-01", "2020-03-01", "2020-04-01",
+  "2020-05-01"), times = 1, each = 35768))
+task_spt = as_task_regr_st(data,
+  id = "cookfarm", target = "PHIHOX",
+  coordinate_names = c("x", "y"), coords_as_features = FALSE,
+  crs = 26911)
+task_spt$set_col_roles("Date", roles = "time")
+
+rsmp_cstf_time = rsmp("sptcv_cstf", folds = 5)
+
+plot = autoplot(rsmp_cstf_time,
+  fold_id = 5, task = task_spt, plot3D = TRUE,
+  sample_fold_n = 3000L
+)
+plotly::layout(plot, scene = list(camera = list(eye = list(z = 0.58))))
+```
+
+If both space and time are used for partitioning in `r ref("mlr_resamplings_sptcv_cstf", text = "sptcv_cstf")`, the visualization becomes even more powerful as it allows to also show the observations which are omitted, i.e., not being used in either train and test sets for a specific fold.
+
+```{r 08-special-spatiotemp-011, eval = FALSE}
+task_spt$set_col_roles("SOURCEID", roles = "space")
+task_spt$set_col_roles("Date", roles = "time")
+
+rsmp_cstf_space_time = rsmp("sptcv_cstf", folds = 5)
+
+plot = autoplot(rsmp_cstf_space_time,
+  fold_id = 4, task = task_spt, plot3D = TRUE,
+  show_omitted = TRUE, sample_fold_n = 3000L)
+
+plotly::layout(plot, scene = list(camera =
+list(eye = list(z = 0.58, x = -1.4, y = 1.6))))
+```
+
+Combining multiple spatiotemporal plots with `r ref("plotly::layout()")` is possible but somewhat cumbersome.
+First, a list of plots containing the individuals plots must be created.
+These plots can then be passed to `r ref("plotly::subplot()")`.
+This return is then passed to `r ref("plotly::layout()")`.
+
+```{r 08-special-spatiotemp-012, eval = FALSE}
+pl = autoplot(rsmp_cstf_space_time, task = task_spt,
+  fold_id = c(1, 2, 3, 4), point_size = 3,
+  axis_label_fontsize = 10, plot3D = TRUE,
+  sample_fold_n = 3000L, show_omitted = TRUE
+)
+
+# Warnings can be ignored
+pl_subplot = plotly::subplot(pl)
+
+plotly::layout(pl_subplot,
+  title = "Individual Folds",
+  scene = list(
+    domain = list(x = c(0, 0.5), y = c(0.5, 1)),
+    aspectmode = "cube",
+    camera = list(eye = list(z = 0.20, x = -1.4, y = 1.6))
+  ),
+  scene2 = list(
+    domain = list(x = c(0.5, 1), y = c(0.5, 1)),
+    aspectmode = "cube",
+    camera = list(eye = list(z = 0.1, x = -1.4, y = 1.6))
+  ),
+  scene3 = list(
+    domain = list(x = c(0, 0.5), y = c(0, 0.5)),
+    aspectmode = "cube",
+    camera = list(eye = list(z = 0.1, x = -1.4, y = 1.6))
+  ),
+  scene4 = list(
+    domain = list(x = c(0.5, 1), y = c(0, 0.5)),
+    aspectmode = "cube",
+    camera = list(eye = list(z = 0.58, x = -1.4, y = 1.6))
+  )
+)
+```
+
+Unfortunately, titles in subplots cannot be created dynamically. However, there is a manual workaround via annotations show in [this RPubs post](https://rpubs.com/bcd/subplot-titles).
+
+### Choosing a Resampling Method {#choose-spt-rsmp}
+
+While the example in this section made use of the `r ref("mlr_resamplings_spcv_coords", text = "spcv_coords")` method, this should by no means infer that this method is the best or only method suitable for this task.
+Even though this method is quite popular, it was mainly chosen because of the clear visual grouping differences when being applied on the `r ref("mlr_tasks_ecuador", text = "ecuador")` task when compared to random partitioning.
 
 In fact, most often multiple spatial partitioning methods can be used for a dataset.
 It is recommended (required) that users familiarize themselves with each implemented method and decide which method to choose based on the specific characteristics of the dataset.
-For almost all methods implemented in `r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")`, there is a scientific publication describing the strengths and weaknesses of the respective approach (either linked in the help file of `r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")` or its respective dependency packages).
+For almost all methods implemented in `r gh_pkg("mlr-org/mlr3spatiotemporal")`, there is a scientific publication describing the strengths and weaknesses of the respective approach (either linked in the help file of `r gh_pkg("mlr-org/mlr3spatiotemporal")` or its respective dependency packages).
 
+:::{.callout-tip}
 In the example above, a cross-validation without hyperparameter tuning was shown.
 If a nested CV is desired, it is recommended to use the same spatial partitioning method for the inner loop (= tuning level).
-See @schratz2019 for more details and chapter 11 of [Geocomputation with R](https://geocompr.robinlovelace.net/spatial-cv.html) [@lovelace2019]^[The chapter will soon be rewritten using the **mlr3** and **mlr3spatiotempcv** packages.].
+See @schratz2019 for more details and chapter 11 of [Geocomputation with R](https://geocompr.robinlovelace.net/spatial-cv.html) [@lovelace2019].
+:::
 
-A list of all implemented methods in `r mlr3book::gh_pkg("mlr-org/mlr3spatiotemporal")` can be found in the [Getting Started](https://mlr3spatiotempcv.mlr-org.com/articles/mlr3spatiotempcv.html#resampling-methods) vignette of the package.
+:::{.callout-tip}
+A list of all implemented methods in `r gh_pkg("mlr-org/mlr3spatiotemporal")` can be found in the [Getting Started](https://mlr3spatiotempcv.mlr-org.com/articles/mlr3spatiotempcv.html#resampling-methods) vignette of the package.
+:::
 
-If you want to learn even more about the field of spatial partitioning, STAC and the problems associated with it, the work of [Prof. Hanna Meyer](https://scholar.google.com/citations?user=9YibxW0AAAAJ&hl=en) is very much recommended for further reference.
+If you want to learn even more about the field of spatial partitioning, STAC and the problems associated with it, the works of [Prof. Hanna Meyer](https://scholar.google.com/citations?user=9YibxW0AAAAJ&hl=en) and [Prof. Alexander Brenning](https://scholar.google.com/citations?hl=en&user=GD5bzTgAAAAJ) are very much recommended for further reference.
 
-## Spatial Prediction
+## Spatial Prediction {#sec-spatial-prediction}
 
-Experimental support for spatial prediction with `r mlr3book::cran_pkg("terra")`, `r mlr3book::cran_pkg("raster")`, `r mlr3book::cran_pkg("stars")` and  `r mlr3book::cran_pkg("sf")` objects is available in `r mlr3book::gh_pkg("mlr-org/mlr3spatial")`.
+Support for spatial prediction with `r cran_pkg("terra")`, `r cran_pkg("raster")`, `r cran_pkg("stars")` and `r cran_pkg("sf")` objects is available via `r gh_pkg("mlr-org/mlr3spatial")`.
 
-Until the package is released on CRAN, please see the package vignettes for usage examples.
+More information and usage examples are coming soon!
