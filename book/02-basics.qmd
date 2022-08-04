@@ -1,12 +1,33 @@
-# Basics {#basics .unnumbered}
+# Basics {#basics}
 
-{{< include _setup.qmd >}}
+```{r 02-basics-001, echo = FALSE, message = FALSE}
+library("data.table")
+library("mlr3")
+library("mlr3book")
+requireNamespace("bbotk")
+
+lgr::get_logger("mlr3")$set_threshold("warn")
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+options(
+    datatable.print.nrows = 25,
+    datatable.print.class = FALSE,
+    datatable.print.keys = FALSE,
+    datatable.print.trunc.cols = TRUE,
+
+    knitr.graphics.auto_pdf = TRUE,
+    cache = TRUE,
+    cache.lazy = FALSE
+)
+
+set.seed(123)
+```
 
 This chapter will teach you the essential building blocks of `r mlr_pkg("mlr3")`, as well as its `r cran_pkg("R6")` classes and operations used for machine learning.
 
 How these building blocks interoperate is summarized in the following figure.
 
-```{r 02-basics-001, echo=FALSE, fig.align="center"}
+```{r 02-basics-002, echo=FALSE, fig.align="center"}
 knitr::include_graphics("images/ml_abstraction.svg")
 ```
 
@@ -57,3 +78,730 @@ This chapter covers the following topics:
 
 
 Before we get into the details of how to use `r mlr_pkg("mlr3")` for machine learning, we briefly introduce R6 and `data.table` since you need at least a basic understanding to work efficiently with our packages.
+
+## Quick data.table Intro for Beginners {#data.table}
+
+The package `r cran_pkg("data.table")` essentially implements the eponymous alternative to R's `data.frame()`, i.e. an object to store tabular data.
+
+:::{.callout-note}
+We decided to use `data.table()` because it is blazingly fast and scales quite well on bigger data.
+Many functions of `r mlr_pkg("mlr3")` return `data.table`s which can conveniently be subsetted or combined with other outputs.
+If you happen to not like the syntax or are feeling more comfortable with other tools, base `data.frame`s or `r cran_pkg("tibble")`/`r cran_pkg("dplyr")` is just a single `as.data.frame()` or `as_tibble()` away.
+:::
+
+Data tables can be constructed using the `data.table()` function (whose interface is similar to `data.frame()`) or by converting an object with `as.data.table()`.
+
+```{r 02-basics-003.table-001.table-002}
+library("data.table")
+df = data.frame(x = 1:12, y = rep(letters[1:3], each = 4))
+dt = as.data.table(df)
+```
+
+Although both objects store the data identically in memory, they are considerably different in their operation.
+First, the index operator `[` works slightly different.
+For both objects, the first argument (`i`) is used to select rows and the second argument (`j`) is used to select columns.
+However, column names are in the search path, and thus can be used directly:
+
+```{r 02-basics-004.table-002.table-003}
+df[df$y == "a", ]
+dt[y == "a", ]
+```
+
+Second, there is no optional `drop` argument (`drop` is always `FALSE` for `data.table()`), but instead multiple additional arguments to query the data from the `data.table()` in a very concise way.
+Most importantly, you can group the data with argument `by` and combine this with aggregating functions provided via the second argument (`j`):
+
+```{r 02-basics-005.table-003.table-004}
+dt[, mean(x), by = "y"]
+```
+
+There is also extensive support to perform all kinds of data base join operations (see, e.g., [this RPubs post by Ronald Stalder](https://rstudio-pubs-static.s3.amazonaws.com/52230_5ae0d25125b544caab32f75f0360e775.html)).
+
+For an in-depth introduction, we refer to the [excellent data.table introduction vignette](https://cran.r-project.org/web/packages/data.table/vignettes/datatable-intro.html).
+Also don't miss the other vignettes linked on the CRAN page of `r ref_pkg("data.table")`!
+
+## Tasks {#tasks}
+
+Tasks are objects that contain the (usually tabular) data and additional meta-data to define a machine learning problem.
+The meta-data is, for example, the name of the target variable for supervised machine learning problems, or the type of the dataset (e.g. a _spatial_ or _survival_ task).
+This information is used by specific operations that can be performed on a task.
+
+### Task Types {#tasks-types}
+
+To create a task object, you first need to choose the right task type:
+
+* **Classification Task**: The target is a label (stored as `character` or `factor`) with only relatively few distinct values → `r ref("TaskClassif")`.
+
+* **Regression Task**: The target is a numeric quantity (stored as `integer` or `numeric`) → `r ref("TaskRegr")`.
+
+* **Survival Task**: The target is the (right-censored) time to an event. More censoring types are currently in development → `r ref("mlr3proba::TaskSurv")` in add-on package `r mlr_pkg("mlr3proba")`.
+
+* **Density Task**: An unsupervised task to estimate the density → `r ref("mlr3proba::TaskDens")` in add-on package `r mlr_pkg("mlr3proba")`.
+
+* **Cluster Task**: An unsupervised task type; there is no target and the aim is to identify similar groups within the feature space → `r ref("mlr3cluster::TaskClust")` in add-on package `r mlr_pkg("mlr3cluster")`.
+
+* **Spatial Task**: Observations in the task have spatio-temporal information (e.g. coordinates) → `r ref("mlr3spatiotempcv::TaskRegrST")` or `r ref("mlr3spatiotempcv::TaskClassifST")` in add-on package `r mlr_pkg("mlr3spatiotempcv")`.
+
+* **Ordinal Regression Task**: The target is ordinal → `TaskOrdinal` in add-on package `r gh_pkg("mlr-org/mlr3ordinal")` (still in development).
+
+### Task Creation {#tasks-creation}
+
+As an example, we will create a regression task using the `r ref("datasets::mtcars", text = "mtcars")` data set from package `datasets` (ships with R).
+It contains characteristics for different types of cars, along with their fuel consumption.
+We predict the numeric target variable stored in column `"mpg"` (miles per gallon).
+Here, we only consider the first two features in the dataset for brevity:
+
+```{r 02-basics-006}
+data("mtcars", package = "datasets")
+data = mtcars[, 1:3]
+str(data)
+```
+
+Next, we create a regression task, i.e. we construct a new instance of the R6 class `r ref("TaskRegr")`.
+Formally, the intended way to initialize an R6 object is to call the constructor `TaskRegr$new()`.
+Here instead, we are calling the converter `r ref("as_task_regr()")` to convert our `data.frame()` stored in the object `data` to a regression task and provide the following additional information:
+
+1. `x`: Object to convert.
+  Works for rectangular data formats such as `data.frame()`, `data.table()`, or `tibble()`.
+  Internally, the data is converted and stored in an abstract `r ref("DataBackend")`.
+  This allows connecting to out-of-memory storage systems like SQL servers via the extension package `r mlr_pkg("mlr3db")`.
+1. `target`: The name of the prediction target column for the regression problem, here miles per gallon (`"mpg"`).
+1. `id` (optional): An arbitrary identifier for the task, used in plots and summaries.
+   If not provided, the deparsed name of `x` will be used.
+
+```{r 02-basics-007}
+library("mlr3")
+
+task_mtcars = as_task_regr(data, target = "mpg", id = "cars")
+print(task_mtcars)
+```
+
+The `print()` method gives a short summary of the task:
+It has `r task_mtcars$nrow` observations and `r task_mtcars$ncol` columns, of which `r length(task_mtcars$feature_names)` are features stored in double-precision floating point format.
+
+We can also plot the task using the `r mlr_pkg("mlr3viz")` package, which gives a graphical summary of its properties:
+
+```{r 02-basics-008, message=FALSE}
+library("mlr3viz")
+autoplot(task_mtcars, type = "pairs")
+```
+
+:::{.callout-tip}
+Instead of loading multiple extension packages individually, it is often more convenient to load the `r mlr_pkg("mlr3verse")` package instead.
+`mlr3verse` imports the Namespace of most `r mlr_pkg("mlr3")` packages and re-exports functions which are used for common machine learning and data science tasks.
+:::
+
+### Predefined tasks {#tasks-predefined}
+
+`r mlr_pkg("mlr3")` includes a few predefined machine learning tasks.
+All tasks are stored in an R6 `r ref("Dictionary")` (a key-value store) named `r ref("mlr_tasks")`.
+Printing it gives the keys (the names of the datasets):
+
+```{r 02-basics-009}
+mlr_tasks
+```
+
+We can get a more informative summary of the example tasks by converting the dictionary to a `r ref("data.table()")` object:
+
+```{r 02-basics-010}
+as.data.table(mlr_tasks)
+```
+
+Above, the columns `"lgl"` (`r ref("logical")`), `"int"` (`r ref("integer")`), `"dbl"` (`r ref("double")`), `"chr"` (`r ref("character")`), `"fct"` (`r ref("factor")`), `"ord"` (`r ref("ordered", text = "ordered factor")`) and `"pxc"` (`r ref("POSIXct")` time) show the number of features in the task of the respective type.
+
+To get a task from the dictionary, use the `$get()` method from the `mlr_tasks` class and assign the return value to a new variable
+As getting a task from a dictionary is a very common problem, `r mlr_pkg("mlr3")` provides the shortcut function `r ref("tsk()")`.
+Here, we retrieve the `r ref("mlr_tasks_penguins", text = "palmer penguins classification task")`, which is provided by the imported package `r cran_pkg("palmerpenguins")`:
+
+```{r 02-basics-011}
+task_penguins = tsk("penguins")
+print(task_penguins)
+```
+
+:::{.callout-note}
+Loading extension packages can add elements to dictionaries such as `r ref("mlr_tasks")`.
+For example, `r mlr_pkg("mlr3data")` adds some more example and toy tasks for regression and classification, and `r mlr_pkg("mlr3proba")` adds survival and density estimation tasks.
+:::
+
+To get more information about a particular task, it is easiest to use the `help()` method that all `r mlr_pkg("mlr3")`-objects come with:
+```{r 02-basics-012, eval = FALSE}
+task_penguins$help()
+```
+Alternatively, the corresponding man page can be found under `mlr_tasks_[id]`, e.g. `r ref("mlr_tasks_penguins")`:
+```{r 02-basics-013, eval = FALSE}
+help("mlr_tasks_penguins")
+```
+
+
+:::{.callout-tip}
+Thousands more data sets are readily available via [Openml.org](https://openml.org) ([@openml2013]) and `r mlr_pkg("mlr3oml")`.
+E.g., to download the data set ["credit-g"](https://www.openml.org/search?type=data&id=31) with data id `31` and automatically convert it to a classification task:
+
+```{r 02-basics-014, eval = FALSE}
+library("mlr3oml")
+tsk("oml", task_id = 31)
+```
+:::
+
+### Task API {#tasks-api}
+
+All properties and characteristics of tasks can be queried using the task's public fields and methods (see `r ref("Task")`).
+Methods can also be used to change the stored data and the behavior of the task.
+
+#### Retrieving Data {#tasks-retrieving}
+
+The `r ref("Task")` object primarily represents a tabular dataset, combined with meta-data about which columns of that data should be used to predict which other columns in what way, as well as some more information about column data types.
+
+Various fields can be used to retrieve meta-data about a task. The dimensions can, for example, be retrieved using `$nrow` and `$ncol`:
+```{r 02-basics-015}
+task_mtcars$nrow
+task_mtcars$ncol
+```
+
+The names of the feature and target columns are stored in the `$feature_names` and `$target_names` slots, respectively. Here, "target" refers to the variable we want to predict and "feature" to the predictors for the task.
+```{r 02-basics-016}
+task_mtcars$feature_names
+task_mtcars$target_names
+```
+
+For the most common tasks, regression and classification, the target will only be the name of a single column.
+Tasks with other task types, such as for survival estimation, may have more than one target column while clustering tasks have no target at all:
+```{r 02-basics-017}
+requireNamespace("mlr3proba", quietly = TRUE)
+tsk("unemployment")$target_names
+
+requireNamespace("mlr3cluster", quietly = TRUE)
+tsk("usarrests")$target_names
+```
+
+While the columns of a task have unique `character`-valued names, their rows are identified by unique natural numbers, their row-IDs. They can be accessed through the `$row_ids` slot:
+```{r 02-basics-018}
+head(task_mtcars$row_ids)
+```
+:::{.callout-warning}
+Although the row IDs are typically just the sequence from `1` to `nrow(data)`, they are only guaranteed to be unique natural numbers. It is possible that they do not start at `1`, that they are not increasing by 1 each, or that they are not even in increasing order.
+The reasoning behind this is simple: we allow to transparently operate on real database management systems, and the uniqueness is the only requirement for primary keys in data bases. For more info on connecting to data bases, see [backends](#backends).
+:::
+
+The data contained in a task can be accessed through `$data()`, which returns a `data.table` object.
+It has optional `rows` and `cols` arguments to specify subsets of the data to retrieve.
+When a database backend is used, then this avoids loading unnecessary data into memory, making it more efficient than retrieving the entire data first and then subsetting it using `[<rows>, <cols>]`.
+```{r 02-basics-019}
+task_mtcars$data()
+# retrieve data for rows with ids 1, 5, and 10 and select column "mpg"
+task_mtcars$data(rows = c(1, 5, 10), cols = "mpg")
+```
+
+To extract the complete data from the task, one can also convert it to a `data.table`:
+```{r 02-basics-020}
+# show summary of entire data
+summary(as.data.table(task_mtcars))
+```
+
+#### Task Mutators {#tasks-mutators}
+
+It is often necessary to create tasks that encompass subsets of other tasks' data, for example to manually create [train-test-splits](#train-test-splits), or to fit models on a subset of given features. Restricting tasks to a given set of features can be done by calling `$select()` with the desired feature names. Restriction to rows is done with `$filter()` with the row-IDs.
+
+```{r 02-basics-021}
+task_penguins_small = tsk("penguins")
+task_penguins_small$select(c("body_mass", "flipper_length")) # keep only these features
+task_penguins_small$filter(2:4) # keep only these rows
+task_penguins_small$data()
+```
+
+These methods are so-called *mutators*, they modify the given `Task` in-place. If you want to have an unmodified version of the task, you need to use the `$clone()` method to create a copy first.
+
+```{r 02-basics-022}
+task_penguins_smaller = task_penguins_small$clone()
+task_penguins_smaller$filter(2)
+task_penguins_smaller$data()
+task_penguins_small$data()  # this task is unmodified
+```
+
+Note also how the last call to `$filter(2)` did not select the second row of the `task_penguins_small`, but selected the row with ID 2, which is the *first* row of `task_penguins_small`.
+
+:::{.callout-tip}
+If you ever really need to work with row numbers instead of row-IDs, you can work-around by operating on the row ids and pass the result back to the task:
+
+```{r 02-basics-023, eval = FALSE}
+# keep the 2nd row:
+keep = task$row_ids[2] # extracts id of 2nd row
+task_penguins_smaller$filter(keep)
+```
+:::
+
+While the methods above allow us to subset the data, the methods `$rbind()` and `$cbind()` allow adding extra rows and columns to a task.
+
+```{r 02-basics-024}
+task_penguins_smaller$rbind( # add another row
+  data.frame(body_mass = 1e9, flipper_length = 1e9, species = "GigaPeng")
+)
+task_penguins_smaller$cbind(data.frame(letters = letters[2:3])) # add column with letters
+task_penguins_smaller$data()
+```
+
+#### Roles (Rows and Columns) {#tasks-roles}
+
+We have seen that certain columns are designated as "targets" and "features" during task creation, their "roles":
+Target refers to the variable(s) we want to predict and features are the predictors (also called co-variates) for the target.
+Besides these two, there are other possible roles for columns, see the documentation of `r ref("Task")`. These roles affect the behavior of the task for different operations.
+
+The previously-constructed `task_penguins_small` task, for example, has the following column roles:
+
+```{r 02-basics-025}
+task_penguins_small$col_roles
+```
+
+Columns can have have multiple roles. It is also possible for a column to have no role at all, in which case they are ignored. This is, in fact, how `$select()` and `$filter()` operate: They unassign the `"feature"` (for columns) or `"use"` (for rows) role without modifying the data which is stored in an immutable backend:
+
+```{r 02-basics-026}
+task_penguins_small$backend
+```
+
+There are two main ways to manipulate the col roles of a `Task`:
+
+1. Use the `r ref("Task")` method `$set_col_roles()` (recommended).
+1. Simply modify the field `$col_roles`, which is a named list of vectors of column names.
+   Each vector in this list corresponds to a column role, and the column names contained in that vector have that role.
+
+Just as `$select()`/`$filter()`, these are in-place operations, so the task object itself is modified. To retain another unmodified version of a task, use `$clone()`.
+
+Changing the column or row roles, whether by `$select()`/`$filter()` or directly, does not change the underlying data, it just updates the view on it.
+Because the underlying data is still there (and accessible through `$backend`), we can add the `"bill_length"` column back into the task by setting its col role to `"feature"`.
+```{r 02-basics-027}
+task_penguins_small$set_col_roles("bill_length", roles = "feature")
+task_penguins_small$feature_names  # bill_length is now a feature again
+task_penguins_small$data()
+```
+
+Supported column roles can be found in the manual of `r ref("Task")`, or just by printing the names of the field `$col_roles`:
+
+```{r 02-basics-028}
+# supported column roles, see ?Task
+names(task_penguins_small$col_roles)
+```
+
+Just like columns, it is also possible to assign different roles to rows. Rows can have two different roles:
+
+1. Role `use`:
+  Rows that are generally available for model fitting (although they may also be used as test set in resampling).
+  This role is the default role. The `$filter()` call changes this role, in the same way that `$select()` changes the `"feature"` role.
+2. Role `validation`:
+  Rows that are not used for training.
+  Rows that have missing values in the target column during task creation are automatically set to the validation role.
+
+There are several reasons to hold some observations back or treat them differently:
+
+1. It is often good practice to validate the final model on an external validation set to identify possible overfitting.
+2. Some observations may be unlabeled, e.g. in competitions like [Kaggle](https://www.kaggle.com/).
+
+These observations cannot be used for training a model, but can be used to get predictions.
+
+### Task API Extensions
+
+While the previous section described (a subset of) the API all tasks have in common, some tasks come with additional getters or setters.
+
+For example, classification problems with a target variable with only two classes are called binary classification tasks.
+They are special in the sense that one of these classes is denoted *positive* and the other one *negative*.
+You can specify the *positive class* within the `r ref("TaskClassif", text = "classification task")` object during task creation.
+If not explicitly set during construction, the positive class defaults to the first level of the target variable.
+
+```{r 02-basics-029}
+# during construction
+data("Sonar", package = "mlbench")
+task = as_task_classif(Sonar, target = "Class", positive = "R")
+
+# switch positive class to level 'M'
+task$positive = "M"
+```
+
+
+### Plotting Tasks {#autoplot-task}
+
+The `r mlr_pkg("mlr3viz")` package provides plotting facilities for many classes implemented in `r mlr_pkg("mlr3")`.
+The available plot types depend on the class, but all plots are returned as `r cran_pkg("ggplot2")` objects which can be easily customized.
+
+For classification tasks (inheriting from `r ref("TaskClassif")`), see the documentation of `r ref("mlr3viz::autoplot.TaskClassif")` for the implemented plot types.
+Here are some examples to get an impression:
+
+```{r 02-basics-030, warning = FALSE, message = FALSE}
+library("mlr3viz")
+
+# get the pima indians task
+task = tsk("pima")
+
+# subset task to only use the 3 first features
+task$select(head(task$feature_names, 3))
+
+# default plot: class frequencies
+autoplot(task)
+
+# pairs plot (requires package GGally)
+autoplot(task, type = "pairs")
+
+# duo plot (requires package GGally)
+autoplot(task, type = "duo")
+```
+
+Of course, you can do the same for regression tasks (inheriting from `r ref("TaskRegr")`) as documented in `r ref("mlr3viz::autoplot.TaskRegr")`:
+
+```{r 02-basics-031, warning = FALSE, message = FALSE}
+library("mlr3viz")
+
+# get the complete mtcars task
+task = tsk("mtcars")
+
+# subset task to only use the 3 first features
+task$select(head(task$feature_names, 3))
+
+# default plot: boxplot of target variable
+autoplot(task)
+
+# pairs plot (requires package GGally)
+autoplot(task, type = "pairs")
+```
+
+## Learners {#learners}
+
+Objects of class `r ref("Learner")` provide a unified interface to many popular machine learning algorithms in R.
+They consist of methods to train and predict a model for a `r ref("Task")` and provide meta-information about the learners, such as the hyperparameters (which control the behavior of the learner) you can set.
+
+The base class of each learner is `r ref("Learner")`, specialized for regression as `r ref("LearnerRegr")` and for classification as `r ref("LearnerClassif")`.
+Other types of learners, provided by extension packages, also inherit from the `r ref("Learner")` base class, e.g. `r ref("mlr3proba::LearnerSurv")` or `r ref("mlr3cluster::LearnerClust")`.
+
+All Learners work in a two-stage procedure:
+
+* **Training stage**: The training data (features and target) is passed to the Learner's `$train()` function which trains and stores a model, i.e. the relationship of the target and features.
+* **Predict stage**: The new data, usually a different slice of the original data than used for training, is passed to the `$predict()` method of the Learner.
+  The model trained in the first step is used to predict the missing target, e.g. labels for classification problems or the numerical value for regression problems.
+
+```{r 02-basics-032, echo=FALSE, fig.align="center"}
+knitr::include_graphics("images/learner.svg")
+```
+
+
+### Predefined Learners
+
+The `r mlr_pkg("mlr3")` package ships with the following set of classification and regression learners.
+We deliberately keep this small to avoid unnecessary dependencies:
+
+* `r ref("mlr_learners_classif.featureless", text = "classif.featureless")`: Simple baseline classification learner.
+  The default is to always predict the label that is most frequent in the training set. While this is not very useful by itself, it can be used as a "[fallback learner](fallback-learners)" to make predictions in case another, more sophisticated, learner failed for some reason.
+* `r ref("mlr_learners_regr.featureless", text = "regr.featureless")`: Simple baseline regression learner.
+  The default is to always predict the mean of the target in training set. Similar to `r ref("mlr_learners_classif.featureless")`, it makes for a good "[fallback learner](fallback-learners)"
+* `r ref("mlr_learners_classif.rpart", text = "classif.rpart")`: Single classification tree from package `r cran_pkg("rpart")`.
+* `r ref("mlr_learners_regr.rpart", text = "regr.rpart")`: Single regression tree from package `r cran_pkg("rpart")`.
+
+This set of baseline learners is usually insufficient for a real data analysis.
+Thus, we have cherry-picked implementations of the most popular machine learning method and collected them in the `r mlr_pkg("mlr3learners")` package:
+
+* Linear (`r ref("mlr_learners_regr.lm", text = "regr.lm")`) and logistic (`r ref("mlr_learners_classif.log_reg", text = "classif.log_reg")`) regression
+* Penalized Generalized Linear Models (`r ref("mlr_learners_regr.glmnet", text = "regr.glmnet")`, `r ref("mlr_learners_classif.glmnet", text = "classif.glmnet")`), possibly with built-in optimization of the penalization parameter (`r ref("mlr_learners_regr.cv_glmnet", text = "regr.cv_glmnet")`, `r ref("mlr_learners_classif.cv_glmnet", text = "classif.cv_glmnet")`)
+* (Kernelized) $k$-Nearest Neighbors regression (`r ref("mlr_learners_regr.kknn", text = "regr.kknn")`) and classification (`r ref("mlr_learners_classif.kknn", text = "classif.kknn")`).
+* Kriging / Gaussian Process Regression (`r ref("mlr_learners_regr.km", text = "regr.km")`)
+* Linear (`r ref("mlr_learners_classif.lda", text = "classif.lda")`) and Quadratic (`r ref("mlr_learners_classif.qda", text = "classif.qda")`) Discriminant Analysis
+* Naive Bayes Classification (`r ref("mlr_learners_classif.naive_bayes", text = "classif.naive_bayes")`)
+* Support-Vector machines (`r ref("mlr_learners_regr.svm", text = "regr.svm")`, `r ref("mlr_learners_classif.svm", text = "classif.svm")`)
+* Gradient Boosting (`r ref("mlr_learners_regr.xgboost", text = "regr.xgboost")`, `r ref("mlr_learners_classif.xgboost", text = "classif.xgboost")`)
+* Random Forests for regression and classification (`r ref("mlr_learners_regr.ranger", text = "regr.ranger")`, `r ref("mlr_learners_classif.ranger", text = "classif.ranger")`)
+
+More machine learning methods and alternative implementations are collected in the [mlr3extralearners repository](https://github.com/mlr-org/mlr3extralearners/).
+
+:::{.callout-tip}
+A full list of available learners across all `r mlr_pkg("mlr3")` packages is hosted on our website: [list of learners](https://mlr-org.com/learners.html).
+:::
+
+
+Analogously to `r ref("mlr_tasks")` storing the shipped taks, the dictionary `r ref("mlr_learners")` stores implemented learners.
+
+```{r 02-basics-033, R.options=list(max.print = 3)}
+library("mlr3learners")       # load recommended learners provided by mlr3learners package
+library("mlr3extralearners")  # this loads further less-well-supported learners
+library("mlr3proba")          # this loads some survival and density estimation learners
+library("mlr3cluster")        # this loads some learners for clustering
+
+mlr_learners
+```
+
+To obtain an object from the dictionary, use the syntactic sugar function `r ref("lrn()")`:
+
+```{r 02-basics-034}
+learner = lrn("classif.rpart")
+```
+
+### Learner API
+
+Each learner provides the following meta-information:
+
+* `$feature_types`: the type of features the learner can deal with.
+* `$packages`: the packages required to train a model with this learner and make predictions.
+* `$properties`: additional properties and capabilities.
+  For example, a learner has the property "missings" if it is able to handle missing feature values, and "importance" if it computes and allows to extract data on the relative importance of the features.
+* `$predict_types`: possible prediction types. For example, a classification learner can predict labels ("response") or probabilities ("prob").
+
+This information can be queried through these slots, or seen at a glance from the printer:
+```{r 02-basics-035}
+print(learner)
+```
+
+Furthermore, each learner has hyperparameters that control its behavior, for example the minimum number of samples in the leaf of a decision tree, or whether to provide verbose output durning training.
+Setting hyperparameters to values appropriate for a given machine learning task is crucial.
+The field `param_set` stores a description of the hyperparameters the learner has, their ranges, defaults, and current values:
+
+```{r 02-basics-036}
+learner$param_set
+```
+
+The set of current hyperparameter values is stored in the `values` field of the `param_set` field.
+You can access and change the current hyperparameter values by accessing this field, it is a named list:
+
+```{r 02-basics-037}
+learner$param_set$values
+learner$param_set$values$cp = 0.01
+learner$param_set$values
+```
+
+:::{.callout-tip}
+It is possible to assign all hyperparameters in one go by assigning a named list to `$values`: `learner$param_set$values = list(cp = 0.01, xval = 0)`. However, be aware that this operation also removes all previously set hyperparameters.
+:::
+
+The `r ref("lrn()")` function also accepts additional arguments to update hyperparameters or set fields of the learner in one go:
+
+```{r 02-basics-038}
+learner = lrn("classif.rpart", id = "rp", cp = 0.001)
+learner$id
+learner$param_set$values
+```
+
+More on this is discussed in the section on [Hyperparameter Tuning](#tuning).
+
+## Train, Predict, Assess Performance {#train-predict}
+
+In this section, we explain how [tasks](#tasks) and [learners](#learners) can be used to train a model and predict on a new dataset.
+Training a [learner](#learners) means fitting a model to a given data set -- essentially, an optimization problem that determines the best parameters (not hyperparameters!) of the model given the data.
+We then [predict](#predicting) the label for observations that the model has not seen during training.
+We will then compare the predictions to ground truth values to assess the quality of a prediction.
+
+The concept is demonstrated on a supervised classification task using the `r ref("mlr_tasks_pima", text = "pima")` dataset, in which patient data is used to diagnostically predict diabetes, and the `r ref("mlr_learners_classif.rpart", text = "rpart")` learner, which builds a classification tree.
+As shown in the previous chapters, we load these objects using the short access functions `r ref("tsk()")` and  `r ref("lrn()")`.
+
+```{r 02-basics-039}
+task = tsk("pima")
+learner = lrn("classif.rpart")
+```
+
+### Training the learner {#training}
+
+The field `$model` stores the fitted model in the training step.
+Before the `$train()` method is called on a learner object, this field is `NULL`:
+
+```{r 02-basics-040}
+learner$model
+```
+
+Now we fit the classification tree using the training set of the task by calling the `$train()` method of `r ref("Learner")`:
+
+```{r 02-basics-041}
+learner$train(task)
+```
+
+This operation modifies the learner in-place by adding the fitted model to the existing object.
+We can now access the stored model via the field `$model`:
+
+```{r 02-basics-042}
+learner$model
+```
+
+Inspecting the output, we see that the learner has identified features in the task that are predictive of the class (diabetes status) and uses them to partition observations in the tree.
+There are additional details on how the data is partitioned across branches of the tree; the textual representation of the model depends on the type of learner.
+For more information on this particular type of model and its output, see `r ref ("rpart::print.rpart()")`.
+
+### Predicting {#predicting}
+
+After the model has been fitted to the training data, we can now use it for prediction. A common case is that a model was fitted on all training data that was available, and should now be used to make predictions for new data for which the actual labels are unknown:
+
+```{r 02-basics-043}
+pima_new = data.table::fread("
+age, glucose, insulin, mass, pedigree, pregnant, pressure, triceps
+24,  145,     306,     41.7, 0.5,      3,        52,       36
+47,  133,     NA,      23.3, 0.2,      7,        83,       28
+")
+pima_new
+```
+
+The learner does not need to know more meta-information about this data to make a prediction, such as which columns are features and targets, since this was already included in the training task.
+Instead, this data can directly be used to make a prediction using `$predict_newdata()`:
+
+```{r 02-basics-044}
+prediction = learner$predict_newdata(pima_new)
+prediction
+```
+
+This method returns a `r ref("Prediction")` object.
+More precisely, because the `learner` is a `r ref("LearnerClassif")`, it returns a `r ref("PredictionClassif")` object. The easiest way to access information from it is to convert it to a `data.table`:
+```{r 02-basics-045}
+as.data.table(prediction)
+```
+
+Here the `"truth"` column is `NA`, since the target column was not provided in the `pima_new` data frame.
+If we add the column, we will have the true and predicted labels side by side in the prediction object.
+```{r 02-basics-046}
+pima_new_known = cbind(pima_new, diabetes = factor("pos", levels = c("pos", "neg")))
+prediction = learner$predict_newdata(pima_new_known)
+prediction
+```
+
+Note that it is sometimes helpful first to convert the data to predict on a task.
+Predicting on the task's data works analogously, you only need to call the `$predict()` method instead of `$predict_newdata()`:
+
+```{r 02-basics-047}
+task_pima_new = as_task_classif(pima_new_known, target = "diabetes")
+prediction = learner$predict(task_pima_new)
+prediction
+```
+
+
+### Changing the Predict Type {#predict-type}
+
+Classification learners default to predicting the class label.
+However, many classifiers also tell you how sure they are about the predicted label by providing posterior probabilities for the classes.
+To predict these probabilities, the `predict_type` field of a `r ref("LearnerClassif")` must be changed from `"response"` (the default) to `"prob"` before training:
+
+```{r 02-basics-048}
+learner$predict_type = "prob"
+
+# re-fit the model
+learner$train(task)
+
+# rebuild prediction object
+prediction = learner$predict(task_pima_new)
+prediction
+```
+
+The prediction object now contains probabilities for all class labels in addition to the predicted label (the one with the highest probability):
+
+```{r 02-basics-049}
+# directly access the predicted labels:
+prediction$response
+
+# directly access the matrix of probabilities:
+prediction$prob
+
+# data.table conversion
+as.data.table(prediction)
+```
+
+Similarly to predicting probabilities for classification, many `r ref("LearnerRegr", text = "regression learners")` support the extraction of standard error estimates for predictions by setting the predict type to `"se"`.
+
+### Thresholding
+
+Models trained on binary classification tasks that predict the probability for the positive class usually use a simple rule to determine the predicted class label: if the probability is more than 50%, predict the positive label, otherwise, predict the negative label.
+In some cases, you may want to adjust this threshold, for example, if the classes are very unbalanced (i.e., one is much more prevalent than the other).
+
+In the example below, we change the threshold to 0.2, making the model predict `"pos"` for both example rows:
+
+```{r 02-basics-050}
+prediction$set_threshold(0.2)
+prediction
+```
+
+### Predicting on known data and train/test splits
+
+We will usually not want to wait with performance evaluation until new data becomes available.
+Instead, we will work with all the training data available at a given point.
+However, when evaluating the performance of a `r ref("Learner")`, it is also important to score predictions made on data that have not been seen during training, since making predictions on training data is too easy in general -- a `r ref("Learner")` could just memorize the training data responses and get a perfect score.
+
+`r mlr_pkg("mlr3")` makes it easy to only train on subsets of given tasks. We first create a vector indicating on what row IDs of the task the `r ref("Learner")` should be trained, and another that indicates the remaining rows that should be used for prediction. These vectors indicate the train-test-split we are using.
+This is done manually here for demonstration purposes: In @sec-resampling, we show how `r mlr_pkg("mlr3")` can automatically create training and test sets based on resampling strategies that can be more elaborate.
+
+We will use 67% of all available observations to train and predict on the remaining 33%.
+
+```{r 02-basics-051}
+set.seed(7)
+train_set = sample(task$row_ids, 0.67 * task$nrow)
+test_set = setdiff(task$row_ids, train_set)
+```
+
+:::{.callout-caution}
+Do not use constructs like `sample(task$nrow, ...)` to subset tasks, since rows are always identified by their `$row_ids`.
+These are not guaranteed to range from 1 to `task$nrow` and could be any positive integer.
+:::
+
+Both `$train()` and `$predict()` have an optional `row_ids`-argument that determines which rows are used. Note that it is not a problem to run `$train()` with a `r ref("Learner")` that has already been trained: the old model is automatically discarded, and the learner trains from scratch.
+
+```{r 02-basics-052}
+# train on the training set
+learner$train(task, row_ids = train_set)
+
+# predict on the test set
+prediction = learner$predict(task, row_ids = test_set)
+
+# the prediction naturally knows about the "truth" from the task
+prediction
+```
+
+### Performance assessment {#measure}
+
+The last step of modeling is usually assessing the performance of the trained model. For this, the predictions made by the model are compared with the known ground-truth values that are stored in the `r ref("Prediction")` object.
+The exact nature of this comparison is defined by a measure, which is given by a `"Measure"` object.
+If the prediction was made on a dataset without the target column, i.e., without known true labels, then performance can not be calculated.
+
+Available measures can be retrieved using the `r ref("msr()")` function, which accesses objects in `r ref("mlr_measures")`:
+
+```{r 02-basics-053}
+mlr_measures
+```
+
+We choose accuracy (`r ref("mlr_measures_classif.acc", text = "classif.acc")`) as our specific performance measure here and call the method `$score()` of the `prediction` object to quantify the predictive performance of our model.
+
+```{r 02-basics-054}
+measure = msr("classif.acc")
+measure
+prediction$score(measure)
+```
+
+:::{.callout-note}
+`$score()` can called without a given measure. In this case, classification defaults to classification error (`r ref("mlr_measures_classif.ce", text = "classif.ce")`, which is one minus accuracy) and regression to the mean squared error (`r ref("mlr_measures_regr.mse", text = "regr.mse")`).
+:::
+
+It is possible to calculate multiple measures at the same time by passing a list to `$score()`. Such a list can easily be constructed using the "plural" `msrs()` function. If one wanted to have both the "true positive rate" (`"classif.tpr"`) and the "true negative rate" (`"classif.tnr"`), one would use:
+
+```{r 02-basics-055}
+measures = msrs(c("classif.tpr", "classif.tnr"))
+prediction$score(measures)
+```
+
+#### Confusion Matrix
+
+A special case of performance evaluation is the confusion matrix, which shows, for each class, how many observations were predicted to be in that class and how many were actually in it (more information on [Wikipedia](https://en.wikipedia.org/wiki/Confusion_matrix)).
+The entries along the diagonal denote the correctly classified observations.
+
+```{r 02-basics-056}
+prediction$confusion
+```
+
+In this case, we can see that our classifier seems to misclassify a relatively large number of positive samples as negative. In fact, a positive case is still more likely to be classified as `"neg"` than `"pos'`. Depending on the application being considered, it is possible that it is more important to keep false positives (lower left element of the confusion matrix) low. Lowering the threshold, so that ambiguous samples are more readily classified as positive rather than negative, can help in this case, although it will also lead to negative cases being classified as `"pos"` more often.
+
+```{r 02-basics-057}
+prediction$set_threshold(0.3)
+prediction$confusion
+```
+
+:::{.callout-tip}
+Thresholds can be tuned automatically with the `r mlr_pkg("mlr3pipelines")` package, i.e. using `r ref("mlr_pipeops_tunethreshold", text = "PipeOpTuneThreshold")`.
+:::
+
+
+### Plotting Predictions {#autoplot-prediction}
+
+Similarly to [plotting tasks](#autoplot-task), `r mlr_pkg("mlr3viz")` provides an `r ref("ggplot2::autoplot()", text = "autoplot()")` method for `r ref("Prediction")` objects.
+All available types are listed in the manual pages for `r ref("autoplot.PredictionClassif()")`, `r ref("autoplot.PredictionRegr()")` and the other prediction types (defined by extension packages).
+
+```{r 02-basics-058, message = FALSE, warning = FALSE}
+task = tsk("penguins")
+learner = lrn("classif.rpart", predict_type = "prob")
+learner$train(task)
+prediction = learner$predict(task)
+
+library("mlr3viz")
+autoplot(prediction)
+```
