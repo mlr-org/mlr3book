@@ -7,7 +7,7 @@
 name_chunks_mlr3book = function() {
   root = rprojroot::find_package_root_file()
   path = file.path(root, "book")
-  qmds = list.files(path, pattern = "\\.qmd$", full.names = TRUE, recursive = TRUE)
+  qmds = list.files(path, pattern = "^[^_].*\\.qmd$", full.names = TRUE, recursive = TRUE)
   pattern = "^([[:space:]]*```\\{[rR])([[:alnum:] -]*)(.*\\})[[:space:]]*$"
 
   for (qmd in qmds) {
