@@ -25,6 +25,7 @@ clean:
 	find . -name "*.ps" -type f -delete;
 	find . -name "*.dvi" -type f -delete;
 	find . -type d -name "*_files" -exec rm -rf {} \;
+	find . -type d -name "*_cache" -exec rm -rf {} \;
 
 html:
 	quarto render book/ --to html
