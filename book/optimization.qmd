@@ -31,6 +31,7 @@ In the [tuning](#tuning) part, we will have a look at:
 * [automating](#autotuner) tuning.
 
 We will use the `r mlr_pkg("mlr3tuning")` package, which supports common tuning operations.
+`
 
 **Feature Selection**
 
@@ -545,7 +546,7 @@ search_space = ps(
 rbindlist(generate_design_grid(search_space, 3)$transpose(), fill = TRUE)
 ```
 
-#G## Creating Tuning ParamSets from other ParamSets
+### Creating Tuning ParamSets from other ParamSets
 
 Having to define a tuning `r ref("ParamSet")` for a `r ref("Learner")` that already has parameter set information may seem unnecessarily tedious, and there is indeed a way to create tuning `r ref("ParamSet", "ParamSets")` from a `r ref("Learner")`'s `r ref("ParamSet")`, making use of as much information as already available.
 
@@ -1067,7 +1068,6 @@ filter_cor$param_set
 filter_cor$param_set$values = list(method = "spearman")
 filter_cor$param_set
 ```
-
 ### Variable Importance Filters {#fs-var-imp-filters}
 
 All `r ref("Learner")` with the property "importance" come with integrated feature selection methods.
@@ -1090,34 +1090,110 @@ filter = flt("importance", learner = lrn)
 filter$calculate(task)
 head(as.data.table(filter), 3)
 ```
+### Filter-based Feature Selection
+
+A common usecase for filters is to conduct feature selection based on the filter scores.
+This can be achived using `r ref("mlr_pipeops_filter", text = "PipeOpFilter")`.
+This PipeOp takes as input a Task, applies the filter, and selects the features based on the calculated scores.
+The method how the features are subset can be defined in four different ways, each corresponding to a different parameter:
+
+  * `filter.nfeat` - The *nfeat* values with the highest filter score are selected.
+  * `filter.frac` - The *fraction* of values with the highest filter score are selected.
+  * `filter.cutoff` - All features with a filter score greater than the specified *cutoff* are selected.
+  * `filter.permuted` - A random permutation of each feature is added to the task before applying the filter.
+    All features selected before the *permuted*-th permuted features is selected are kept.
+
+
+:::{.callout-note}
+The `r ref("mlr_pipeops_filter", text = "PipeOpFilter")` only operates on the subset of features that have the correct column type and will leave other columns as is.
+:::
+
+We will illustrate the usage of this filter with the use of a machine learning pipeline for the `r ref("mlr_tasks_optdigits", text = "optdigits")` task, where the goal is to classify handwritten digits.
+We will first subset the features based on the `r ref("mlr3filters::mlr_filters_information_gain", text = "FilterInformationGain")` and then fit a `r ref("mlr3learners::mlr_learners_classif.lda", text = "LDA")`.
+We will tune the parameter `filter.frac` with a simple grid search and visualize the classification error for the different fractions.
+
+```{r optimization-060}
+# reduce logging output
+lgr::get_logger("bbotk")$set_threshold("warn")
+lgr::get_logger("mlr3")$set_threshold("warn")
+
+task = tsk("optdigits")
+
+future::plan(future::multisession(workers = 4))
+
+graph = po("filter", filter = flt("information_gain"), filter.frac = to_tune(0.1, 1)) %>>%
+  po("removeconstants") %>>%
+  po("scale") %>>%
+  po("learner", learner = lrn("classif.lda"))
+
+learner = as_learner(graph)
+
+lda_tuned = auto_tuner(
+  method = tnr("grid_search", resolution = 10),
+  learner = learner,
+  resampling = rsmp("holdout")
+)
+```
+
+:::{.callout-note}
+Unless you have a very specific reason, the parameter controlling how many features are selected, should be tuned.
+:::
+
+
+```{r optimization-061}
+rr = resample(task, lda_tuned, rsmp("cv"), store_models = TRUE)
+```
+
+We can now extract the tuning results for each fold and visualize the dependency between the feature fraction and the classification error.
+
+```{r optimization-062}
+archives = lapply(rr$learners,
+  function(x) {
+    archive = x$model$tuning_instance$archive
+    archive = as.data.table(archive)
+    archive[, .(information_gain.filter.frac, classif.ce)]
+  }
+)
+archive = data.table::rbindlist(archives)
+
+ggplot(data = archive, aes(x = as.factor(information_gain.filter.frac), y = classif.ce)) +
+  geom_boxplot() +
+  labs(
+    title = "Optdigits task: LDA for different subset fractions",
+    x = "Filter Fraction",
+    y = "Classification Error"
+  )
+```
+
+We can see that using 70% - 100% of the features seems to produce fairly similar results.
 
 ### Wrapper Methods {#fs-wrapper}
 
 Wrapper feature selection is supported via the `r mlr_pkg("mlr3fselect")` extension package.
 At the heart of `r mlr_pkg("mlr3fselect")` are the R6 classes:
 
-* `r ref("FSelectInstanceSingleCrit")`, `"r ref(FSelectInstanceMultiCrit")`: These two classes describe the feature selection problem and store the results.
+* `r ref("FSelectInstanceSingleCrit")`, `r ref("FSelectInstanceMultiCrit")`: These two classes describe the feature selection problem and store the results.
 * `r ref("FSelector")`: This class is the base class for implementations of feature selection algorithms.
 
 ### The `FSelectInstance` Classes {#fs-wrapper-optimization}
 
 The following sub-section examines the feature selection on the `r ref("mlr_tasks_pima", text = "Pima")` data set which is used to predict whether or not a patient has diabetes.
 
-```{r optimization-060}
+```{r optimization-063}
 task = tsk("pima")
 print(task)
 ```
 
 We use the classification tree from `r cran_pkg("rpart")`.
 
-```{r optimization-061}
+```{r optimization-064}
 learner = lrn("classif.rpart")
 ```
 
 Next, we need to specify how to evaluate the performance of the feature subsets.
 For this, we need to choose a `r ref("Resampling", text = "resampling strategy")` and a `r ref("Measure", text = "performance measure")`.
 
-```{r optimization-062}
+```{r optimization-065}
 hout = rsmp("holdout")
 measure = msr("classif.ce")
 ```
@@ -1133,7 +1209,7 @@ This is done by selecting one of the available `r ref("Terminator", text = "Term
 
 For this short introduction, we specify a budget of 20 evaluations and then put everything together into a `r ref("FSelectInstanceSingleCrit")`:
 
-```{r optimization-063}
+```{r optimization-066}
 evals20 = trm("evals", n_evals = 20)
 
 instance = FSelectInstanceSingleCrit$new(
@@ -1160,7 +1236,7 @@ The following algorithms are currently implemented in `r mlr_pkg("mlr3fselect")`
 
 In this example, we will use a simple random search and retrieve it from the dictionary `r ref("mlr_fselectors")` with the `r ref("fs()")` function:
 
-```{r optimization-064}
+```{r optimization-067}
 fselector = fs("random_search")
 ```
 
@@ -1178,7 +1254,7 @@ The algorithm proceeds as follows
 1. Store the best feature subset as the result in the instance object.
 The best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance.
 
-```{r optimization-065}
+```{r optimization-068}
 # reduce logging output
 lgr::get_logger("bbotk")$set_threshold("warn")
 
@@ -1189,13 +1265,13 @@ instance$result_y
 
 One can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("FSelectInstanceSingleCrit")` and can be accessed by using `r ref("as.data.table()")`:
 
-```{r optimization-066}
+```{r optimization-069}
 as.data.table(instance$archive)
 ```
 
 The associated resampling iterations can be accessed in the `r ref("BenchmarkResult")`:
 
-```{r optimization-067}
+```{r optimization-070}
 instance$archive$benchmark_result$data
 ```
 
@@ -1204,7 +1280,7 @@ This allows e.g. to score the included `r ref("ResampleResult")`s on a different
 
 Now the optimized feature subset can be used to subset the task and fit the model on all observations.
 
-```{r optimization-068}
+```{r optimization-071}
 task$select(instance$result_feature_set)
 learner$train(task)
 ```
@@ -1223,14 +1299,14 @@ We will expand the previous example and perform feature selection on the same da
 
 The filtering process with multiple criteria is very similar to filtering with a single criterion.
 
-```{r optimization-069}
+```{r optimization-072}
 measures = msrs(c("classif.ce", "time_train"))
 ```
 
 Instead of creating a new `r ref("FSelectInstanceSingleCrit")` with a single measure, we create a new `r ref("FSelectInstanceMultiCrit")` with the two measures we are interested in here.
 Otherwise, it is the same as above.
 
-```{r optimization-070}
+```{r optimization-073}
 library("mlr3filters")
 
 evals20 = trm("evals", n_evals = 20)
@@ -1246,18 +1322,18 @@ instance
 
 After triggering the filtering, we will have the subset of features with the best classification error and time to train the model.
 
-```{r optimization-071}
+```{r optimization-074}
 # reduce logging output
 lgr::get_logger("bbotk")$set_threshold("warn")
 
 fselector$optimize(instance)
 ```
 
-```{r optimization-072}
+```{r optimization-075}
 instance$result_feature_set
 ```
 
-```{r optimization-073}
+```{r optimization-076}
 instance$result_y
 ```
 
@@ -1269,7 +1345,7 @@ Analogously to the previous subsection, a new classification tree learner is cre
 This classification tree learner automatically starts a feature selection on the given task using an inner resampling (holdout).
 We create a terminator which allows 10 evaluations, and uses a simple random search as feature selection algorithm:
 
-```{r optimization-074}
+```{r optimization-077}
 learner = lrn("classif.rpart")
 terminator = trm("evals", n_evals = 10)
 fselector = fs("random_search")
@@ -1293,7 +1369,7 @@ This is called [nested resampling](#nested-resampling).
 
 To compare the optimized feature subset with the complete feature set, we can use `r ref("benchmark()")`:
 
-```{r optimization-075}
+```{r optimization-078}
 grid = benchmark_grid(
   task = tsk("pima"),
   learner = list(at, lrn("classif.rpart")),
