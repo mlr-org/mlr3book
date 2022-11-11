@@ -54,41 +54,53 @@ At the heart of the package are the R6 classes
 There are two options for constructing a tuning instance (a) [manually](#sec-tuning-instance) with the `r ref("ti()")` function or (b) [automated](#sec-simplified-tuning) with the `r ref("tune()")` function.
 We cover the manual approach here first because it gives you a better understanding of mlr3tuning.
 
-We will examine the optimization of a simple classification tree on the `r ref("mlr_tasks_penguins", text = "Palmer Penguins")` data set as an introductory example here.
+We will examine the optimization of a support vector machine (SVM) on the `r ref("mlr_tasks_sonar", text = "Sonar")` data set as an introductory example here.
 We start by introducing all the objects that describe the tuning problem.
 
 ### Learner and Search Space {#sec-learner-search-space}
 
-We use the `r mlr3book::cran_pkg("rpart")` classification tree and choose a subset of the hyperparameters we want to tune.
-This is often referred to as the search space or tuning space.
-First, let's look at all the hyperparameters that are available.
-Information on what they do can be found in `r ref("rpart::rpart.control", text = "the documentation of the learner")`.
+We apply a support vector machine with a radial basis function from the `r mlr3book::cran_pkg("e1071")` package and use it as a classification machine by setting `type` to `"C-classification"`.
 
 ```{r optimization-003}
-learner = lrn("classif.rpart")
-learner$param_set
+learner = lrn("classif.svm", type = "C-classification", kernel = "radial")
 ```
 
-Here, we opt to tune two hyperparameters:
-
-* The complexity hyperparameter `cp` that controls when the learner considers introducing another branch.
-* The `minsplit` hyperparameter that controls how many observations must be present in a leaf for another split to be attempted.
-
-We use the `r ref("to_tune()")` function to define the search space.
-The function defines the range over which a hyperparameter should be tuned.
-The `logscale` option allows the tuner to sample on the logarithmic scale.
-You can learn more about search spaces in the [paradox](#sec-tuning-space) section.
-We load the learner and set the search space in one go.
+The learner stores all information about its hyperparameters in the slot `$param_set`.
+Not all parameters are tunable.
+Information on what they do can be found in `r ref("e1071::svm", text = "the documentation of the learner")`.
 
 ```{r optimization-004}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+as.data.table(learner$param_set)[, list(id, class, lower, upper, nlevels)]
+```
+
+We have to choose a subset of the hyperparameters we want to tune.
+This is often referred to as the search space or tuning space.
+Here, we opt to tune two hyperparameters:
+
+* The regularization hyperparameter `cost`
+* The `gamma` hyperparameter
+
+The search space defines the range over which the hyperparameter should be tuned.
+We use the `r ref("to_tune()")` function to set the lower and upper bounds.
+
+```{r optimization-005}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  type  = "C-classification",
+  kernel = "radial"
 )
 ```
 
+The `logscale` option indicates that the hyperparameters are tuned on the logarithmic scale.
+The optimization algorithm proposes hyperparameter values that are transformed with the exponential function before they are passed to the learner.
+For example, the `cost` parameter is bounded between `1e-5` and `1e5`.
+The optimization algorithm searches between `log(1e-5)` and `log(1e-5)` but the learner gets the transformed values between `1e-5` and `1e5`.
+Using the log transformation emphasizes smaller `cost` values but also creates large values.
 The bounds are usually set based on experience.
-The `r mlr3book::mlr_pkg("mlr3tuningspaces")` extension package provides predefined tuning spaces from scientific articles.
+The section [Advanced Search Spaces](#sec-advanced-search-spaces) describes the construction of more complex search spaces.
+
+The section [Tuning Spaces](#sec-tuning-spaces) introduces the `r mlr3book::mlr_pkg("mlr3tuningspaces")` extension package which is a collection of search spaces from scientific articles.
 
 ### Terminator {#sec-terminator}
 
@@ -99,10 +111,10 @@ This is a crucial step, as exhaustively evaluating all possible hyperparameter c
 * Number of Evaluations `trm("evals", n_evals = 500)`
 * Run Time `trm("run_time", secs = 100)`
 * None `trm("none")`
-* Combo `trm("combo", terminators = list(run_time_100, evals_200)`
 * Performance Level `trm("perf_reached", level = 0.1)`
 * Stagnation `trm("stagnation", iters = 5, threshold = 1e-5)`
 * Clock Time `trm("clock_time", stop_time = "2022-11-06 08:42:53 CET"`
+* Combo `trm("combo", terminators = list(run_time_100, evals_200)`
 
 The most commonly used terminators are those that stop tuning after a certain time  (`"run_time"`) or number of evaluations (`"evals"`).
 We use `"none"` when tuners, such as Grid Search and Hyperband, control the termination themselves.
@@ -111,7 +123,7 @@ A complete and always up-to-date list of terminators can be found on the [websit
 
 For this short introduction, we specify a budget of 20 iterations.
 
-```{r optimization-005}
+```{r optimization-006}
 terminator = trm("evals", n_evals = 20)
 terminator
 ```
@@ -121,25 +133,27 @@ terminator
 Before we construct the tuning instance, we need to specify how to evaluate the performance of a trained model.
 For this, we need to choose a `r ref("Resampling", text = "resampling strategy")` and a `r ref("Measure", text = "performance measure")`.
 
-```{r optimization-006}
+```{r optimization-008}
 resampling = rsmp("cv", folds = 3)
 measure = msr("classif.ce")
 ```
 
 Now we put everything together into a `r ref("TuningInstanceSingleCrit")` with the `r ref("ti()")` function.
 
-```{r optimization-007}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+```{r optimization-009}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
 )
 
 instance = ti(
-  task = tsk("penguins"),
+  task = tsk("sonar"),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
   measures = msr("classif.ce"),
-  terminator = trm("evals", n_evals = 20)
+  terminator = trm("none")
 )
 instance
 ```
@@ -170,8 +184,8 @@ A complete and always up-to-date list of tuners can be found on the [website](ht
 
 For our example, we will use a simple grid search with a grid resolution of 5.
 
-```{r optimization-008}
-tuner = tnr("grid_search", resolution = 5, batch_size = 4)
+```{r optimization-010}
+tuner = tnr("grid_search", resolution = 5, batch_size = 5)
 tuner
 ```
 
@@ -190,19 +204,19 @@ The tuner proceeds as follows:
 1  All evaluations are stored in the archive of the `r ref("TuningInstanceSingleCrit")`.
 1. The `r ref("Terminator")` is queried if the budget is exhausted.
 1  If the budget is not exhausted, go back to 1), else terminate.
-1. Determine the configurations with the best-observed performance from the archive.
+1. Determine the configuration with the best-observed performance from the archive.
 1. Store the best configurations as result in the tuning instance object.
 
-```{r optimization-009}
+```{r optimization-011}
 tuner$optimize(instance)
 ```
 
 The optimizer returns the best hyperparameter configuration and the corresponding measured performance.
 This information is also stored in `instance$result`.
-Since we set `logscale = TRUE` in the search space, the `cp` and `minsplit` values are log-transformed.
-The column `x_domain` contains the hyperparameter values after the transformation i.e. `exp(-5.76)` and `exp(0.69)`.
+Since we set `logscale = TRUE` in the search space, the `cost` and `gamma` values are log-transformed.
+The column `x_domain` contains the hyperparameter values after the transformation i.e. `exp(5.76)` and `exp(-5.76)`.
 
-```{r optimization-010}
+```{r optimization-012}
 instance$result$x_domain
 ```
 
@@ -215,15 +229,17 @@ This option gives you more control over the tuning process.
 The function `r ref("tune()")` is a shortcut for tuning a learner.
 It internally creates a `r ref("TuningInstanceSingleCrit")`, starts the tuning and returns the result with the instance.
 
-```{r optimization-011}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+```{r optimization-013}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
 )
 
 instance = tune(
-  method = tnr("grid_search", resolution = 5, batch_size = 4),
-  task = tsk("penguins"),
+  method = tnr("grid_search", resolution = 5, batch_size = 5),
+  task = tsk("sonar"),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
   measures = msr("classif.ce"),
@@ -233,15 +249,13 @@ instance = tune(
 instance$result
 ```
 
-If multiple measures are passed, [multiple criteria optimization](#sec-multi-measures-tuning) is carried out.
-
 ### Analyzing the Result {#sec-analyzing-result}
 
 The archive lists all evaluated hyperparameter configurations.
 For analyzing the tuning results, it is recommended to pass the archive to `as.data.table()`.
 
-```{r optimization-012}
-as.data.table(instance$archive)[, list(cp, minsplit, classif.ce, batch_nr, resample_result)]
+```{r optimization-014}
+as.data.table(instance$archive)[, list(cost, gamma, classif.ce, batch_nr, resample_result)]
 ```
 
 Altogether, the grid search evaluated 20/25 different hyperparameter configurations in a random order before the terminator stopped the tuning.
@@ -251,18 +265,18 @@ You can do this with `r ref("TuningInstanceMultiCrit")`, see [Tuning with Multip
 
 The included `r ref("ResampleResult")`s can be scored on a different performance measure.
 
-```{r optimization-013, echo=FALSE}
-as.data.table(instance$archive, measures = msr("classif.acc"))[, list(cp, minsplit, classif.ce, classif.acc)]
+```{r optimization-015, echo=FALSE}
+as.data.table(instance$archive, measures = msr("classif.acc"))[, list(cost, gamma, classif.ce, classif.acc)]
 ```
 
 The instance contains a `r ref("BenchmarkResult")` with all `r ref("ResampleResult")`s in `instance$archive$benchmark_result`.
 
 The `r mlr3book::mlr_pkg("mlr3viz")` package provides visualizations for tuning results.
-We plot the performances depending on the evaluated `cp` and `minsplit` values (see. @fig-surface).
+We plot the performances depending on the evaluated `cost` and `gamma` values (see. @fig-surface).
 
-```{r optimization-014}
+```{r optimization-016}
 #| label: fig-surface
-#| fig-cap: Performance depending on the evaluated cp and minsplit values.
+#| fig-cap: Performance depending on the evaluated cost and gamma values.
 
 autoplot(instance, type = "surface")
 ```
@@ -272,14 +286,16 @@ autoplot(instance, type = "surface")
 The learner we use to make predictions on new data is called the final model.
 Let's recap how a model is tuned.
 
-```{r optimization-015}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+```{r optimization-017}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
 )
 
 instance = ti(
-  task = tsk("penguins"),
+  task = tsk("sonar"),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
   measures = msr("classif.ce"),
@@ -294,14 +310,14 @@ tuner$optimize(instance)
 After tuning, we can fit a final model on the full data set.
 We take the optimized hyperparameters and set them for the previously-created learner.
 
-```{r optimization-016}
+```{r optimization-018}
 learner$param_set$values = instance$result_learner_param_vals
 ```
 
 We train the learner on the full dataset.
 
-```{r optimization-017}
-learner$train(tsk("penguins"))
+```{r optimization-019}
+learner$train(tsk("sonar"))
 ```
 
 The trained model can now be used to predict new, external data.
@@ -313,7 +329,7 @@ A common mistake is to report the performance estimated on the resampling sets o
 To get statistically unbiased performance estimates for a given task, [nested resampling](#sec-model-performance) is required.
 :::
 
-### Tuning with Multiple Performance Measures {#sec-multi-measures-tuning}
+## Tuning with Multiple Performance Measures {#sec-multi-measures-tuning}
 
 When tuning, you might want to use multiple criteria to find the best configuration of hyperparameters.
 For example, you might want the configuration with the lowest classification error and lowest time to train the model.
@@ -321,26 +337,28 @@ The full list of performance measures can be found on the [website](https://mlr3
 
 Continuing the above example and tuning the same hyperparameters:
 
-* The complexity hyperparameter `cp` that controls when the learner considers introducing another branch.
-* The `minsplit` hyperparameter that controls how many observations must be present in a leaf for another split to be attempted.
+* The regularization hyperparameter `cost`
+* The `gamma` hyperparameter
 
 The tuning process is identical to the previous example, however, this time we will specify two `r ref("Measure", text = "performance measures")`, classification error and time to train the model (`time_train`).
 
-```{r optimization-018}
+```{r optimization-020}
 measures = msrs(c("classif.ce", "time_train"))
 ```
 
 Instead of creating a new `r ref("TuningInstanceSingleCrit")` with a single measure, we create a new `r ref("TuningInstanceMultiCrit")` with the two measures we are interested in here.
 Otherwise, it is the same as above.
 
-```{r optimization-019}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+```{r optimization-021}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
 )
 
 instance = ti(
-  task = tsk("penguins"),
+  task = tsk("sonar"),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
   measures = measures,
@@ -351,7 +369,7 @@ instance
 
 After triggering the tuning, we will have the configuration with the best classification error and time to train the model.
 
-```{r optimization-020}
+```{r optimization-022}
 tuner$optimize(instance)
 ```
 
@@ -375,7 +393,7 @@ Tune the `mtry`, `sample.fraction`, ` num.trees` hyperparameters of a random for
 Use a simple random search with 50 evaluations and select a suitable batch size.
 Evaluate with a 3-fold cross-validation and the root mean squared error.
 
-```{r optimization-021}
+```{r optimization-023}
 #| code-fold: true
 #| code-summary: "Show the solution"
 #| output: false
@@ -411,7 +429,7 @@ Nested resampling is not a procedure to select optimal hyperparameters.
 The resampling produces many hyperparameter configurations which should be not used to construct a final model [@Simon2007].
 This means that nested resampling is an additional step after fitting a [final model](#sec-final-model).
 
-```{r optimization-022}
+```{r optimization-024}
 #| label: fig-nested-resampling
 #| fig-cap: Nested Resampling.
 #| echo: false
@@ -440,17 +458,19 @@ We can automate the tuning process in `r mlr3book::mlr_pkg("mlr3")` so that lear
 The `r ref("AutoTuner")` wraps a learner and augments it with an automatic tuning process for a given set of hyperparameters.
 Because the `r ref("AutoTuner")` itself inherits from the `r ref("Learner")` base class, it can be used like any other learner.
 In keeping with our example above, we create a classification learner that tunes itself automatically.
-This classification tree learner tunes the parameters `cp` and `minsplit` using an inner resampling (holdout).
+This SVM learner tunes the parameters `cost` and `gamma` using an inner resampling (holdout).
 We create a terminator which allows 10 evaluations, and use a simple random search as the tuning algorithm:
 
-```{r optimization-023}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+```{r optimization-025}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
 )
 
 at = auto_tuner(
-  method = tnr("random_search"),
+  method = tnr("grid_search", resolution = 5, batch_size = 5),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
   measure = msr("classif.ce"),
@@ -461,8 +481,8 @@ at
 
 We can now use the learner like any other learner, calling the `$train()` and `$predict()` methods. The difference to a normal learner is that `$train()` runs the tuning, which will take longer than a normal training process.
 
-```{r optimization-024}
-at$train(tsk("penguins"))
+```{r optimization-026}
+at$train(tsk("sonar"))
 ```
 
 We can also pass it to `r ref("resample()")` and `r ref("benchmark()")`, just like any other learner.
@@ -470,25 +490,27 @@ This would result in a [nested resampling](#sec-nested-resampling) and is explai
 
 ### Nested Resampling {#sec-nested-resampling}
 
-The previous [sections](#sec-tuning-instance) examined the optimization of a simple classification tree on the `r ref("mlr_tasks_penguins", text = "Palmer Penguins")` data set.
+The previous [sections](#sec-tuning-instance) examined the optimization of a simple classification tree on the `r ref("mlr_tasks_sonar", text = "Sonar")` data set.
 We continue the example and estimate the predictive performance of the model with nested resampling.
 
 We use a 4-fold cross-validation in the inner resampling loop.
 The `r ref("AutoTuner")` executes the hyperparameter tuning and is stopped after 5 evaluations.
 The hyperparameter configurations are proposed by random search.
 
-```{r optimization-025}
-learner = lrn("classif.rpart",
-  cp        = to_tune(1e-04, 1e-1, logscale = TRUE),
-  minsplit  = to_tune(2, 128, logscale = TRUE)
+```{r optimization-027}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
 )
 
 at = auto_tuner(
-  method = tnr("random_search"),
+  method = tnr("grid_search", resolution = 5, batch_size = 5),
   learner = learner,
   resampling = rsmp("cv", folds = 4),
   measure = msr("classif.ce"),
-  terminator = trm("evals", n_evals= 5),
+  term_evals = 20,
 )
 ```
 
@@ -497,8 +519,8 @@ On each of the three outer train sets, hyperparameter tuning is done and we rece
 To execute the nested resampling, we pass the `r ref("AutoTuner")` to the `r ref("resample()")` function.
 We have to set `store_models = TRUE` because we need the `r ref("AutoTuner")` models to investigate the inner tuning.
 
-```{r optimization-026}
-task = tsk("penguins")
+```{r optimization-028}
+task = tsk("sonar")
 outer_resampling = rsmp("cv", folds = 3)
 
 rr = resample(task, at, outer_resampling, store_models = TRUE)
@@ -512,21 +534,21 @@ With the created `r ref("ResampleResult")` we can now inspect the executed resam
 See the section on [Resampling](#resampling) for more detailed information about `r ref("ResampleResult")` objects.
 
 The `extract_inner_tuning_results()` function prints the three optimized hyperparameter configurations and the corresponding performance estimates on the inner resampling.
-We observe a trend toward small `cp` and `minsplit` values.
+We observe a trend toward large `cost` and small `gamma` values.
 Keep in mind that these values should not be used to fit a final model.
 The selected hyperparameters might differ greatly between the resampling iterations.
 On the one hand, this could be due to the optimization algorithm used.
 For simple algorithms like random search, we don't expect stable hyperparameters but more advanced methods like irace converge to an optimal hyperparameter configuration.
 On the other hand, small data sets and a low number of resampling iterations might introduce too much randomness for stable hyperparameters.
 
-```{r optimization-027}
-extract_inner_tuning_results(rr)[, list(iteration, cp, minsplit, classif.ce)]
+```{r optimization-029}
+extract_inner_tuning_results(rr)[, list(iteration, cost, gamma, classif.ce)]
 ```
 
 Now we want to compare the predictive performances estimated on the outer resampling to the inner resampling.
 Significantly lower predictive performances on the outer resampling indicate that the models with the optimized hyperparameters overfit the data.
 
-```{r optimization-028}
+```{r optimization-030}
 rr$score()[, list(iteration, classif.ce)]
 ```
 
@@ -538,7 +560,7 @@ Note that the term *unbiased* only refers to the statistical procedure of the pe
 The underlying prediction of the model could still be biased e.g. due to a bias in the data set.
 In this case, the performance estimate of the model would be also biased.
 
-```{r optimization-029}
+```{r optimization-031}
 rr$aggregate()
 ```
 
@@ -558,7 +580,6 @@ The table @tbl-model-performance gives you an overview.
 | `r ref("extract_inner_tuning_results()")`  | -                    |
 | `r ref("extract_inner_tuning_archives()")` | -                    |
 
-
 : S3 functions and returned R6 objects for model performance estimation. {#tbl-model-performance}
 
 ### Exercise {#sec-model-performance-exercise}
@@ -567,7 +588,7 @@ Evaluate the performance of the model created in [Exercise 4.1](#sec-model-tunin
 Use a holdout validation for the inner resampling and a 3-fold cross-validation for the outer resampling.
 Print the unbiased performance estimate of the model.
 
-```{r optimization-030}
+```{r optimization-032}
 #| code-fold: true
 #| code-summary: "Show the solution"
 #| output: false
