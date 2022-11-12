@@ -141,3 +141,103 @@ ru_pkg = function(pkg, format = "markdown") {
     "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
   )
 }
+
+#' @name paradox
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3misc
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3data
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3db
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3proba
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3pipelines
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3learners
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3filters
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name bbotk
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3tuning
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3fselect
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3cluster
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3spatiotempcv
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3spatial
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3extralearners
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3tuningspaces
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3hyperband
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3mbo
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3viz
+#' @title Helper mlr links
+#' @export
+NULL
