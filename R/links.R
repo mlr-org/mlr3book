@@ -66,17 +66,23 @@ ref = function(topic, text = topic, format = "markdown") {
 #' Links either to respective mlr3 website or to CRAN page.
 #'
 #' @param pkg Name of the package.
+#' @param runiverse If `TRUE` (default) then creates R-universe link instead of GH
 #' @inheritParams ref
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref_pkg = function(pkg, format = "markdown") {
-  checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
+ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
+  checkmate::assert_string(pkg, pattern = "(^[[:alnum:]._-]+$)|(^[[:alnum:]_-]+/[[:alnum:]._-]+$)")
   checkmate::assert_choice(format, c("markdown", "html"))
   pkg = trimws(pkg)
 
   if (grepl("/", pkg, fixed = TRUE)) {
-    gh_pkg(pkg, format = format)
+    if (runiverse) {
+      ru_pkg(pkg, format = format)
+    } else {
+      gh_pkg(pkg, format = format)
+    }
+
   } else if (pkg %in% db$hosted) {
     mlr_pkg(pkg, format = format)
   } else {
@@ -84,15 +90,6 @@ ref_pkg = function(pkg, format = "markdown") {
   }
 }
 
-#' @title Hyperlink to CRAN Package
-#'
-#' @description
-#' Creates a markdown link to a CRAN package.
-#'
-#' @inheritParams ref_pkg
-#'
-#' @return (`character(1)`) markdown link.
-#' @export
 cran_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
@@ -108,15 +105,6 @@ cran_pkg = function(pkg, format = "markdown") {
   )
 }
 
-#' @title Hyperlink to mlr3 Package
-#'
-#' @description
-#' Creates a markdown link to a mlr3 package with a "mlr-org.com" subdomain.
-#'
-#' @inheritParams ref_pkg
-#'
-#' @return (`character(1)`) markdown link.
-#' @export
 mlr_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
@@ -129,16 +117,6 @@ mlr_pkg = function(pkg, format = "markdown") {
   )
 }
 
-#' @title Hyperlink to GitHub Repository
-#'
-#' @description
-#' Creates a markdown link to GitHub repository.
-#'
-#' @param pkg Name of the repository specified as "{repo}/{name}".
-#' @inheritParams ref_pkg
-#'
-#' @return (`character(1)`) markdown link.
-#' @export
 gh_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
@@ -146,6 +124,18 @@ gh_pkg = function(pkg, format = "markdown") {
 
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://github.com/%s", pkg)
+  switch(format,
+    "markdown" = sprintf("[%s](%s)", parts[2L], url),
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
+  )
+}
+
+ru_pkg = function(pkg, format = "markdown") {
+  checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
+  checkmate::assert_choice(format, c("markdown", "html"))
+
+  parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
+  url = sprintf("https://%s.r-universe.dev/ui#package:%s", parts[1L], parts[2L])
   switch(format,
     "markdown" = sprintf("[%s](%s)", parts[2L], url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
