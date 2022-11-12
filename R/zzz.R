@@ -23,7 +23,8 @@ lgr = NULL
   #' @aliases mlr3misc, mlr3, mlr3data, mlr3db, mlr3proba, mlr3pipelines, mlr3learners, mlr3filters, bbotk, mlr3tuning, mlr3viz, mlr3fselect, mlr3cluster, mlr3spatiotempcv, mlr3spatial, mlr3extralearners, mlr3tuningspaces, mlr3hyperband, mlr3mbo
   #' @export
   NULL
-  for (pkg in mlr3book:::db$hosted) {
+  update_db()
+  for (pkg in db$hosted) {
     assign(pkg, mlr_pkg(pkg))
   }
 }
