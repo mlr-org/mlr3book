@@ -46,12 +46,28 @@ We refer to the respective documentation of the learner's implementation, e.g., 
 
 ### Implicit Parallelization
 
-We talk about implicit parallelization in this context if we call external code (i.e., code from foreign CRAN packages) which runs in parallel.
-Many machine learning algorithms can parallelize their model fit using threading, e.g., `r ref("mlr_learners_classif.ranger", text = "ranger")`
-or `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
+We talk about implicit parallelization in the context of `mlr3`, if `mlr3` calls external code (i.e., code from foreign CRAN packages which implements a `r ref("Learner")`) that itself runs in parallel.
+Many machine learning algorithms can parallelize their model fit using threading, e.g., the random forest implementation in `r ref("mlr_learners_classif.ranger", text = "ranger")` or the boosting implemented in `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
+During threading, the implementation instructs some sequential parts of the code to be executed independently from the other parts in the same process.
+
+For example, while fitting a decision tree, each split that divides the data into two disjoint partitions requires a search for the best cutpoint on all $p$ features.
+So instead of iterating over all features sequentially, the search can be broken down into $p$ threads, each searching for the best cutpoint on a single feature.
+These threads can easily be parallelized by the scheduler of the operating system, as there is no need for communication between the threads.
+After all threads have finished, the results are collected and merged before terminating the threads.
+I.e., for our example of the decision tree, (1) the $p$ best cutpoints per feature are collected and then (2) aggregated to the single best cutpoint across all features by just iterating over the $p$ results sequentially.
+
+
+:::{.callout-warning}
+It does not make practical sense to actually execute in parallel every operation that can be parallelized.
+Starting and terminating workers (i.e., threads) as well as possible communication between workers comes at a price in the form of additionally required runtime and is called (parallelization) overhead.
+The overhead must be related to the runtime of the sequential execution.
+If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity and slows down the execution.
+:::
+
 Unfortunately, threading conflicts with certain parallel backends used during explicit parallelization, causing the system to be overutilized in the best case and causing hangs or segfaults in the worst case.
 For this reason, we introduced the convention that implicit parallelization is turned off per default.
 Hyperparameters that control the number of threads are tagged with the label `"threads"`.
+Currently, controlling the number of threads is possible for some learners and filters from the `r mlr_pkg("mlr3filters")` package:
 
 ```{r technical-001}
 library("mlr3learners") # for the ranger learner
@@ -71,16 +87,16 @@ set_threads(learner)
 
 :::{.callout-caution}
 Automatic detection of the number of CPUs is sometimes flaky, and utilizing all available cores is occasionally counterproductive as overburdening the system often has negative effects on the overall runtime.
-The function which determines the number of CPUs is implemented in `r ref("parallelly::availableCores()")` and already comes with reasonable heuristics for many setups.
+The function which determines the number of CPUs is implemented in `r ref("parallelly::availableCores()")` and comes with reasonable heuristics for many setups.
 However, there are still some scenarios where it is better to reduce the number of utilized CPUs manually:
 
-* You want to simultaneously work on the same system, e.g., write a report and do some data analysis.
+* You want to simultaneously work on the same system, e.g., browse the web or watch a video.
 * You are on a multi-user system and want to spare some resources for other users.
 * You have energy-efficient CPU cores, for example, the "Icestorm" cores on a Mac M1 chip.
   These are comparably slower than the high-performance "Firestorm" cores and not well suited for heavy computations.
-* You have linked R to a parallel [BLAS](https://www.wikiwand.com/en/Basic_Linear_Algebra_Subprograms) implementation like [OpenBLAS](https://www.openblas.net/), and your learners make heavy use of linear algebra.
+* You have linked R to a threaded [BLAS](https://de.wikipedia.org/wiki/Basic_Linear_Algebra_Subprograms) implementation like [OpenBLAS](https://www.openblas.net/), and your learners make heavy use of linear algebra.
 
-You can set the number of CPUs via option `"mc.cores"`:
+You can manually set the number of CPUs to overrule the heuristic via option `"mc.cores"`:
 
 ```{r technical-003, eval = FALSE}
 options(mc.cores = 4)
@@ -88,32 +104,14 @@ options(mc.cores = 4)
 We recommend setting this in your system's `.Rprofile` file, c.f. `r ref("Startup")`.
 :::
 
-Settings threads for implicit parallelization also works for filters from the `r mlr_pkg("mlr3filters")` package as well as lists of objects, even if some objects do not support threading at all:
-```{r technical-004}
-library("mlr3filters")
-
-# retrieve 2 filters
-# * variance filter with no support for threading
-# * mrmr filter with threading support
-filters = flts(c("variance", "mrmr"))
-
-# set threads for all filters which support it
-set_threads(filters, n = 4)
-
-# variance filter is unchanged
-filters[[1]]$param_set
-
-# mrmr now works in parallel with 4 cores
-filters[[2]]$param_set
-```
 
 ### Explicit Parallelization
 
-We talk about explicit parallelization if `r mlr_pkg("mlr3")` starts and controls the parallelization itself.
+Here, we talk about explicit parallelization if `r mlr_pkg("mlr3")` starts and controls the parallelization itself.
 For this purpose, an additional abstraction layer is used to be able to operate on a unified interface for a broad range of parallel backends: the `r cran_pkg("future")` package.
 There are two operations where `r mlr_pkg("mlr3")` calls the `future` package: while performing resampling via `r ref("resample()")` and while benchmarking via `r ref("benchmark()")`.
 During resampling, because all resampling iterations are independent of each other, all iterations can be executed in parallel.
-The same holds for benchmarking, where additionally, all combinations in the provided design are also independent.
+The same holds for benchmarking, where additionally to the independent model fits of a single resampling, all combinations in the provided design are also independent.
 These iterations are performed by `r cran_pkg("future")` using the parallel backend configured with `r ref("future::plan()")`.
 Extension packages like `r mlr_pkg("mlr3tuning")` internally call `r ref("benchmark()")` during tuning and thus work in parallel, too.
 
@@ -121,8 +119,8 @@ Extension packages like `r mlr_pkg("mlr3tuning")` internally call `r ref("benchm
 :::{.callout-tip}
 When computational problems are so easy to parallelize, they are often referred to as "embarrassingly parallel".
 
-Whenever you loop over elements with a map-like function (e.g., `r ref("lapply()")`, `r ref("sapply()")`, `r ref("mapply()")`, `r ref("vapply()")` or a function from `r cran_pkg("purrr")`), you are facing an embarrassingly parallel problem.
-Such problems are straight-forward to parallelize with R, e.g., with the `r cran_pkg("furrr")` package providing map-like functions executed in parallel via the `r cran_pkg("future")` framework.
+Whenever you loop over elements with a map-like function (e.g., `r ref("lapply()")`, `r ref("sapply()")`, `r ref("mapply()")`, `r ref("vapply()")` or a function from package `r cran_pkg("purrr")`), you are facing an embarrassingly parallel problem.
+Such problems are straightforward to parallelize with R, e.g., with the `r cran_pkg("furrr")` package providing map-like functions executed in parallel via the `r cran_pkg("future")` framework.
 The same holds for `for`-loops with independent iterations, i.e., loops where the current iteration does not rely on the results of previous iterations.
 :::
 
@@ -130,27 +128,28 @@ In this section, we will use the `r ref("mlr_tasks_spam", text = "spam task")` a
 We use the `r ref("future::multisession")` parallel backend that should work on all systems.
 
 ```{r technical-005, eval = FALSE}
-# select the multisession backend
+# select the multisession backend to use
 future::plan("multisession")
 
+# define objects to perform a resampling
 task = tsk("spam")
 learner = lrn("classif.rpart")
 resampling = rsmp("subsampling")
 
-time = Sys.time()
+time = proc.time()[3]
 resample(task, learner, resampling)
-Sys.time() - time
+diff = proc.time()[3] - time
 ```
 
 By default, all CPUs of your machine are used unless you specify the argument `workers` in `r ref("future::plan()")` (possible problems with this default have already been discussed for implicit parallelization).
 You should see a decrease in the reported elapsed time, but in practice, you cannot expect the runtime to fall linearly as the number of cores increases ([Amdahl's law](https://www.wikiwand.com/en/Amdahl%27s_law)).
-In contrast to threads and depending on the parallel backend, the technical overhead for starting workers, communicating objects, sending back results, and shutting down the workers can be quite large.
-Therefore, it is advised only consider parallelization for resamplings where each iteration runs for multiple seconds.
+In contrast to threads, the technical overhead for starting workers, communicating objects, sending back results, and shutting down the workers is quite large for the multisession backend.
+Therefore, it is advised to only consider parallelization for resamplings where each iteration runs at least several seconds.
 
 :::{.callout-note}
 If you are transitioning from `r cran_pkg("mlr")`, you might be used to selecting different parallelization levels, e.g., for resampling, benchmarking, or tuning.
 In `r mlr_pkg("mlr3")`, this is no longer required (except for nested resampling, briefly described in the following section).
-All kind of experiments are rolled out on the same level.
+All kinds of experiments are rolled out to be on the same level.
 Therefore, there is no need to decide whether you want to parallelize the tuning OR the resampling.
 
 Just lean back and let the machine do the work :-)
@@ -193,15 +192,17 @@ We default to a `batch_size` of 1 that ensures that all `r ref("Terminator", tex
 
 ## Error Handling {#error-handling}
 
-To demonstrate how to properly deal with misbehaving learners, `r mlr_pkg("mlr3")` ships with the learner `r ref("mlr_learners_classif.debug", "classif.debug")`:
+To demonstrate how to properly deal with misbehaving learners, `r mlr_pkg("mlr3")` ships with the learner `r ref("mlr_learners_classif.debug", "classif.debug")` and `r ref("mlr_learners_regr.debug", "regr.debug")`.
+Here, we will concentrate on the former debug learner for classification:
 
 ```{r technical-008}
-task = tsk("iris")
+task = tsk("penguins")
 learner = lrn("classif.debug")
 print(learner)
 ```
 
-This learner comes with special hyperparameters that let us control
+This learner comes with special hyperparameters that let us simulate problems frequently encountered in ML.
+E.g., the debug learner comes with hyperparameters to control
 
 1. what conditions should be signaled (message, warning, error, segfault) with what probability.
 1. during which stage the conditions should be signaled (train or predict).
@@ -211,10 +212,10 @@ This learner comes with special hyperparameters that let us control
 learner$param_set
 ```
 
-With the learner's default settings, the learner will do nothing special: The learner remembers a random label and creates constant predictions.
+With the learner's default settings, the learner will do nothing special: The learner remembers a random label and constantly predicts this label:
 
 ```{r technical-010}
-task = tsk("iris")
+task = tsk("penguins")
 learner$train(task)$predict(task)$confusion
 ```
 
@@ -242,9 +243,13 @@ Each `r ref("Learner")` has a field `encapsulate` to control how the train or pr
 One way to encapsulate the execution is provided by the package `r cran_pkg("evaluate")` (see the documentation of the `r ref("encapsulate()")` helper function for more details):
 
 ```{r technical-012}
-task = tsk("iris")
+task = tsk("penguins")
 learner = lrn("classif.debug")
+
+# this learner throws a warning and then stops with an error during train()
 learner$param_set$values = list(warning_train = 1, error_train = 1)
+
+# enable encapsulation for train() and predict()
 learner$encapsulate = c(train = "evaluate", predict = "evaluate")
 
 learner$train(task)
@@ -259,7 +264,7 @@ learner$errors
 ```
 
 Another method for encapsulation is implemented in the `r cran_pkg("callr")` package.
-`r cran_pkg("callr")` spawns a new R process to execute the respective step and thus even guards the current R session against segfaults.
+`r cran_pkg("callr")` spawns a new R process to execute the respective step and thus even guards the current R session against segfaults tearing down the complete R session.
 On the downside, starting new processes comes with comparably more computational overhead.
 
 ```{r technical-014}
@@ -269,45 +274,48 @@ learner$train(task = task)
 learner$errors
 ```
 
-Without a model, it is not possible to get predictions though:
+Unfortunately, catching errors is only half the battle.
+Without a model, it is not possible to get predictions:
 
 ```{r technical-015, error = TRUE}
 learner$predict(task)
 ```
 
-To handle the missing predictions in a graceful way during `r ref("resample()")` or `r ref("benchmark()")`, fallback learners are introduced next.
+To handle the missing predictions gracefully during `r ref("resample()")` or `r ref("benchmark()")`, fallback learners are introduced next.
 
 ### Fallback learners
 
 Fallback learners have the purpose of allowing scoring results in cases where a `r ref("Learner")` is misbehaving.
+
 We will first handle the case that a learner fails to fit a model during training, e.g., if some convergence criterion is not met or the learner ran out of memory.
-There are three possibilities to proceed:
+There are in general three possibilities to proceed:
 
 1. Ignore missing scores.
-  Although this is arguably the most frequent approach in practice, this is not statistically sound.
-  For example, consider the case where a researcher wants a specific learner to look better in a benchmark study.
-  To do this, the researcher takes an existing learner but introduces a small adaptation: If an internal goodness-of-fit measure is not achieved, an error is thrown.
-  In other words, the learner only fits a model if the model can be reasonably well learned on the given training data.
-  In comparison with the learning procedure without this adaptation and a good threshold, however, we now compare the mean over only the "easy" splits with the mean over all splits - an unfair advantage.
+   Although this is arguably the most frequent approach in practice, it is not statistically sound.
+   For example, consider the case where a researcher wants a specific learner to look better in a benchmark study.
+   To do this, the researcher takes an existing learner but introduces a small adaptation: If an internal goodness-of-fit measure is not achieved, an error is thrown.
+   In other words, the learner only fits a model if the model can be reasonably well learned on the given training data.
+   In comparison with the learning procedure without this adaptation and a good threshold, however, we now compare the mean over only the "easy" splits with the mean over all splits - an unfair advantage.
 2. Penalize failing learners.
-  If a score is missing, we can simply impute the worst possible score (as defined by the `r ref("Measure")`) and thereby heavily penalize the learner for failing.
-  However, this often seems too harsh for many problems.
+   If a score is missing, we can simply impute the worst possible score (as defined by the `r ref("Measure")`) and thereby heavily penalize the learner for failing.
+   However, this often seems too harsh for many problems.
 3. Impute a value that corresponds to a (weak) baseline.
-  Instead of imputing with the worst possible score, impute with a reasonable baseline, e.g., by just predicting the majority class or the mean of the training data with a featureless learner.
-  Note that the imputed value depends on the data in the training split.
-  Retrieving the right values after a larger benchmark is possible but tedious.
+   Instead of imputing with the worst possible score, impute with a reasonable baseline, e.g., by just predicting the majority class or the mean of the training data with a featureless learner.
+   Note that a reasonable baseline value depends on the data in the training split.
+   Retrieving these values after a larger benchmark study has been conducted is possible, but tedious.
 
-
-We strongly recommend option (3).
+We strongly recommend option (3): it is statistically sound and very flexible.
 To make this procedure very convenient during resampling and benchmarking, we support fitting a proper baseline with a fallback learner.
 In the next example, in addition to the debug learner, we attach a simple featureless learner to the debug learner.
 So whenever the debug learner fails (which is every single time with the given parametrization) and encapsulation is enabled, `r mlr_pkg("mlr3")` falls back to the predictions of the featureless learner internally:
 
 ```{r technical-016}
-task = tsk("iris")
+task = tsk("penguins")
+
 learner = lrn("classif.debug")
 learner$param_set$values = list(error_train = 1)
 learner$fallback = lrn("classif.featureless")
+
 learner$train(task)
 learner
 ```
@@ -330,9 +338,9 @@ We re-parametrize the debug learner to fail in roughly 30% of the resampling ite
 ```{r technical-018}
 learner$param_set$values = list(error_train = 0.3)
 
-bmr = benchmark(benchmark_grid(tsk("iris"), list(learner, lrn("classif.rpart")), rsmp("cv")))
+bmr = benchmark(benchmark_grid(tsk("penguins"), list(learner, lrn("classif.rpart")), rsmp("cv")))
 aggr = bmr$aggregate(conditions = TRUE)
-aggr
+aggr[, .(learner_id, warnings, errors, classif.ce)]
 ```
 
 Even though the debug learner occasionally failed to provide predictions, we still got a statistically sound aggregated performance value which we can compare to the aggregated performance of the classification tree.
@@ -342,7 +350,6 @@ To further investigate the errors, we can also extract the `"ResampleResult")`:
 rr = aggr[learner_id == "classif.debug"]$resample_result[[1L]]
 rr$errors
 ```
-
 
 A similar problem emerges when a learner predicts only a subset of the observations in the test set (and predicts `NA` for others).
 A typical case is, e.g., when new and unseen factor levels are encountered in the test data.
@@ -356,8 +363,9 @@ Clearly, at its core, this is the same problem as outlined before.
 Algorithm B would easily outperform algorithm A, but you have not factored in that you can not generate predictions for all observations.
 Long story short, if a fallback learner is involved, missing predictions of the base learner will be automatically replaced with predictions from the fallback learner.
 This is illustrated in the following example:
+
 ```{r technical-020}
-task = tsk("iris")
+task = tsk("penguins")
 learner = lrn("classif.debug")
 
 # this hyperparameter sets the ratio of missing predictions
@@ -380,17 +388,17 @@ Summed up, by combining encapsulation and fallback learners, it is possible to b
 In mlr3, `r ref("Task", text = "Tasks")` store their data in an abstract data object, the `r ref("DataBackend")`.
 The default backend uses `r cran_pkg("data.table")` via the `r ref("DataBackendDataTable")` as an very fast and efficient in-memory data base.
 
-For bigger data, or when working with many tasks in parallel, it can be advantageous to interface an out-of-memory data to reduce the memory requirements.
+For bigger data, or when working with many tasks simultaneously in the same R session, it can be advantageous to interface an out-of-memory data to reduce the memory requirements.
 There are multiple options to archive this:
 
 1. `r ref("DataBackendDplyr")` which interfaces the R package `r cran_pkg("dbplyr")`, extending `r cran_pkg("dplyr")` to work on many popular data bases like [MariaDB](https://mariadb.org/), [PostgreSQL](https://www.postgresql.org/) or [SQLite](https://www.sqlite.org).
 2. `r ref("DataBackendDuckDB")` for the impressive [DuckDB](https://duckdb.org/) data base connected via `r cran_pkg("duckdb")`: a fast, zero configuration alternative to SQLite.
-3. `r ref("DataBackendDuckDB")`, again, but to work directly on [parquet files](https://parquet.apache.org/).
+3. `r ref("DataBackendDuckDB")`, again, but to work directly on [parquet files](https://parquet.apache.org/) stored on the file system.
 
 
 ### DataBackendDplyr
 
-To demonstrate the `r ref("DataBackendDplyr")` we use the NYC flights data set from the `r cran_pkg("nycflights13")` package and move it into a SQLite data base.
+To demonstrate the `r ref("DataBackendDplyr")`, we use the NYC flights data set from the `r cran_pkg("nycflights13")` package and move it into a SQLite data base.
 Although `as_sqlite_backend()` provides a convenient function to perform this step, we contruct the data base manually here.
 
 ```{r technical-021, message = FALSE}
