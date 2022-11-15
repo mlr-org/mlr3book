@@ -21,11 +21,16 @@ Therefore, many [learners](#learners) perform implicit feature selection, e.g. v
 Other filter methods are model agnostic, and therefore, e.g. only analyse univariate relationships between a given
 feature and the target variable.
 In this section, we mostly focus on feature selection as a means of improving model performance.
-There are different approaches to identifying relevant features, we will focus on two methods [@guyon2003;@chandrashekar2014]:
+There are different approaches to identifying relevant features, we will focus on two approaches, which are described in detail below: [Filter](#fs-filter) and [Wrapper](#fs-wrapper) methods [@guyon2003;@chandrashekar2014].
 
-**Filters**
+### Further Reading
+* A more formal and detailed introduction to filters and wrappers is given in [@guyon2003](https://dl.acm.org/doi/10.5555/944919.944968).
+* Filters can be used as part of a machine learning [pipeline](#pipelines).
+* [@bommert2020](https://www.sciencedirect.com/science/article/pii/S016794731930194X) perform a benchmark of filter methods.
 
-[Filter](#fs-filter) algorithms select features by assigning numeric scores to each feature, (e.g. correlation between feature and target variables).
+## Filters {#fs-filter}
+
+[Filter](#fs-filter) algorithms select features by assigning numeric scores to each feature, (e.g. correlation between feature and target variables), use these to rank the features and select a feature subset based on the ranking.
 Features that are assigned lower scores can then be omitted in subsequent modeling steps.
 All filters are implemented via the package `r mlr3filters`.
 We can distinguish between several types of filters, *univariate* and *multivariate* filters.
@@ -42,8 +47,97 @@ One special case of filters are [Feature importance filters](#fs-var-imp-filters
 They select features that are important according to the model induced by a selected `Learner`.
 Feature importance filters rely on the learner to extract information on feature importance from a trained model, for example, by inspecting a learned decision tree and returning the features that are used as split variables, or by computing model-agnostic [feature importance](#featureimp) values for each feature.
 
+There is a list of all implemented filter methods in the [Appendix](#appendix).
 
-**Wrapper methods**
+### Calculating Filter Values {#fs-calc}
+
+The first step is to create a new R object using the class of the desired filter method.
+Similar to other instances in `r mlr3`, these are registered in a dictionary (`r ref("mlr_filters")`) with an associated shortcut function `r ref("flt()")`.
+Each object of class `Filter` has a `.$calculate()` method which computes the filter values and ranks them in a descending order.
+For example, to calculate an information gain filter:
+
+```{r feature-selection-001}
+filter = flt("information_gain")
+
+task = tsk("penguins")
+filter$calculate(task)
+
+as.data.table(filter)
+```
+
+Some filters have hyperparameters, which can be changed similar to setting hyperparameters of a `r ref("Learner")` using `$param_set$values`.
+For example, to calculate `"spearman"` instead of `"pearson"` correlation with the correlation filter:
+
+```{r feature-selection-002}
+filter_cor = flt("correlation")
+filter_cor$param_set$values = list(method = "spearman")
+filter_cor$param_set
+```
+
+### Feature Importance Filters {#fs-var-imp-filters}
+
+To use [feature importance filters](#fs-var-imp-filters), we can use a learner with integrated feature importance methods.
+All learners with the property "importance" have this functionality.
+A list of all learners with this property is in the [Appendix](#fs-filter-embedded-list).
+
+For some learners the desired filter method needs to be set during learner creation.
+For example, learner `r ref("mlr_learners_classif.ranger", text = "classif.ranger")` comes with multiple integrated methods, c.f. the help page of `r ref("ranger::ranger()")`.
+To use the feature importance method "impurity", select it during learner construction:
+
+```{r feature-selection-003}
+lrn = lrn("classif.ranger", importance = "impurity")
+```
+
+Now you can use the `r ref("mlr_filters_importance", text = "FilterImportance")` filter class:
+
+```{r feature-selection-004}
+task = tsk("penguins")
+
+# Remove observations with missing data
+task$filter(which(complete.cases(task$data())))
+
+filter = flt("importance", learner = lrn)
+filter$calculate(task)
+as.data.table(filter)
+```
+
+### Embedded Methods {#fs-embedded-methods}
+
+A third alternative are [embedded methods](#fs-embedded-methods).
+Many learners internally select a subset of the features which they find helpful for prediction.
+These subsets can usually be queried, as the following example demonstrates:
+
+```{r feature-selection-005}
+library("mlr3verse")
+
+task = tsk("penguins")
+learner = lrn("classif.rpart")
+
+# ensure that the learner selects features
+stopifnot("selected_features" %in% learner$properties)
+
+# fit a simple classification tree
+learner = learner$train(task)
+
+# extract all features used in the classification tree:
+learner$selected_features()
+```
+
+The features selected by the model can be extracted by a `Filter` object, where `$calculate$` corresponds to training the learner on the given task:
+
+```{r feature-selection-006}
+filter = flt("selected_features", learner = learner)
+filter$calculate(task)
+as.data.table(filter)
+```
+
+Contrary to other filter methods, embedded methods just return value of 1 (selected features) and 0 (dropped feature).
+
+### Filter-based Feature Selection
+
+TODO
+
+## Wrapper Methods {#fs-wrapper}
 
 [Wrapper methods](#fs-wrapper) iteratively select features that optimize a performance measure.
 Instead of ranking features, a model is fit on a selected subset of features in each iteration and evaluated with respect to a selected performance measure.
@@ -57,95 +151,6 @@ In this chapter, we cover how to
 * configure it, to e.g. respect a runtime limit or for different objectives,
 * run it or fuse it with a `Learner` via an [`AutoFSelector`](#autofselect).
 
-**Embedded Methods**
-
-A third alternative are **embedded methods**.
-Many learners internally select a subset of the features which they find helpful for prediction.
-These subsets can usually be queried, as the following example demonstrates:
-
-  ```{r feature-selection-001}
-  library("mlr3verse")
-
-  task = tsk("penguins")
-  learner = lrn("classif.rpart")
-
-  # ensure that the learner selects features
-  stopifnot("selected_features" %in% learner$properties)
-
-  # fit a simple classification tree
-  learner = learner$train(task)
-
-  # extract all features used in the classification tree:
-  learner$selected_features()
-  ```
-
-
-### Further Reading
-* A more formal and detailed introduction to filters and wrappers is given in [@guyon2003](https://dl.acm.org/doi/10.5555/944919.944968).
-* Filters can be used as part of a machine learning [pipeline](#pipelines).
-* [@bommert2020](https://www.sciencedirect.com/science/article/pii/S016794731930194X) perform a benchmark of filter methods.
-
-
-## Filters {#fs-filter}
-
-Filter methods assign a score to each feature, use these to rank the features and select a feature subset based on the ranking.
-There is a list of all implemented filter methods in the [Appendix](#appendix).
-
-### Calculating Filter Values {#fs-calc}
-
-The first step is to create a new R object using the class of the desired filter method.
-Similar to other instances in `r mlr3`, these are registered in a dictionary (`r ref("mlr_filters")`) with an associated shortcut function `r ref("flt()")`.
-Each object of class `Filter` has a `.$calculate()` method which computes the filter values and ranks them in a descending order.
-For example, to calculate an information gain filter:
-
-```{r feature-selection-002}
-filter = flt("information_gain")
-
-task = tsk("penguins")
-filter$calculate(task)
-
-as.data.table(filter)
-```
-
-Some filters have hyperparameters, which can be changed similar to setting hyperparameters of a `r ref("Learner")` using `$param_set$values`. 
-For example, to calculate `"spearman"` instead of `"pearson"` correlation with the correlation filter: 
-
-```{r feature-selection-003}
-filter_cor = flt("correlation")
-filter_cor$param_set$values = list(method = "spearman")
-filter_cor$param_set
-```
-
-### Feature Importance Filters {#fs-var-imp-filters}
-
-To use [feature importance filters](#fs-var-imp-filters), we can use a learner with integrated feature importance methods. 
-All learners with the property "importance" have this functionality.
-A list of all learners with this property is in the [Appendix](#fs-filter-embedded-list).
-
-For some learners the desired filter method needs to be set during learner creation.
-For example, learner `r ref("mlr_learners_classif.ranger", text = "classif.ranger")` comes with multiple integrated methods, c.f. the help page of `r ref("ranger::ranger()")`.
-To use the feature importance method "impurity", select it during learner construction:
-
-```{r feature-selection-004}
-lrn = lrn("classif.ranger", importance = "impurity")
-```
-
-Now you can use the `r ref("mlr_filters_importance", text = "FilterImportance")` filter class:
-
-```{r feature-selection-005}
-task = tsk("penguins")
-
-# Remove observations with missing data
-task$filter(which(complete.cases(task$data())))
-
-filter = flt("importance", learner = lrn)
-filter$calculate(task)
-as.data.table(filter)
-```
-
-## Wrapper Methods {#fs-wrapper}
-
-Wrapper feature selection is supported via the `r mlr3fselect` extension package.
 At the heart of `r mlr3fselect` are the R6 classes:
 
 * `r ref("FSelectInstanceSingleCrit")`, `"r ref(FSelectInstanceMultiCrit")`: These two classes describe the feature selection problem and store the results.
@@ -155,21 +160,21 @@ At the heart of `r mlr3fselect` are the R6 classes:
 
 The following sub-section examines the feature selection on the `r ref("mlr_tasks_pima", text = "Pima")` data set which is used to predict whether or not a patient has diabetes.
 
-```{r feature-selection-006}
+```{r feature-selection-007}
 task = tsk("pima")
 print(task)
 ```
 
 We use the classification tree from `r ref_pkg("rpart")`.
 
-```{r feature-selection-007}
+```{r feature-selection-008}
 learner = lrn("classif.rpart")
 ```
 
 Next, we need to specify how to evaluate the performance of the feature subsets.
 For this, we need to choose a `r ref("Resampling", text = "resampling strategy")` and a `r ref("Measure", text = "performance measure")`.
 
-```{r feature-selection-008}
+```{r feature-selection-009}
 hout = rsmp("holdout")
 measure = msr("classif.ce")
 ```
@@ -185,7 +190,7 @@ This is done by selecting one of the available `r ref("Terminator", text = "Term
 
 For this short introduction, we specify a budget of 20 evaluations and then put everything together into a `r ref("FSelectInstanceSingleCrit")`:
 
-```{r feature-selection-009}
+```{r feature-selection-010}
 evals20 = trm("evals", n_evals = 20)
 
 instance = FSelectInstanceSingleCrit$new(
@@ -212,7 +217,7 @@ The following algorithms are currently implemented in `r mlr3fselect`:
 
 In this example, we will use a simple random search and retrieve it from the dictionary `r ref("mlr_fselectors")` with the `r ref("fs()")` function:
 
-```{r feature-selection-010}
+```{r feature-selection-011}
 fselector = fs("random_search")
 ```
 
@@ -230,7 +235,7 @@ The algorithm proceeds as follows
 1. Store the best feature subset as the result in the instance object.
 The best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance.
 
-```{r feature-selection-011}
+```{r feature-selection-012}
 # reduce logging output
 lgr::get_logger("bbotk")$set_threshold("warn")
 
@@ -241,13 +246,13 @@ instance$result_y
 
 One can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("FSelectInstanceSingleCrit")` and can be accessed by using `r ref("as.data.table()")`:
 
-```{r feature-selection-012}
+```{r feature-selection-013}
 head(as.data.table(instance$archive))
 ```
 
 The associated resampling iterations can be accessed in the `r ref("BenchmarkResult")`:
 
-```{r feature-selection-013}
+```{r feature-selection-014}
 instance$archive$benchmark_result$data
 ```
 
@@ -256,7 +261,7 @@ This allows e.g. to score the included `r ref("ResampleResult")`s on a different
 
 Now the optimized feature subset can be used to subset the task and fit the model on all observations.
 
-```{r feature-selection-014}
+```{r feature-selection-015}
 task$select(instance$result_feature_set)
 learner$train(task)
 ```
@@ -275,14 +280,14 @@ We will expand the previous example and perform feature selection on the same da
 
 The filtering process with multiple criteria is very similar to filtering with a single criterion.
 
-```{r feature-selection-015}
+```{r feature-selection-016}
 measures = msrs(c("classif.ce", "time_train"))
 ```
 
 Instead of creating a new `r ref("FSelectInstanceSingleCrit")` with a single measure, we create a new `r ref("FSelectInstanceMultiCrit")` with the two measures we are interested in here.
 Otherwise, it is the same as above.
 
-```{r feature-selection-016}
+```{r feature-selection-017}
 library("mlr3filters")
 
 evals20 = trm("evals", n_evals = 20)
@@ -298,18 +303,18 @@ instance
 
 After triggering the filtering, we will have the subset of features with the best classification error and time to train the model.
 
-```{r feature-selection-017}
+```{r feature-selection-018}
 # reduce logging output
 lgr::get_logger("bbotk")$set_threshold("warn")
 
 fselector$optimize(instance)
 ```
 
-```{r feature-selection-018}
+```{r feature-selection-019}
 instance$result_feature_set
 ```
 
-```{r feature-selection-019}
+```{r feature-selection-020}
 instance$result_y
 ```
 
@@ -321,7 +326,7 @@ Analogously to the previous subsection, a new classification tree learner is cre
 This classification tree learner automatically starts a feature selection on the given task using an inner resampling (holdout).
 We create a terminator which allows 10 evaluations, and uses a simple random search as feature selection algorithm:
 
-```{r feature-selection-020}
+```{r feature-selection-021}
 learner = lrn("classif.rpart")
 terminator = trm("evals", n_evals = 10)
 fselector = fs("random_search")
@@ -345,7 +350,7 @@ This is called [nested resampling](#nested-resampling).
 
 To compare the optimized feature subset with the complete feature set, we can use `r ref("benchmark()")`:
 
-```{r feature-selection-021}
+```{r feature-selection-022}
 grid = benchmark_grid(
   task = tsk("pima"),
   learner = list(at, lrn("classif.rpart")),
