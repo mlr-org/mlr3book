@@ -142,7 +142,59 @@ Just lean back and let the machine do the work :-)
 
 ### Nested Resampling Parallelization {#nested-resampling-parallelization}
 
-[Nested resampling](#nested-resampling) results in two nested resampling loops.
+[Nested resampling](#nested-resampling) results in two nested resampling loops, and the user can choose which of them should be parallelized.
+Lets consider the following example:
+You want to tune the `minsplit` argument of a classification tree using the `r ref("AutoTuner")` of `r mlr_pkg("mlr3tuning")` (simplified version taken from the [nested resampling section](#sec-model-performance)):
+
+```{r}
+learner = lrn("classif.rpart",
+  minsplit  = to_tune(2, 128, logscale = TRUE)
+)
+
+at = auto_tuner(
+  method = tnr("random_search"),
+  learner = learner,
+  resampling = rsmp("cv", folds = 2), # inner CV
+  measure = msr("classif.ce"),
+  term_evals = 20,
+)
+```
+To evaluate the performance on an independent test set, resampling is used:
+```{r}
+resample(
+  task = tsk("penguins"),
+  learner = at,
+  resampling = rsmp("boot", folds = 5) # outer CV
+)
+```
+
+Here, we have two opportunities to tune: the inner cross validation of the auto tuner with 2 folds, or the outer cross validation of the resampling with 5 folds.
+Lets say that we have a single CPU with four cores available.
+
+If we opt to parallelize the outer CV, all four cores would be utilized first with the computation of the first 4 resampling iterations.
+The computation of the fifth iteration has to wait, i.e., depending on the parallelization backend and its scheduling strategy,
+
+(a) until all four iterations have been finished and the results have been collectively reported back to the main process, or
+(b) either one of the four cores has terminated -- the first core reporting back will get a new task as soon as possible.
+
+:::{.callout-note}
+The former method usually comes with less synchronization overhead and is best suited for short jobs with homogeneous runtimes.
+The later yields better runtimes if the runtimes are heterogeneous, especially if the parallelization overhead is neglectable in comparison with the runtime for the computation.
+E.g., for `r ref("parallel::mclapply()`, the behavior of the scheduler can be controlled with the `mc.preschedule` option.
+For many backends, you cannot control the scheduling.
+However, `r cran_pkg("future")` allows you to first chunk jobs together which combines multiple tasks into blocks which run sequentially on a worker, avoiding the intermediate synchronization steps.
+:::
+
+The resulting CPU utilization is visualized in Figure XX/Mermaid.
+To optimize the overall runtime, the red boxes which indicate idling cores have to be minimized.
+Apparently there is room for optimization, as three cores have nothing to work on while waiting for the computation of the fifth resampling iteration.
+Note that in this simple example, the scheduling strategy has no influence since the runtimes are identical.
+
+Alternatively, you can also opt to parallelize the inner CV with 2 folds, which yields a CPU utilization as displayed in Figure YY/Mermaid.
+The outer loop runs sequentially and starts the parallelization five times on two cores.
+As a result, two of the four available cores are constantly underutilized.
+
+
 We can choose different parallelization backends for the inner and outer resampling loop, respectively.
 We just have to pass a list of `r cran_pkg("future")` backends:
 
