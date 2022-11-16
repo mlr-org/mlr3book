@@ -12,15 +12,14 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
 - [PDF](https://mlr3book.mlr-org.com/mlr3book.pdf)
 
-## Building the book
+## Working on the book
 
-1. Install all necessary dependencies for the book
+1. Clone the `mlr-org/mlr3book` repository.
 
-   ```r
-   remotes::install_github("mlr-org/mlr3book", dependencies = TRUE)
-   ```
+1. Start a new R session in the `book/` directory.
 
-1. Install [quarto](https://quarto.org/docs/get-started/)
+1. Call `renv::activate()` and then `renv::restore()` to download and install all required packages.
+   The file `book/renv.lock` records all packages needed to build the book.
 
 1. To build the book, run one of the following commands:
 
@@ -31,6 +30,12 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
    # PDF
    quarto render book/ --to pdf
    ```
+
+   These command use the virtual environment created by renv.
+
+1. If your change to the book requires a new R package, install the package in the renv environment.
+   Then call `renv::snapshot()` to update `book/renv.lock`.
+   Commit `book/renv.lock` with your changes to a pull request.
 
 ## Serve the book
 
