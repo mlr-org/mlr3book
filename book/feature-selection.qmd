@@ -252,36 +252,63 @@ In this chapter, we cover how to
 * configure it, to e.g. respect a runtime limit or for different objectives,
 * run it or fuse it with a `Learner` via an [`AutoFSelector`](#autofselect).
 
+### Simple Forward Selection Example {#fs-wrapper-example}
+
+We start with the simple example from above and do sequential forward selection with the penguins data: 
+
+```{r feature-selection-012-001}
+library("mlr3fselect")
+
+instance = fselect(
+  method = "sequential",
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc")
+)
+```
+
+To show all analyzed feature subsets and the corresponding performance, use: 
+
+```{r feature-selection-012-002}
+head(as.data.table(instance$archive))
+```
+
+And to only show the best feature set: 
+
+```{r feature-selection-012-003}
+instance$result_feature_set
+```
+
+Internally, the `r ref("fselect")` function creates an `r ref("FSelectInstanceSingleCrit")` object and executes the feature selection with an `r ref("FSelector")` object, based on the selected method, in this example an `r ref("FSelectorSequential")` object. 
+It uses the supplied resampling and measure to evaluate all feature subsets provided by the `r ref("FSelector")` on the task.  
+
 At the heart of `r mlr3fselect` are the R6 classes:
 
 * `r ref("FSelectInstanceSingleCrit")`, `"r ref(FSelectInstanceMultiCrit")`: These two classes describe the feature selection problem and store the results.
 * `r ref("FSelector")`: This class is the base class for implementations of feature selection algorithms.
 
+In the following two sections, these classes will be created manually, to learn more about the `r mlr3fselect` package.
+
 ### The `FSelectInstance` Classes {#fs-wrapper-optimization}
 
-The following sub-section examines the feature selection on the `r ref("mlr_tasks_pima", text = "Pima")` data set which is used to predict whether or not a patient has diabetes.
+To create an `r ref("FSelectInstanceSingleCrit")` object, we use the sugar function `r ref("fsi")`, which is short for `FSelectInstanceSingleCrit$new()` or `FSelectInstanceSingleCrit$new()`, depending on the selected measure(s): 
 
-```{r feature-selection-012}
-task = tsk("pima")
-print(task)
+```{r feature-selection-015-001}
+instance = fsi(
+  task = tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc"),
+  terminator = trm("evals", n_evals = 20)
+)
 ```
 
-We use the classification tree from `r ref_pkg("rpart")`.
-
-```{r feature-selection-013}
-learner = lrn("classif.rpart")
-```
-
-Next, we need to specify how to evaluate the performance of the feature subsets.
-For this, we need to choose a `r ref("Resampling", text = "resampling strategy")` and a `r ref("Measure", text = "performance measure")`.
-
-```{r feature-selection-014}
-hout = rsmp("holdout")
-measure = msr("classif.ce")
-```
-
-Finally, one has to choose the available budget for the feature selection.
-This is done by selecting one of the available `r ref("Terminator", text = "Terminators")`:
+Note that we have not selected a feature selection algorithm and thus did not select any features, yet.
+We have also supplied a so-called `r ref("Terminator")`, which is used to stop the feature selection. 
+For the forward selection in the example above, we did not need a terminator because we simply tried all remaining features until the full model. 
+However, for other feature selection algorithms such as `r ref("FSelectorRandomSearch", text = "random search")`, a terminator is required. 
+The following terminator are available: 
 
 * Terminate after a given time (`r ref("TerminatorClockTime")`)
 * Terminate after a given amount of iterations (`r ref("TerminatorEvals")`)
@@ -289,25 +316,13 @@ This is done by selecting one of the available `r ref("Terminator", text = "Term
 * Terminate when feature selection does not improve (`r ref("TerminatorStagnation")`)
 * A combination of the above in an *ALL* or *ANY* fashion (`r ref("TerminatorCombo")`)
 
-For this short introduction, we specify a budget of 20 evaluations and then put everything together into a `r ref("FSelectInstanceSingleCrit")`:
+Above we used the sugar function `r ref("trm")` to select `r ref("TerminatorEvals")` with 20 evaluations.  
 
-```{r feature-selection-015}
-evals20 = trm("evals", n_evals = 20)
-
-instance = FSelectInstanceSingleCrit$new(
-  task = task,
-  learner = learner,
-  resampling = hout,
-  measure = measure,
-  terminator = evals20
-)
-instance
-```
-
-To start the feature selection, we still need to select an algorithm which are defined via the `r ref("FSelector")` class
+To start the feature selection, we still need to select an algorithm which are defined via the `r ref("FSelector")` class, described in the next section.
 
 ### The `FSelector` Class
 
+The `r ref("FSelector")` class is the base class for different feature selection algorithms.
 The following algorithms are currently implemented in `r mlr3fselect`:
 
 * Random Search (`r ref("FSelectorRandomSearch")`)
@@ -315,63 +330,60 @@ The following algorithms are currently implemented in `r mlr3fselect`:
 * Sequential Search (`r ref("FSelectorSequential")`)
 * Recursive Feature Elimination (`r ref("FSelectorRFE")`)
 * Design Points (`r ref("FSelectorDesignPoints")`)
+* Genetic Search (`r ref("FSelectorGeneticSearch")`)
+* Shadow Variable Search (`r ref("FSelectorShadowVariableSearch")`)
 
-In this example, we will use a simple random search and retrieve it from the dictionary `r ref("mlr_fselectors")` with the `r ref("fs()")` function:
+In this example, we will use a simple random search and retrieve it from the dictionary `r ref("mlr_fselectors")` with the `r ref("fs()")` sugar function, which is short for `FSelectorRandomSearch$new()`:
 
 ```{r feature-selection-016}
 fselector = fs("random_search")
 ```
 
-### Triggering the Tuning {#wrapper-selection-triggering}
+### Starting the Feature Selection {#wrapper-selection-triggering}
 
-To start the feature selection, we simply pass the `r ref("FSelectInstanceSingleCrit")` to the `$optimize()` method of the initialized `r ref("FSelector")`.
+To start the feature selection, we pass the `r ref("FSelectInstanceSingleCrit")` object to the `$optimize()` method of the initialized `r ref("FSelector")` object: 
+
+```{r feature-selection-017-002}
+fselector$optimize(instance)
+```
+
 The algorithm proceeds as follows
 
 1. The `r ref("FSelector")` proposes at least one feature subset and may propose multiple subsets to improve parallelization, which can be controlled via the setting `batch_size`).
-1. For each feature subset, the given `r ref("Learner")` is fitted on the `r ref("Task")` using the provided `r ref("Resampling")`.
+1. For each feature subset, the given `r ref("Learner")` is fitted on the `r ref("Task")` using the provided `r ref("Resampling")` and evaluated with the given `r ref("Measure")`.
 1  All evaluations are stored in the archive of the `r ref("FSelectInstanceSingleCrit")`.
 1. The `r ref("Terminator")` is queried if the budget is exhausted.
 1  If the budget is not exhausted, restart with 1) until it is.
 1. Determine the feature subset with the best observed performance.
 1. Store the best feature subset as the result in the instance object.
-The best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance.
+
+The best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance:
 
 ```{r feature-selection-017}
-# reduce logging output
-lgr::get_logger("bbotk")$set_threshold("warn")
-
-fselector$optimize(instance)
 instance$result_feature_set
 instance$result_y
 ```
 
-One can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("FSelectInstanceSingleCrit")` and can be accessed by using `r ref("as.data.table()")`:
+As in the forward selection example above, one can investigate all resamplings which were undertaken, as they are stored in the archive of the `r ref("FSelectInstanceSingleCrit")` and can be accessed by using `r ref("as.data.table()")`:
 
 ```{r feature-selection-018}
 head(as.data.table(instance$archive))
 ```
 
-The associated resampling iterations can be accessed in the `r ref("BenchmarkResult")`:
-
-```{r feature-selection-019}
-instance$archive$benchmark_result$data
-```
-
-The `uhash` column links the resampling iterations to the evaluated feature subsets stored in `instance$archive$data()`.
-This allows e.g. to score the included `r ref("ResampleResult")`s on a different measure.
-
-Now the optimized feature subset can be used to subset the task and fit the model on all observations.
+Now the optimized feature subset can be used to subset the task and fit the model on all observations:
 
 ```{r feature-selection-020}
+task = tsk("penguins")
+learner = lrn("classif.rpart")
+
 task$select(instance$result_feature_set)
 learner$train(task)
 ```
 
 The trained model can now be used to make a prediction on external data.
 Note that predicting on observations present in the `r ref("Task")`, should be avoided.
-The model has seen these observations already during feature selection and therefore results would be statistically biased.
-Hence, the resulting performance measure would be over-optimistic.
-Instead, to get statistically unbiased performance estimates for the current task, [nested resampling](#nested-resampling) is required.
+The model has seen these observations already during feature selection and therefore performance evaluation results would be over-optimistic.
+Instead, to get unbiased performance estimates for the current task, [nested resampling](#nested-resampling) is required.
 
 ### Filtering with Multiple Performance Measures {#mult-measures-filtering}
 
@@ -381,14 +393,14 @@ We will expand the previous example and perform feature selection on the same da
 
 The filtering process with multiple criteria is very similar to filtering with a single criterion.
 
-```{r feature-selection-021}
+```{r feature-selection-021, eval=FALSE}
 measures = msrs(c("classif.ce", "time_train"))
 ```
 
 Instead of creating a new `r ref("FSelectInstanceSingleCrit")` with a single measure, we create a new `r ref("FSelectInstanceMultiCrit")` with the two measures we are interested in here.
 Otherwise, it is the same as above.
 
-```{r feature-selection-022}
+```{r feature-selection-022, eval=FALSE}
 library("mlr3filters")
 
 evals20 = trm("evals", n_evals = 20)
@@ -404,18 +416,18 @@ instance
 
 After triggering the filtering, we will have the subset of features with the best classification error and time to train the model.
 
-```{r feature-selection-023}
+```{r feature-selection-023, eval=FALSE}
 # reduce logging output
 lgr::get_logger("bbotk")$set_threshold("warn")
 
 fselector$optimize(instance)
 ```
 
-```{r feature-selection-024}
+```{r feature-selection-024, eval=FALSE}
 instance$result_feature_set
 ```
 
-```{r feature-selection-025}
+```{r feature-selection-025, eval=FALSE}
 instance$result_y
 ```
 
@@ -427,7 +439,7 @@ Analogously to the previous subsection, a new classification tree learner is cre
 This classification tree learner automatically starts a feature selection on the given task using an inner resampling (holdout).
 We create a terminator which allows 10 evaluations, and uses a simple random search as feature selection algorithm:
 
-```{r feature-selection-026}
+```{r feature-selection-026, eval=FALSE}
 learner = lrn("classif.rpart")
 terminator = trm("evals", n_evals = 10)
 fselector = fs("random_search")
@@ -451,7 +463,7 @@ This is called [nested resampling](#nested-resampling).
 
 To compare the optimized feature subset with the complete feature set, we can use `r ref("benchmark()")`:
 
-```{r feature-selection-027}
+```{r feature-selection-027, eval=FALSE}
 grid = benchmark_grid(
   task = tsk("pima"),
   learner = list(at, lrn("classif.rpart")),
