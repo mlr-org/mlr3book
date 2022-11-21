@@ -32,15 +32,6 @@ This gives rise to different [Resampling](#resampling) strategies encoding more 
 
 We will cover the following topics:
 
-**Performance Measures**
-
-[Measures](#measures) are a way to quantify model properties along relevant dimensions.
-We cover how to
-  * construct `Measure` objects for different `task_types`,
-  * use `Measure` objects to score models
-
-An in-depth guide on how to construct custom measures can be found in the [extending measures](##extending-measures) section.
-
 **Resampling**
 
 [Resampling](#resampling) is a methodology to construct training and test splits.
@@ -75,11 +66,8 @@ We cover how to
 When evaluating the performance of a model, we are interested in its generalization performance -- how well will it perform on new data that has not been seen during training?
 We can estimate the generalization performance by evaluating a model on a test set, as we have done above, that was constructed to contain only observations that are not contained in the training set.
 There are many different strategies for partitioning a data set into training and test; in `r mlr3` we call these strategies "resampling".
-
-:::{.callout-note}
-It is often desirable to repeatedly split the entire data in different ways to ensure that a "lucky" or "unlucky" split does not bias the generalization performance estimate.
+It is considered best practice to repeatedly split the entire data in different ways to ensure that a "lucky" or "unlucky" split does not bias the generalization performance estimate, which is why a strategy like 10-fold cross-validation would be preferrable over a single train-test split if the size of the data allows it.
 Without resampling strategies like the ones we provide here, this is a tedious and error-prone process.
-:::
 
 The following sections provide guidance on how to select a resampling strategy and how to use it.
 
@@ -107,10 +95,8 @@ resampling = rsmp("holdout")
 print(resampling)
 ```
 
-:::{.callout-note}
 Note that the `$is_instantiated` field is set to `FALSE`.
 This means we did not apply the strategy to a dataset yet.
-:::
 
 By default we get a .66/.33 split of the data into training and test.
 We can specify parameters during construction or update the parameters afterwards, like in the example below where we construct the holdout with a 80:20 split (L1) then update to 50:50 (L2).
@@ -153,7 +139,7 @@ With a `r ref("Task")`, a `r ref("Learner")`, and a `r ref("Resampling")` object
 For this, we call the `r ref("resample()")` function which returns a `r ref("ResampleResult")` object.
 We can tell `r ref("resample()")` to keep the fitted models (for example for later inspection) by setting the `store_models` option to `TRUE`.
 
-Per default, mlr3 discards fitted models after the prediction step to keep the `r ref("ResampleResult")` object small w.r.t. its memory consumption.
+Per default, mlr3 discards fitted models after the prediction step to reduce memory consumption of the resulting `r ref("ResampleResult")` object.
 
 ```{r performance-007}
 task = tsk("penguins")
@@ -165,74 +151,111 @@ print(rr)
 ```
 
 Here we use a three-fold cross-validation resampling, which trains and evaluates on three different training and test sets.
-The returned `r ref("ResampleResult")`, stored as `rr`, provides various getters to access and aggregate the stored information.
+The resulting `r ref("ResampleResult")`, stored as `rr`, provides various getters to access and aggregate the stored information.
 Here are a few examples:
 
 - Calculate the average performance across all resampling iterations, in terms of classification error:
 
-  ```{r performance-008}
-  rr$aggregate(msr("classif.ce"))
-  ```
+```{r performance-008}
+#| eval: false
+rr$aggregate(msr("classif.ce"))
+```
 
   This is useful to check if one (or more) of the iterations are very different from the average.
 
 - Check for warnings or errors:
 
-  ```{r performance-009}
-  rr$warnings
-  rr$errors
-  ```
+```{r performance-009}
+#| eval: false
+rr$warnings
+rr$errors
+```
 
 - Extract and inspect the resampling splits; this allows us to see in detail which observations were used for what purpose when:
 
-  ```{r performance-010}
-  rr$resampling
-  rr$resampling$iters
-  str(rr$resampling$train_set(1))
-  str(rr$resampling$test_set(1))
-  ```
+```{r performance-010}
+rr$resampling
+rr$resampling$iters
+str(rr$resampling$train_set(1))
+str(rr$resampling$test_set(1))
+```
 
 - Retrieve the model trained in a specific iteration and inspect it, for example, to investigate why the performance in this iteration was very different from the average:
 
-  ```{r performance-011}
-  lrn = rr$learners[[1]]
-  lrn$model
-  ```
+```{r performance-011}
+lrn = rr$learners[[1]]
+lrn$model
+```
 
 - Extract the individual predictions:
 
-  ```{r performance-012}
-  rr$prediction() # all predictions merged into a single Prediction object
-  rr$predictions()[[1]] # predictions of first resampling iteration
-  ```
+```{r performance-012}
+rr$prediction() # all predictions merged into a single Prediction object
+rr$predictions()[[1]] # predictions of first resampling iteration
+```
 
 - Filter the result, keep only specified resampling iterations:
 
-  ```{r performance-013}
-  rr$filter(c(1, 3))
-  print(rr)
-  ```
+```{r performance-013}
+rr$filter(c(1, 3))
+print(rr)
+```
 
 ### Custom resampling {#resamp-custom}
 
 Sometimes it is necessary to perform resampling with custom splits, e.g., to reproduce results reported in a study.
 A manual resampling instance can be constructed using the `"custom"` template.
+In the following example, we construct a custom resampling strategy and manually assign row indices to the `$train` and `$test` fields.
 
 ```{r performance-014}
 resampling = rsmp("custom")
 resampling$instantiate(task,
-  train = list(c(1:10, 51:60, 101:110)),
-  test = list(c(11:20, 61:70, 111:120))
+  train = list(c(1:50, 151:333)),
+  test = list(51:150)
 )
-resampling$iters
-resampling$train_set(1)
-resampling$test_set(1)
 ```
+
+We can then check that both sets contain the indices we expect:
+
+```{r performance-015}
+str(resampling$train_set(1))
+str(resampling$test_set(1))
+```
+
+The resulting resampling can be used just like any other strategy.
+For example, here we apply it instead of the cross-validation resampling in the previous example:
+
+```{r performance-016}
+task = tsk("penguins")
+learner = lrn("classif.rpart", maxdepth = 3, predict_type = "prob")
+
+rr = resample(task, learner, resampling)
+```
+
+The above is equivalent to a custom train-test split, analogous to the holdout strategy.
+A custom version of the cross-validation strategy can be constructed using the `"custom_cv"` strategy.
+The important difference is that we need to supply a task.
+
+We can then assign custom folds either by providing either a `factor` variable as `f`, or a task column to be used for splitting as `col`.
+
+In this example we create a factor `f` with 4 levels, each repeated 86 times to account for the 344 observations in the `"penguin"` task.
+The result is a custom cross-validation strategy with 4 folds.
+
+```{r performance-017}
+task = tsk("penguins")
+
+custom_cv = rsmp("custom_cv")
+f = factor(rep(letters[1:4], each = 86))
+custom_cv$instantiate(task, f = f)
+
+custom_cv
+```
+
 
 ### Resampling with (predefined) groups
 
 In some cases, it is desirable to keep observations together, i.e., either have all observations of the same group in the training set or have all observations of the same group in the test set.
-This can be defined through the column role `"group"` during Task construction, i.e., a column in the data specifies the groups (see also the [help page](https://mlr3.mlr-org.com/reference/Resampling.html#grouping-blocking) on this column role).
+This can be defined through the column role `"group"` during Task construction, i.e., a column in the data specifies the groups (see also the help section on `r ref("Resampling")` on this column role).
 
 A potential use case for this is spatial modeling, where one wants to account for groups of observations during resampling.
 
@@ -253,13 +276,14 @@ In the old `r ref_pkg("mlr")` package, grouping was called "blocking".
 `r mlr3viz` provides a `r ref("ggplot2::autoplot()", text = "autoplot()")` method for resampling results.
 As an example, we construct a binary classification task with two features, perform a resampling with a 10-fold cross-validation and visualize the results:
 
-```{r performance-015}
+```{r performance-018}
 task = tsk("pima")
 task$select(c("glucose", "mass"))
 learner = lrn("classif.rpart", predict_type = "prob")
 rr = resample(task, learner, rsmp("cv"), store_models = TRUE)
 rr$score(msr("classif.auc"))[, .(iteration, classif.auc)]
 
+library(mlr3viz)
 # boxplot of AUC values across the 10 folds
 autoplot(rr, measure = msr("classif.auc"))
 
@@ -269,7 +293,7 @@ autoplot(rr, type = "roc")
 
 We can also plot the predictions of individual models:
 
-```{r performance-016}
+```{r performance-019}
 # learner predictions for the first fold
 rr1 = rr$clone()$filter(1)
 autoplot(rr1, type = "prediction")
@@ -296,7 +320,7 @@ To set up the learners, we deviate from the default behavior by setting them to 
 We also set them up to predict for the observations of both the training and test set by (`predict_sets = c("train", "test")`), rather than only making predictions on the test data.
 
 
-```{r performance-017}
+```{r performance-020}
 library("mlr3verse")
 
 design = benchmark_grid(
@@ -312,7 +336,7 @@ It is also possible to construct a custom design manually, for example, to exclu
 
 Note that if you construct a custom design with `r ref("data.table()")`, the train/test splits will be different for each row of the design if you do not [**manually instantiate**](#resampling-inst) the resampling before constructing the design.
 
-```{r performance-018}
+```{r performance-021}
 #| echo: false
 
 # Creating a grid using a cross join
@@ -338,7 +362,7 @@ Map(function(task, resampling) {
 
 After the [benchmark design](#bm-design) is ready, we can call `r ref("benchmark()")` on it:
 
-```{r performance-019}
+```{r performance-022}
 bmr = benchmark(design)
 ```
 
@@ -351,7 +375,7 @@ This way, each learner operates on the same training and test sets which makes t
 Once the benchmarking is finished (and, depending on the size of your design, this can take quite some time), we can aggregate the performance with the `$aggregate()` method of the returned `r ref("BenchmarkResult")`.
 We construct two measures to calculate the area under the curve (AUC) for the training and the test set:
 
-```{r performance-020}
+```{r performance-023}
 measures = list(
   msr("classif.auc", predict_sets = "train", id = "auc_train"),
   msr("classif.auc", id = "auc_test")
@@ -368,7 +392,7 @@ Instead, we calculate the rank statistic for each learner, grouped by task.
 Then the calculated ranks, grouped by the learner, are aggregated with the `r ref_pkg("data.table")` package.
 As larger AUC scores are better, we multiply the values by $-1$ such that the best learner has a rank of $1$.
 
-```{r performance-021}
+```{r performance-024}
 library("data.table")
 # group by levels of task_id, return columns:
 # - learner_id
@@ -393,7 +417,7 @@ The winner is the classification forest, which outperforms a single classificati
 
 Similar to [tasks](#autoplot-task), [predictions](#autoplot-prediction), or [resample results](#autoplot-resampleresult), `r mlr3viz` also provides a `r ref("ggplot2::autoplot()", text = "autoplot()")` method for benchmark results.
 
-```{r performance-022}
+```{r performance-025}
 autoplot(bmr) +
   ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 ```
@@ -403,7 +427,7 @@ Such a plot gives a nice overview of the overall performance and how learners co
 We can also plot ROC (receiver operating characteristics) curves.
 We filter the `r ref("BenchmarkResult")` to only contain a single `r ref("Task")`, then we simply plot the result:
 
-```{r performance-023}
+```{r performance-026}
 bmr_small = bmr$clone(deep = TRUE)$filter(task_id = "german_credit")
 autoplot(bmr_small, type = "roc")
 ```
@@ -416,7 +440,7 @@ The package `r mlr3benchmark` provides some infrastructure for applying statisti
 Currently, Friedman tests and pairwise Friedman-Nemenyi tests [@demsar2006] are supported for benchmarks with at least two tasks and at least two learners.
 The results can be summarized in Critical Difference Plots.
 
-```{r performance-024}
+```{r performance-027}
 library("mlr3benchmark")
 
 bma = as.BenchmarkAggr(bmr, measures = msr("classif.auc"))
@@ -429,7 +453,7 @@ autoplot(bma, type = "cd")
 A `r ref("BenchmarkResult")` object is essentially a collection of multiple `r ref("ResampleResult")` objects.
 As these are stored in a column of the aggregated `r ref("data.table()")`, we can easily extract them:
 
-```{r performance-025}
+```{r performance-028}
 tab = bmr$aggregate(measures)
 rr = tab[task_id == "german_credit" & learner_id == "classif.ranger"]$resample_result[[1]]
 print(rr)
@@ -437,7 +461,7 @@ print(rr)
 
 We can now investigate this resampling and even single resampling iterations using one of the approaches shown in [the previous section on resampling](#resampling):
 
-```{r performance-026}
+```{r performance-029}
 measure = msr("classif.auc")
 rr$aggregate(measure)
 
@@ -455,7 +479,7 @@ head(rr$resampling$train_set(i))
 A `r ref("ResampleResult")` can be converted to a `r ref("BenchmarkResult")` with the function `r ref("as_benchmark_result()")`.
 We can also combine two `r ref("BenchmarkResult", text = "BenchmarkResults")` into a larger result object, for example, for two related benchmarks that are computed on different machines.
 
-```{r performance-027}
+```{r performance-030}
 task = tsk("iris")
 resampling = rsmp("holdout")$instantiate(task)
 
