@@ -15,14 +15,14 @@ update_db = function() {
 #' @param text Text to use for the link. Defaults to the topic name.
 #' @param format Either markdown or HTML.
 #'
-#' @return (`character(1)`) markdown link.
+#' @return `character(1)` | `shiny.tag`
 #' @export
 ref = function(topic, text = topic, format = "markdown") {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
   checkmate::assert_string(text, min.chars = 1L)
-  checkmate::assert_choice(format, c("markdown", "html"))
+  checkmate::assert_choice(format, c("markdown", "html", "htmltools"))
 
   topic = trimws(topic)
   text = trimws(text)
@@ -56,7 +56,8 @@ ref = function(topic, text = topic, format = "markdown") {
 
   switch(format,
     "markdown" = sprintf("[`%s`](%s)", text, url),
-    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
+    "html" = sprintf("<a href=\"%s\">%s</a>", url, text),
+    "htmltools" = htmltools::a(href = url, text)
   )
 }
 
