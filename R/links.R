@@ -74,7 +74,7 @@ ref = function(topic, text = topic, format = "markdown") {
 #' @export
 ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "(^[[:alnum:]._-]+$)|(^[[:alnum:]_-]+/[[:alnum:]._-]+$)")
-  checkmate::assert_choice(format, c("markdown", "html"))
+  checkmate::assert_choice(format, c("markdown", "html", "htmltools"))
   pkg = trimws(pkg)
 
   if (grepl("/", pkg, fixed = TRUE)) {
@@ -93,7 +93,7 @@ ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
 
 cran_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
+  checkmate::assert_choice(format, c("markdown", "html", "htmltools"))
   pkg = trimws(pkg)
 
   if (pkg %in% c("stats", "graphics", "datasets")) {
@@ -102,44 +102,48 @@ cran_pkg = function(pkg, format = "markdown") {
   url = sprintf("https://cran.r-project.org/package=%s", pkg)
   switch(format,
     "markdown" = sprintf("[%s](%s)", pkg, url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg),
+    "htmltools" = htmltools::a(href = url, pkg)
   )
 }
 
 mlr_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
+  checkmate::assert_choice(format, c("markdown", "html", "htmltools"))
   pkg = trimws(pkg)
 
   url = sprintf("https://%1$s.mlr-org.com", pkg)
   switch(format,
     "markdown" = sprintf("[%s](%s)", pkg, url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg),
+    "htmltools" = htmltools::a(href = url, pkg)
   )
 }
 
 gh_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
+  checkmate::assert_choice(format, c("markdown", "html", "htmltools"))
   pkg = trimws(pkg)
 
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://github.com/%s", pkg)
   switch(format,
     "markdown" = sprintf("[%s](%s)", parts[2L], url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L]),
+    "htmltools" = htmltools::a(href = url, parts[2L])
   )
 }
 
 ru_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
+  checkmate::assert_choice(format, c("markdown", "html", "htmltools"))
 
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://%s.r-universe.dev/ui#package:%s", parts[1L], parts[2L])
   switch(format,
     "markdown" = sprintf("[%s](%s)", parts[2L], url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L]),
+    "htmltools" = htmltools::a(href = url, parts[2L])
   )
 }
 
