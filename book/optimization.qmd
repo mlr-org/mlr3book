@@ -15,36 +15,57 @@ abstract: TODO (150-200 WORDS)
 
 # Hyperparameter Optimization {#sec-optimization}
 
+```{r}
+set.seed(4)
+```
+
 {{< include _setup.qmd >}}
 
-Machine learning algorithms usually have parameters and hyperparameters.
+Machine learning algorithms usually include parameters and hyperparameters.
 Parameters are what we might think of as model coefficients or weights, when fitting a model we are essentially just running algorithms that fit parameters.
-Hyperparameters, in contrast, are configured by the user and determine how the model will fit its parameters.
+In contrast, hyperparameters, are configured by the user and determine how the model will fit its parameters.
 Examples include setting the number of trees in a random forest, penalty variables in SVMs, or the learning rate in a neural network.
 Building a neural network is sometimes referred to as an 'art' as there are so many hyperparameters to configure that strongly influence model performance, this is also true for other machine learning algorithms.
 So in this chapter, we will demonstrate how to make this into more of a science.
 
 The goal of hyperparameter optimization (HPO) (@sec-model-tuning) or model tuning is to find the optimal configuration of hyperparameters of an ML algorithm for a given task.
-Human trial-and-error to select a hyperparameter configuration (HPC), i.e., the hyperparameter values of an ML algorithm, is time-consuming, often biased and error-prone, and computationally irreproducible.
-The mathematical formalization of HPO is essentially black-box optimization:
-The ML algorithm configured by an HPC produces a model whose performance with respect to a given measure is evaluated via a resampling method.
-Beyond the definition of the search space (@sec-tuning-instance), i.e., the domain of the optimization problem, neither a closed-form mathematical representation nor analytic gradient information is available for model agnostic HPO.
+There is no closed-form mathematical representation (nor analytic gradient information) for model agnostic HPO, instead we follow a numerical black-box optimization: an ML algorithm is configured with values chosen for one or more hyperparameters, and this algorithm is then evaluated (optimally with a robust resampling method) and its performance measured. In practice multiple configurations may be tried and tested and we may think of finding the optimal configuration in the same way as selecting a model from a benchmark experiment, where in this case each model uses the same underlying algorithm but with different hyperparameter configurations. For example we could naively tune the number of trees in a random forest using basic mlr3 code:
 
-Many sophisticated HPO methods (@sec-tuner) (or 'tuners') have been developed over the last decades which can be used to tackle HPO efficiently.
-Most HPO methods are iterative, i.e., new candidate HPCs are proposed and evaluated in a sequential manner (see @fig-optimization-loop) and after some termination criterion is met (e.g., exceeding a given run time budget), the best-performing HPC is returned.
+```{r}
+autoplot(benchmark(benchmark_grid(
+  tsk("penguins_simple"),
+  c(lrn("classif.ranger", num.trees = 1, id = "1 tree"),
+    lrn("classif.ranger", num.trees = 10, id = "10 trees"),
+    lrn("classif.ranger", num.trees = 100, id = "100 trees")),
+  rsmp("cv", folds = 3)
+)))
+```
+
+However, human trial-and-error (which is essentially what we are doing above), is time-consuming, often biased, error-prone, and computationally irreproducible.
+Instead, many sophisticated HPO methods (@sec-tuner) (or 'tuners') have been developed over the last few decades for robust and efficient HPO.
+Most HPO methods are iterative and propose different configurations until some termination criterion is met, at which point the optimal configuration is then returned (@fig-optimization-loop).
 Popular examples are given by algorithms based on evolutionary algorithms or Bayesian optimization methods.
-Recent HPO methods often also make use of evaluating an HPC at multiple so-called fidelity levels, e.g., a neural network can be trained for an increasing number of epochs, gradient boosting can be performed for an increasing number of boosting steps and training data can always be subsampled to only include a smaller fraction of all available data.
-The general idea of multi-fidelity HPO methods is that the performance of a model obtained by using computationally cheap lower fidelity evaluations (few numbers of epochs or boosting steps, only using a small sample of all available data for training) is predictive of the performance of the model obtained using computationally expensive higher fidelity evaluations and this concept can be leveraged to make HPO more efficient (e.g., only continuing to evaluate those HPCs on higher fidelities that appear to be promising).
+Recent HPO methods often also make use of evaluating an configuration at multiple so-called fidelity levels, e.g., a neural network can be trained for an increasing number of epochs, gradient boosting can be performed for an increasing number of boosting steps and training data can always be subsampled to only include a smaller fraction of all available data.
+The general idea of multi-fidelity HPO methods is that the performance of a model obtained by using computationally cheap lower fidelity evaluations (few numbers of epochs or boosting steps, only using a small sample of all available data for training) is predictive of the performance of the model obtained using computationally expensive higher fidelity evaluations and this concept can be leveraged to make HPO more efficient (e.g., only continuing to evaluate those configurations on higher fidelities that appear to be promising).
 Another interesting direction of HPO is to optimize multiple metrics (@sec-multi-metrics-tuning) simultaneously, e.g., minimizing the generalization error along with the size of the model.
 This gives rise to multi-objective HPO.
 For more details on HPO in general, the reader is referred to @hpo_practical and @hpo_automl.
 
-```{r optimization-002}
-#| label: fig-optimization-loop
-#| fig-cap: Hyperparameter Optimization Loop.
-#| echo: false
-
-knitr::include_graphics("images/hpo.png")
+```{mermaid optimization-002}
+%%| label: fig-optimization-loop
+%%| fig-cap: Hyperparameter Optimization Loop.
+%%{init: { 'flowchart': { 'curve': 'basis', 'rankSpacing': 30}}}%%
+flowchart TB
+    alg[/Algorithm/]
+    search[(Search Space)]
+    id1[Set new configuration from search space]
+    id2[Resample, Evaluate, Store results, Update tuner]
+    id4{Termination<br>criteria<br>reached?}
+    id5([Return optimal<br>configuration])
+    alg --> id1
+    search --> id1 --> id2 --> id4
+    id4 -->|No| id1
+    id4 -->|Yes| id5
 ```
 
 ## Model Tuning {#sec-model-tuning}
@@ -169,9 +190,9 @@ In other words, we need to choose the *optimization algorithm* via the `r ref("T
 
 There are multiple `r ref("Tuner", "Tuners")` in `r mlr3tuning`, which implement different HPO algorithms.
 
-* Random Search `"random_search"` - Samples HPCs from a uniform distribution randomly [@bergstra2012].
-* Grid Search `"grid_search"` - Discretizes the range of each HPC and exhaustively evaluates each combination.
-* Iterative Racing `"irace"` - Races down a random set of HPCs and uses the surviving ones to initialize a new set HPCs which focus on a promising region of the search space [@lopez2016].
+* Random Search `"random_search"` - Samples configurations from a uniform distribution randomly [@bergstra2012].
+* Grid Search `"grid_search"` - Discretizes the range of each configuration and exhaustively evaluates each combination.
+* Iterative Racing `"irace"` - Races down a random set of configurations and uses the surviving ones to initialize a new set of configurations which focus on a promising region of the search space [@lopez2016].
 * Bayesian Optimization `"mbo"` - Iterative algorithms that make use of a continuously updated surrogate model built for the objective function.
 By optimizing a (comparably cheap to evaluate) acquisition function defined on the surrogate prediction, the next candidate is chosen for evaluation, resulting in good sample efficiency.
 * Hyperband `"hyperband"` - Multi-fidelity algorithm that speeds up a random search with adaptive resource allocation and early stopping [@li2017].
@@ -180,7 +201,7 @@ By optimizing a (comparably cheap to evaluate) acquisition function defined on t
 * Nonlinear Optimization `"nloptr"` - Several nonlinear optimization algorithms for numeric search spaces.
 
 Grid search and random search are the most basic HPO algorithms.
-More advanced algorithms such as Iterative Racing and CMA-ES learn from the previously evaluated HPCs to find good configurations more quickly.
+More advanced algorithms such as Iterative Racing and CMA-ES learn from the previously evaluated configurations to find good configurations more quickly.
 Some advanced algorithms are implemented in extension packages.
 The package `r mlr3mbo` makes Bayesian optimization (also called Model-Based Optimization) available.
 The algorithms of the hyperband family are included in `r mlr3hyperband`.
@@ -355,7 +376,7 @@ To get statistically unbiased performance estimates for a given task, nested res
 ### Encapsulation and Fallback Learner {#sec-encapsulation-fallback}
 
 So far, we have only looked at the case where no issues occur.
-However, it often happens that learners with certain HPCs do not converge, run out of memory, or terminate with an error.
+However, it often happens that learners with certain configurations do not converge, run out of memory, or terminate with an error.
 We can protect the tuning process from failing learners with encapsulation.
 The encapsulation separates the tuning from the training of the individual learner.
 The encapsulation method is set in the learner.
@@ -460,10 +481,10 @@ For example, consider an ML model or pipeline that should be deployed on edge de
 In this scenario, low memory usage, prediction latency, and power consumption are all pertinent properties of a model along with good predictive performance.
 As another example, we may be interested in a good performance but also low model complexity as simpler models are easier to interpret.
 The problem of optimizing multiple metrics simultaneously is also referred to as multi-objective optimization.
-As different metrics are typically in competition no single HPC exists that optimizes all metrics.
+As different metrics are typically in competition no single configuration exists that optimizes all metrics.
 Focus is therefore given to the concept of Pareto optimality.
-One HPC is said to Pareto-dominate another one if the resulting model is equal or better in all metrics and strictly better in at least one metric.
-All HPCs that are not Pareto-dominated are referred to as the Pareto set and their corresponding metrics (the image of the Pareto set) are referred to as the Pareto front.
+One configuration is said to Pareto-dominate another one if the resulting model is equal or better in all metrics and strictly better in at least one metric.
+All configurations that are not Pareto-dominated are referred to as the Pareto set and their corresponding metrics (the image of the Pareto set) are referred to as the Pareto front.
 The goal of multi-objective HPO is to approximate the true, unknown Pareto front.
 More details on multi-objective HPO can be found in @hpo_multi.
 
@@ -530,8 +551,8 @@ ggplot(aes(x = selected_features, y = classif.ce), data = instance$archive$best(
 
 For the evaluation of a machine learning model, it is advisable to use an additional layer of resampling when hyperparameters have to be tuned or features have to be selected.
 Nested resampling separates these model configuration steps from the process of estimating the performance of the model.
-As an example, consider an HPO run, on which basis we can select an HPC that results in a model that performs best with respect to a performance metric.
-If the same data is used for the HPC selection step and the evaluation of the resulting model itself, the actual performance estimate of the model might be severely biased [@Simon2007].
+As an example, consider an HPO run, on which basis we can select a configuration that results in a model that performs best with respect to a performance metric.
+If the same data is used for the configuration selection step and the evaluation of the resulting model itself, the actual performance estimate of the model might be severely biased [@Simon2007].
 One reason for this bias is that the repeated evaluation of the model on the test data could leak information about its structure into the model, resulting in over-optimistic performance estimation.
 Therefore, to ensure unbiased performance estimation, another resampling step is needed, i.e., the performance is to be estimated in an outer resampling loop.
 For more details and a formal introduction to nested resampling the reader is refered to @hpo_practical.
