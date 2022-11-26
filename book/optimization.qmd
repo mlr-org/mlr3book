@@ -21,14 +21,13 @@ set.seed(4)
 
 {{< include _setup.qmd >}}
 
-Machine learning algorithms usually include parameters and hyperparameters.
-Parameters are what we might think of as model coefficients or weights, when fitting a model we are essentially just running algorithms that fit parameters.
+Machine learning algorithms usually include `r index("parameters")` and `r define("hyperparameters")`. Parameters are what we might think of as model coefficients or weights, when fitting a model we are essentially just running algorithms that fit parameters.
 In contrast, hyperparameters, are configured by the user and determine how the model will fit its parameters.
 Examples include setting the number of trees in a random forest, penalty variables in SVMs, or the learning rate in a neural network.
 Building a neural network is sometimes referred to as an 'art' as there are so many hyperparameters to configure that strongly influence model performance, this is also true for other machine learning algorithms.
 So in this chapter, we will demonstrate how to make this into more of a science.
 
-The goal of hyperparameter optimization (HPO) (@sec-model-tuning) or model tuning is to find the optimal configuration of hyperparameters of an ML algorithm for a given task.
+The goal of `r define("hyperparameter optimization", "HPO: Hyperparameter Optimization")` (@sec-model-tuning) or model `r index("tuning")` is to find the optimal configuration of hyperparameters of an ML algorithm for a given task.
 There is no closed-form mathematical representation (nor analytic gradient information) for model agnostic HPO, instead we follow a numerical black-box optimization: an ML algorithm is configured with values chosen for one or more hyperparameters, this algorithm is then evaluated (optimally with a robust resampling method) and its performance measured, this is repeated with multiple configurations and the configuration with the best performance is selected. We could think of finding the optimal configuration in the same way as selecting a model from a benchmark experiment, where in this case each model uses the same underlying algorithm but with different hyperparameter configurations. For example we could naively tune the number of trees in a random forest using basic mlr3 code:
 
 ```{r}
@@ -71,22 +70,20 @@ flowchart TB
     id4 -->|Yes| id5
 ```
 
-## Model Tuning {#sec-model-tuning}
+## Tuning Basics {#sec-model-tuning}
 
-`r mlr3tuning` is the hyperparameter optimization package of the mlr3 ecosystem.
-At the heart of the package are the R6 classes
+`r mlr3tuning`\index{mlr3tuning} is the hyperparameter optimization package of the mlr3 ecosystem.
+At the heart of the package (and indeed any optimization problem) are the R6 classes
 
-* `r ref("TuningInstanceSingleCrit")` and `r ref("TuningInstanceMultiCrit")`, which are used to describe the tuning problem and store the results; and
+* `r ref("TuningInstanceSingleCrit")` and `r ref("TuningInstanceMultiCrit")`, which are used to construct a tuning 'instance' which describes the optimization problem and stores the results; and
 * `r ref("Tuner")` which is used to get and set optimization algorithms.
 
-A tuning instance can be constructed manually (@sec-tuning-instance) with the `r ref("ti()")` function or automated (@sec-simplified-tuning) with the `r ref("tune()")` function.
-We cover the manual approach first as this allows finer control of tuning and a more nuanced discussion about how `r mlr3tuning` functions.
-
-Throughout this section we will look at optimizing a support vector machine (SVM) on the `r ref("mlr_tasks_sonar", text = "Sonar")` data set as a running example.
+In this section we will cover these classes as well as other supporting functions and classes.
+Throughout this section we will look at optimizing a `r index("support vector machine")` (SVM) on the `r ref("mlr_tasks_sonar", text = "sonar")` data set as a running example.
 
 ### Learner and Search Space {#sec-learner-search-space}
 
-We apply a support vector machine with a radial basis function from the `r ref_pkg("e1071")` package and use it as a classification machine by setting `type` to `"C-classification"`.
+We begin by constructing a support vector machine from the `r ref_pkg("e1071")` with a radial kernal and specify we want to tune this using `"C-classification"` (the alternative is `"nu-classification"`, which has the same underlying algorithm but with a `nu` parameter to tune over [0,1] instead of `cost` over [0, $\infty$)).
 
 ```{r optimization-003}
 learner = lrn("classif.svm", type = "C-classification", kernel = "radial")
@@ -98,9 +95,9 @@ Learner hyperparameter information is stored in the `$param_set` field, includin
 as.data.table(learner$param_set)[, list(id, class, lower, upper, nlevels)]
 ```
 
-Note that `$param_set` also displays non-tunable parameters. Detailed information about parameters can be found in the help pages of the underlying implementation, for example `r ref("e1071::svm")`.
+Note that `$param_set` also displays non-tunable parameters. Detailed information about parameters can be found in the help pages of the underlying implementation, for this example see `r ref("e1071::svm()")`.
 
-Given infinite resources, we could tune every single hyperparameter, but in reality that's not possible so instead only a subset of hyperparameter can be tuned. This subset is referred to as the 'search space' or 'tuning space'. In this example we will tune the regularization and influence hyperparameters, `cost` and `gamma`.
+Given infinite resources, we could tune every single hyperparameter, but in reality that is not possible so instead only a subset of hyperparameters can be tuned. This subset is referred to as the `r define("search space")` or `r index("tuning space")`. In this example we will tune the regularization and influence hyperparameters, `cost` and `gamma`.
 
 For numeric hyperparameters (we will explore others later) one must specify the bounds to tune over. We do this by constructing a learner and using `r ref("to_tune()")` to set the lower and upper limits for parameters we want to tune. This function allows us to construct a learner in the usual way but to leave the hyperparameters of interest to be unspecified within a set range. This is best demonstrated by example:
 
@@ -116,58 +113,116 @@ learner
 
 Here we have constructed a classification SVM by setting the type to "C-classification", the kernel to "radial", and not fully specifying the `cost` and `gamma` hyperparameters but instead indicating that we will tune these parameters.
 
-Note the use of `logscale = TRUE`, which means the optimization algorithm searches in [log(1e-5), log(1e5)] but transforms the selected configuration with `exp()` before passing to the learner.
-
 {{< include _complex.qmd >}}
-Using the log transformation emphasizes smaller values but can also result in large values. The code below demonstrates this more clearly. The summaries show how the algorithm searches within a narrow range but exponentiating then results in the majority of points being reltively small but a few being very large.
+
+Note the use of `logscale = TRUE`, which means the optimization algorithm searches in [log(1e-5), log(1e5)] but transforms the selected configuration with `exp()` before passing to the learner. Using the log transformation emphasizes smaller values but can also result in large values. The code below demonstrates this more clearly. The summaries show how the algorithm searches within a narrow range but exponentiating then results in the majority of points being reltively small but a few being very large.
 
 ```{r optimization-005gen}
-sim <- runif(1000, log(1e-5), log(1e5))
+sim = runif(1000, log(1e-5), log(1e5))
 summary(sim)
 summary(exp(sim))
 ```
 
 Search spaces are usually chosen by experience. In some cases these can be quite complex, @sec-paradox describes how to construct these. @sec-tuning-spaces introduces the `r mlr3tuningspaces` extension package which allows loading of search spaces that have been established in published scientific articles.
 
+### Tuner {#sec-tuner}
+
+Now we know what paramters to tune over, we can look at *how* to tune. There are multiple `r ref("Tuner", "Tuners")`\index{Tuners}[Tuners]{.aside} in `r mlr3tuning`, which implement different HPO algorithms.
+
+| Tuner | Function call | Method |
+|----------  | ---- | ----- |
+| Random Search | `tnr("random_search")` | Samples configurations from a uniform distribution randomly [@bergstra2012]. |
+| Grid Search | `tnr("grid_search")` | Discretizes the range of each configuration and exhaustively evaluates each combination. |
+| Iterative Racing | `tnr("irace")` | Races down a random set of configurations and uses the surviving ones to initialize a new set of configurations which focus on a promising region of the search space [@lopez2016]. |
+| Bayesian Optimization | `tnr("mbo")` | Iterative algorithms that make use of a continuously updated surrogate model built for the objective function. By optimizing a (comparably cheap to evaluate) acquisition function defined on the surrogate prediction, the next candidate is chosen for evaluation, resulting in good sample efficiency. |
+| Hyperband | `tnr("hyperband")` | Multi-fidelity algorithm that speeds up a random search with adaptive resource allocation and early stopping [@li2017]. |
+| Covariance Matrix Adaptation Evolution Strategy | `tnr("cmaes")` | Evolution strategy algorithm with sampling from a multivariate Gaussian who is updated with the success of the previous population [@hansen2011]. |
+| Generalized Simulated Annealing | `tnr("gensa")` | Probabilistic algorithm for numeric search spaces [@xiang2013; @tsallis1996]. |
+| Nonlinear Optimization | `tnr("nloptr")` | Several nonlinear optimization algorithms for numeric search spaces. |
+: Tuning algorithms available in `r mlr3tuning`, their function call and the methodology. {#tbl-tuners}
+
+When selecting algorithms, grid search and random search are the most basic and are often selected first in initial experiments. They are 'naive' algorithms in that they try new configurations whilst ignoring performance from previous attempts. In contrast, more advanced algorithms such as Iterative Racing and CMA-ES learn from the previously evaluated configurations to find good configurations more quickly.
+Some advanced algorithms are included in extension packages, for example the package `r mlr3mbo` implements Bayesian optimization (also called Model-Based Optimization)\index{MBO}, and `r mlr3hyperband` implements algorithms of the `r index("hyperband")` family. A complete and up-to-date list of tuners can be found on the [website](https://mlr-org.com/tuners.html).
+
+For our SVM example, we will use a simple grid search with a resolution of 5, which is the distinct values to try *per hyperparameter*. For example for a search space $\{1, 2, 3, 4, 5, 6\}$ then a grid search with resolution 3 would pick three values evenly apart in this search space, i.e., $\{2, 4, 6\}$.
+The `batch_size` controls how many configurations are evaluated at the same time (see @sec-parallelization).
+
+```{r optimization-008}
+tuner = tnr("grid_search", resolution = 5, batch_size = 5)
+tuner
+```
+
+In our example we are tuning over two numeric parameters, `r ref("TunerGridSearch")` will create an equidistant grid between the respective upper and lower bounds.
+This means our two-dimensional grid of resolution 5 consists of $5^2 = 25$ configurations.
+Each configuration is a distinct setting of hyperparameter values which is used to construct a model from the chosen learner, which is fit to the chosen task (@fig-optimization-loop).
+
+All configurations will be tried by the tuner (in random order) until either all configurations are evaluated or the terminator (@sec-terminator) signals that the budget is exhausted.
+
+Just like learners, tuners also have parameters, known as `r define("control parameters")`, which (as the name suggests) controls the behavior of the tuners. Unlike learners, default values for control parameters usually give good results and these rarely need to be changed. Control parameters are stored in the `$param_set` field.
+
+```{r optimization-009}
+tuner$param_set
+```
+
 ### Terminator {#sec-terminator}
 
-We have to specify the budget available for tuning.
-This is a crucial step, as exhaustively evaluating all possible hyperparameter configurations is usually not feasible.
-`r mlr3tuning` allows specifying complex termination criteria by selecting one of the available `r ref("Terminator", text = "Terminators")`.
+Theoretically, a tuner could search an entire search space exhaustively, however practically this is not possible and mathematically this is impossible for continuous hyperparameters. Therefore a core part of configuring tuning is to specify when to terminate the algorithm, this is also known as specifying the `r define("tuning budget")`. `r mlr3tuning` includes many methods to specify when to terminate an algorithm, which are known as `r ref("Terminator", text = "Terminators")`\index{Terminators}[Terminators]{.aside}. Available terminators are listed in @tbl-terms.
 
-* Number of Evaluations `trm("evals", n_evals = 500)`
-* Run Time `trm("run_time", secs = 100)`
-* None `trm("none")`
-* Performance Level `trm("perf_reached", level = 0.1)`
-* Stagnation `trm("stagnation", iters = 5, threshold = 1e-5)`
-* Clock Time `trm("clock_time", stop_time = "2022-11-06 08:42:53 CET"`
-* Combo `trm("combo", terminators = list(run_time_100, evals_200)`
+| Terminator | Function call and default parameters |
+|----------  | ---- |
+| Number of Evaluations | `trm("evals", n_evals = 500)` |
+| Run Time | `trm("run_time", secs = 100)` |
+| Performance Level | `trm("perf_reached", level = 0.1)` |
+| Stagnation | `trm("stagnation", iters = 5, threshold = 1e-5)` |
+| None | `trm("none")` |
+| Clock Time | `trm("clock_time", stop_time = "2022-11-06 08:42:53 CET"` |
+| Combo | `trm("combo", terminators = list(run_time_100, evals_200)` |
+: Terminators available in `r mlr3tuning`, their function call and default parameters. {#tbl-terms}
 
 The most commonly used terminators are those that stop the tuning after a certain time  (`"run_time"`) or the number of evaluations (`"evals"`).
 Choosing a runtime is often based on practical considerations and intuition.
 Using a time limit can be important on clusters so that the tuning is finished before the account budget is exhausted.
-The `"perf_reached"` terminator stops the tuning when a certain performance level is reached.
-This can be helpful if a certain performance is seen as sufficient for the practical use of the model.
-However, when the level is set to optimistically, the tuning might never terminate.
+The `"perf_reached"` terminator stops the tuning when a certain performance level is reached, which can be helpful if a certain performance is seen as sufficient for the practical use of the model.
+However, one needs to be careful using this terminator as if the level is set too optimistically, the tuning might never terminate.
 The `"stagnation"` terminator stops when no progress is made in a certain amount of iterations.
-Note, this could result in the optimization being terminated too early when the search space is too complex.
+Note, this could result in the optimization being terminated too early if the search space is too complex.
 We use `"none"` when tuners, such as Grid Search and Hyperband, control the termination themselves.
-Terminators can be freely combined with the `"combo"` terminator e.g. terminate after 1000 evaluations or after 1 hour at the latest.
-A complete and always up-to-date list of terminators can be found on the [website](https://mlr-org.com/terminators.html).
+Terminators can be freely combined with the `"combo"` terminator, this is explored in the exercises at the end of this chapter.
+A complete and always up-to-date list of terminators can be found on our website at [https://mlr-org.com/terminators.html](https://mlr-org.com/terminators.html).
 
-### Tuning Instance {#sec-tuning-instance}
+## Single-Objective Tuning {#sec-tuning-single}
 
-Before we construct the tuning instance, we need to specify how to evaluate the performance of a trained model.
-For this, we need to choose a `r ref("Resampling", text = "resampling strategy")` and a `r ref("Measure", text = "performance measure")`.
+A `r define("tuning instance")` can be constructed manually (@sec-tuning-instance) with the `r ref("ti()")` function or automated (@sec-simplified-tuning) with the `r ref("tune()")` function.
+We cover the manual approach first as this allows finer control of tuning and a more nuanced discussion about the design and use of `r mlr3tuning`.
 
-```{r optimization-006}
-resampling = rsmp("cv", folds = 3)
-measure = msr("classif.ce")
+### Tuning Instance with `ti` {#sec-tuning-instance}
+
+The `r ref("ti")` function constructs a tuning instance which collects together the information required to optimise a model.
+
+```{r, eval=FALSE}
+ti(
+  task, # Task to operate on
+  learner, # Learner to tune
+  resampling, # Resampling methods
+  measures = NULL, # One or more measures to optimize in tuning
+  terminator, # Stopping criterion
+  search_space = NULL, # Explicit search space to tune over
+  store_benchmark_result = TRUE, # Should resample result be saved?
+  store_models = FALSE, # Should fitted models be saved?
+  check_values = FALSE, # Should scores be checked during evaluation?
+  allow_hotstart = FALSE, # Is hotstarting with fitted models allowed?
+  keep_hotstart_stack = FALSE, # Should the HotStartStack be kept?
+  evaluate_default = FALSE # Should default values be used at start of HPO?
+)
 ```
 
-Now we put everything together into a `r ref("TuningInstanceSingleCrit")` with the `r ref("ti()")` function.
+Now continuing our example, we will construct a single-objective tuning problem (i.e., tuning over one measure) by using the `r ref("ti()")` function to create a `r ref("TuningInstanceSingleCrit")` (note: supplying two measures to `ti()` would result in `r ref("TuningInstanceMultiCrit")` (@sec-multi-metrics-tuning)). For this example we will use three-fold resampling and will optimise the classification error measure. Note that we use `trm("none")` as we are using an exhaustive grid search.
 
 ```{r optimization-007}
+resampling = rsmp("cv", folds = 3)
+
+measure = msr("classif.ce")
+
 learner = lrn("classif.svm",
   cost  = to_tune(1e-5, 1e5, logscale = TRUE),
   gamma = to_tune(1e-5, 1e5, logscale = TRUE),
@@ -180,92 +235,31 @@ instance = ti(
   learner = learner,
   resampling = rsmp("cv", folds = 3),
   measures = msr("classif.ce"),
-  terminator = trm("none")  # we will do a Grid Search
+  terminator = trm("none")
 )
 instance
 ```
 
-To start the tuning, we still need to select how the optimization should take place.
-In other words, we need to choose the *optimization algorithm* via the `r ref("Tuner")` class.
-
-### Tuner {#sec-tuner}
-
-There are multiple `r ref("Tuner", "Tuners")` in `r mlr3tuning`, which implement different HPO algorithms.
-
-* Random Search `"random_search"` - Samples configurations from a uniform distribution randomly [@bergstra2012].
-* Grid Search `"grid_search"` - Discretizes the range of each configuration and exhaustively evaluates each combination.
-* Iterative Racing `"irace"` - Races down a random set of configurations and uses the surviving ones to initialize a new set of configurations which focus on a promising region of the search space [@lopez2016].
-* Bayesian Optimization `"mbo"` - Iterative algorithms that make use of a continuously updated surrogate model built for the objective function.
-By optimizing a (comparably cheap to evaluate) acquisition function defined on the surrogate prediction, the next candidate is chosen for evaluation, resulting in good sample efficiency.
-* Hyperband `"hyperband"` - Multi-fidelity algorithm that speeds up a random search with adaptive resource allocation and early stopping [@li2017].
-* Covariance Matrix Adaptation Evolution Strategy `"cmaes"` - Evolution strategy algorithm with sampling from a multivariate Gaussian who is updated with the success of the previous population [@hansen2011].
-* Generalized Simulated Annealing `"gensa"` - Probabilistic algorithm for numeric search spaces [@xiang2013; @tsallis1996].
-* Nonlinear Optimization `"nloptr"` - Several nonlinear optimization algorithms for numeric search spaces.
-
-Grid search and random search are the most basic HPO algorithms.
-More advanced algorithms such as Iterative Racing and CMA-ES learn from the previously evaluated configurations to find good configurations more quickly.
-Some advanced algorithms are implemented in extension packages.
-The package `r mlr3mbo` makes Bayesian optimization (also called Model-Based Optimization) available.
-The algorithms of the hyperband family are included in `r mlr3hyperband`.
-A complete and always up-to-date list of tuners can be found on the [website](https://mlr-org.com/tuners.html).
-
-For our example, we will use a simple grid search with a grid resolution of 5.
-The grid resolution is the number of distinct values per hyperparameter.
-The `batch_size` controls how many configurations are evaluated at the same time (see @sec-parallelization).
-
-```{r optimization-008}
-tuner = tnr("grid_search", resolution = 5, batch_size = 5)
-tuner
-```
-
-As we have only numeric parameters, `r ref("TunerGridSearch")` will create an equidistant grid between the respective upper and lower bounds.
-Our two-dimensional grid of resolution 5 consists of $5^2 = 25$ configurations.
-Each configuration is a distinct setting of hyperparameter values for the previously defined learner which is then fitted to the task and evaluated using the provided resampling.
-All configurations will be examined by the tuner (in random order) until either all configurations are evaluated or the terminator signals that the budget is exhausted, i.e. here the tuner will evaluate all configurations since we use the `"none"` terminator.
-
-The `resolution` is an example of a control parameter.
-These parameters control the behavior of the tuners.
-We usually do not have to worry about the parameters because the default settings already give good results.
-The parameters are stored in the `$param_set` slot.
-
-```{r optimization-009}
-tuner$param_set
-```
-
-### Triggering the Tuning {#sec-trigger-tuning}
-
-To start the tuning, we simply pass the `r ref("TuningInstanceSingleCrit")` to the `$optimize()` method of the initialized `r ref("Tuner")`.
-The tuner proceeds as follows:
-
-1. The `r ref("Tuner")` proposes at least one hyperparameter configuration to evaluate (the `r ref("Tuner")` may propose multiple points to be able to evaluate them in parallel, which can be controlled via the setting `batch_size`).
-1. For each configuration, the given `r ref("Learner")` is fitted on the `r ref("Task")` and evaluated using the provided `r ref("Resampling")`.
-1  All evaluations are stored in the archive of the `r ref("TuningInstanceSingleCrit")`.
-1. The `r ref("Terminator")` is queried if the budget is exhausted.
-1  If the budget is not exhausted, go back to 1), else terminate.
-1. Determine the configuration with the best-observed performance from the archive.
-1. Store the best configurations as result in the tuning instance object.
+Now we have all our components, we are ready to start tuning! To do this we simply pass the constructed `r ref("TuningInstanceSingleCrit")` to the `$optimize()` method of the initialized `r ref("Tuner")`.
+The tuner then proceeds with the HPO loop we discussed at the beginning of the chapter (@fig-optimization-loop).
 
 ```{r optimization-010}
 tuner$optimize(instance)
 ```
 
 The optimizer returns the best hyperparameter configuration and the corresponding measured performance.
-This information is also stored in `instance$result`.
-Since we set `logscale = TRUE` in the search space, the `cost` and `gamma` values are log-transformed.
-The column `x_domain` contains the hyperparameter values after the transformation i.e. `exp(5.76)` and `exp(-5.76)`.
+This information is also stored in `instance$result`. Note that we set `cost` and `gamma` values to be log-transformed and so `x_domain` contains the hyperparameter values after the transformation i.e. `exp(5.76)` and `exp(-5.76)`:
 
 ```{r optimization-011}
 instance$result$x_domain
 ```
 
-The column `learner_param_vals` contains the transformed values and optional constants.
+The column `learner_param_vals` contains the transformed values and optional constants (none in this example).
 
-### Simplified Tuning {#sec-simplified-tuning}
+### Automated Instance Construction with `tune` {#sec-simplified-tuning}
 
-In the previous sections, you learned how to create a tuning instance manually using the `r ref("ti()")` function.
-This option gives you more control over the tuning process.
-The function `r ref("tune()")` is a shortcut for tuning a learner.
-It internally creates a `r ref("TuningInstanceSingleCrit")`, starts the tuning and returns the result with the instance.
+In the previous section, we looked at creating a tuning instance manually using `r ref("ti()")`, which offers more control over the tuning process. However you can also simplify this (albeit with slightly less control) using the `r ref("tune()")` sugar function.
+Internally this creates a `r ref("TuningInstanceSingleCrit")`, starts the tuning and returns the result with the instance.
 
 ```{r optimization-012}
 learner = lrn("classif.svm",
@@ -280,8 +274,7 @@ instance = tune(
   task = tsk("sonar"),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
-  measures = msr("classif.ce"),
-  term_evals = 20
+  measures = msr("classif.ce")
 )
 
 instance$result
@@ -289,96 +282,67 @@ instance$result
 
 ### Analyzing the Result {#sec-analyzing-result}
 
-The archive lists all evaluated hyperparameter configurations.
-For analyzing the tuning results, it is recommended to pass the archive to `as.data.table()`.
+Whether you use `r ref("ti")` or `r ref("tune")` the output is the same and the 'archive' lists all evaluated hyperparameter configurations:
 
 ```{r optimization-013}
-head(as.data.table(instance$archive)[,
-  list(cost, gamma, classif.ce, batch_nr, resample_result)])
+head(as.data.table(instance$archive)[, list(cost, gamma, classif.ce)])
 ```
 
-The archive has one row for each evaluated configuration.
-Altogether, the grid search evaluated 25 different hyperparameter configurations in a random order.
-In this example, there were two configurations with the same best classification error, and without other criteria, the first one was returned.
-You may want to choose the configuration with the lowest classification error as well as time to train the model or some other combination of criteria for hyperparameter selection.
-You can do this with `r ref("TuningInstanceMultiCrit")` (@sec-multi-metrics-tuning).
-
-The archive also shows the train and predict times of the learners (`runtime_learners`) and records when an `error` or `warning` was raised.
+Each row of the archive is a different evaluated configuration (there are 25 rows in total in the full `data.table`). The columns here show the tested configurations, the measure we optimise,
+the completed configuration time stamp,
+and the total train and predict times. If we only specify a single-objective criteria then the instance will return the configuration that optimises this measure however we can manually inspect the archive to determine other important features. For example, how long did the model take to run? Were there any errors in running?
 
 ```{r optimization-014}
 head(as.data.table(instance$archive)[,
   list(timestamp, runtime_learners, errors, warnings)])
 ```
 
-The included `r ref("ResampleResult")`s can be scored on a different performance measure.
+Now we see not only was our optimal configuration the best performing with respect to classification error, but also it had the fastest runtime.
 
-```{r optimization-015, echo=FALSE}
-head(as.data.table(instance$archive, measures = msr("classif.acc"))[,
-  list(cost, gamma, classif.ce, classif.acc)])
+Another powerful feature of the instance is that we can score the internal `r ref("ResampleResult")`s on a different performance measure, for example looking at false negative rate (FNR) and false positive rate (FPR) as well as classification error:
+
+```{r optimization-015}
+head(as.data.table(instance$archive,
+  measures = msrs(c("classif.fpr", "classif.fnr")))[,
+  list(cost, gamma, classif.ce, classif.fpr, classif.fnr)])
 ```
 
-The instance contains a `r ref("BenchmarkResult")` with all `r ref("ResampleResult")`s in `instance$archive$benchmark_result`.
+Now we see our model is also the best performing with respect to FPR and FNR!
 
-The `r mlr3viz` package provides visualizations for tuning results.
-We plot the performances depending on the evaluated `cost` and `gamma` values (see. @fig-surface).
+You can view all the resamplings in a `r ref("BenchmarkResult")` object with `instance$archive$benchmark_result`.
+
+Finally, for more visually appealing results you can use `r mlr3viz` (@fig-surface).
 
 ```{r optimization-016}
 #| label: fig-surface
-#| fig-cap: Performance depending on the evaluated cost and gamma values.
-
+#| fig-cap: Model performance with different configurations for cost and gamma. Bright yellow regions represent the model performing worse and dark blue performing better. We can see that high `cost` values and `gamma` values around `exp(-5)` achieve the best performance.
+#| fig-alt: Heatmap showing model performance during HPO. y-axis is 'gamma' parameter between (-10,10) and x-axis is 'cost' parameter between (-10,10). The heatmap shows squares covering all points on the plot and circular points indicating configurations tried in our optimisation. The top-left quadrant is all yellow indicating poor performance when gamma is high and cost is low. The bottom-right is dark blue indicating good performance when cost is high and gamme is low.
 autoplot(instance, type = "surface")
 ```
 
-We observe that high `cost` values and `gamma` values around `exp(-5)` achieve the best performance.
+### Using a tuned model {#sec-final-model}
 
-### Final Model {#sec-final-model}
-
-The learner we use to make predictions on new data is called the final model.
-Let's recap how a model is tuned.
-
-```{r optimization-017}
-learner = lrn("classif.svm",
-  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
-  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
-  kernel = "radial",
-  type = "C-classification"
-)
-
-instance = ti(
-  task = tsk("sonar"),
-  learner = learner,
-  resampling = rsmp("cv", folds = 3),
-  measures = msr("classif.ce"),
-  terminator = trm("evals", n_evals = 20)
-)
-
-tuner = tnr("grid_search", resolution = 5, batch_size = 4)
-
-tuner$optimize(instance)
-```
-
-After tuning, we can fit a final model on the full data set.
-We take the optimized hyperparameters and set them for the previously-created learner.
+Once the learner has been tuned we can start to use it like any other model in the mlr3 universe. To do this we simply construct a new learner with the same underlying algorithm and set the learner hyperparameters with the optimal configurations:
 
 ```{r optimization-018}
-learner$param_set$values = instance$result_learner_param_vals
+svm_tuned = lrn("classif.svm", id = "SVM Tuned")
+svm_tuned$param_set$values = instance$result_learner_param_vals
 ```
 
-We train the learner on the full dataset.
+Now we can train the learner on the full dataset and we are ready to make predictions. The trained model can then be used to predict new, external data:
 
 ```{r optimization-019}
-learner$train(tsk("sonar"))
+svm_tuned$train(tsk("sonar"))
+svm_tuned$model
 ```
 
-The trained model can now be used to predict new, external data.
-The tuning process can also be automated without the need to extract information on the best hyperparameter settings at the end (@sec-autotuner).
+{{< include _complex.qmd >}}
 
-:::{.callout-warning}
-A common mistake is to report the performance estimated on the resampling sets on which the tuning was performed (`instance$result$classif.ce`) as the model's performance.
-To get statistically unbiased performance estimates for a given task, nested resampling (@sec-nested-resampling-unbiased-performance) is required.
-:::
+A common mistake when tuning is to report the performance estimated on the resampling sets on which the tuning was performed (`instance$result$classif.ce`) as the model's performance. However doing so would lead to bias and therefore nested resampling is required (@sec-nested-resampling-unbiased-performance). Therefore when tuning as above ensure that you do not make any statements about model performance without testing the model on more unseen data. We will come back to this in more detail in @sec-autotuner.
 
 ### Encapsulation and Fallback Learner {#sec-encapsulation-fallback}
+
+{{< include _optional.qmd >}}
 
 So far, we have only looked at the case where no issues occur.
 However, it often happens that learners with certain configurations do not converge, run out of memory, or terminate with an error.
@@ -423,13 +387,11 @@ head(as.data.table(instance$archive)[,
 
 ### Search Spaces Collection {#sec-tuning-spaces}
 
-The package `r ref_pkg("mlr3tuningspaces")` is a collection of published search spaces for many popular machine learning algorithms.
-Predefined search spaces are a good alternative if you lack the knowledge to define one yourself.
-These search spaces should work for a wide range of data sets.
-However, they may need to be adapted in specific situations.
+{{< include _optional.qmd >}}
 
-A `r ref("TuningSpace")` contains a list of `r ref("TuneToken")` for a specific learner.
-The dictionary `r ref("mlr_tuning_spaces")` stores the tuning spaces.
+Selected search spaces can require a lot of background knowledge or expertise. The package `r ref_pkg("mlr3tuningspaces")` tries to make HPO more accessible by providing implementations of published search spaces for many popular machine learning algorithms.
+These search spaces should be applicable to a wide range of data sets, however, they may need to be adapted in specific situations.
+The search spaces are stored in the dictionary `r ref("mlr_tuning_spaces")`.
 
 ```{r optimization-024}
 head(as.data.table(mlr_tuning_spaces))
@@ -439,8 +401,7 @@ The tuning spaces are named according to the scheme `{learner-id}.{publication}`
 The sugar function `r ref("lts()")` is used to retrieve a `r ref("TuningSpace")`.
 
 ```{r optimization-025}
-tuning_space = lts("classif.rpart.default")
-tuning_space
+lts("classif.rpart.default")
 ```
 
 A tuning space can be passed to `ti()` as the `search_space`.
@@ -457,11 +418,13 @@ instance = ti(
 instance
 ```
 
-Alternatively, we can set the `r ref("TuneToken")` to the parameter set of the learner.
+Alternatively, we can explicitly set search space of a learner with `r ref("TuneToken", "TuneTokens")`
 
 ```{r optimization-027}
+vals = lts("classif.rpart.default")$values
+vals
 learner = lrn("classif.rpart")
-learner$param_set$set_values(.values = tuning_space$values)
+learner$param_set$set_values(.values = vals)
 learner
 ```
 
@@ -471,16 +434,13 @@ When passing a learner to `r ref("lts()")`, the default search space from the @h
 lts(lrn("classif.rpart"))
 ```
 
-Parts of the predefined tuning space can be overwritten directly during the construction.
-We change the range of the `nrounds` hyperparameter.
-It would also be possible not to tune the parameter and to set a constant.
+It it possible to simply overwrite a predefined tuning space in constructin, for example here we change the range of the `nrounds` hyperparameter in XGBoost:
 
 ```{r optimization-029}
-#| echo: false
 lts("classif.xgboost.rbv2", nrounds = to_tune(1, 1024))
 ```
 
-## Tuning with Multiple Metrics {#sec-multi-metrics-tuning}
+## Multi-Objective Tuning {#sec-multi-metrics-tuning}
 
 In many applications, one is not interested in optimizing solely for predictive performance but rather for multiple metrics simultaneously.
 For example, consider an ML model or pipeline that should be deployed on edge devices like smartphones.
