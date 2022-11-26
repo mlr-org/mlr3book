@@ -3,6 +3,7 @@ all: install serve
 .PHONY : help
 help :
 	@echo "install : Install mlr3book and dependencies."
+	@echo "bookinstall : Install mlr3book without dependencies."
 	@echo "serve   : Start a http server to serve the book."
 	@echo "pdf     : Render book as pdf."
 	@echo "html    : Render book as html."
@@ -15,6 +16,10 @@ install:
 	        -e 'devtools::install_dev_deps(upgrade = "always")' \
 			-e 'devtools::update_packages(upgrade = "always")' \
 	        -e 'devtools::document()' \
+			-e 'devtools::install()'
+
+bookinstall:
+	Rscript -e 'devtools::document()' \
 			-e 'devtools::install()'
 
 serve:
@@ -39,4 +44,3 @@ names:
 bibtex:
 	biber --tool --output-align --output-indent=2 --output-fieldcase=lower book/book.bib -O book/book.bib
 	rm book/book.bib.blg
-
