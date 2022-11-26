@@ -142,6 +142,28 @@ ru_pkg = function(pkg, format = "markdown") {
   )
 }
 
+toproper = function(str) {
+  str = strsplit(str, " ", TRUE)[[1]]
+  paste0(toupper(substr(str, 1, 1)), tolower(substr(str, 2, 100)), collapse = " ")
+}
+
+#' @title Add term to index and margin
+#' @param main Text to show in book
+#' @param index Text to show in index
+#' @param margin Text to show in margin
+#' @export
+define = function(main, margin = toproper(main)) {
+  sprintf("\\index{%s}%s[%s]{.aside}", toproper(main), main, margin)
+}
+
+#' @title Add term to index
+#' @param main Text to show in book
+#' @export
+index = function(main) {
+  sprintf("\\index{%s}%s", toproper(main), main)
+}
+
+
 #' @name paradox
 #' @title Helper mlr links
 #' @export
