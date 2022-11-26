@@ -29,9 +29,11 @@ Building a neural network is sometimes referred to as an 'art' as there are so m
 So in this chapter, we will demonstrate how to make this into more of a science.
 
 The goal of hyperparameter optimization (HPO) (@sec-model-tuning) or model tuning is to find the optimal configuration of hyperparameters of an ML algorithm for a given task.
-There is no closed-form mathematical representation (nor analytic gradient information) for model agnostic HPO, instead we follow a numerical black-box optimization: an ML algorithm is configured with values chosen for one or more hyperparameters, and this algorithm is then evaluated (optimally with a robust resampling method) and its performance measured. In practice multiple configurations may be tried and tested and we may think of finding the optimal configuration in the same way as selecting a model from a benchmark experiment, where in this case each model uses the same underlying algorithm but with different hyperparameter configurations. For example we could naively tune the number of trees in a random forest using basic mlr3 code:
+There is no closed-form mathematical representation (nor analytic gradient information) for model agnostic HPO, instead we follow a numerical black-box optimization: an ML algorithm is configured with values chosen for one or more hyperparameters, this algorithm is then evaluated (optimally with a robust resampling method) and its performance measured, this is repeated with multiple configurations and the configuration with the best performance is selected. We could think of finding the optimal configuration in the same way as selecting a model from a benchmark experiment, where in this case each model uses the same underlying algorithm but with different hyperparameter configurations. For example we could naively tune the number of trees in a random forest using basic mlr3 code:
 
 ```{r}
+#| fig-cap: In this code example we benchmark three random forest models with 1, 10, and 100 trees respectively, using 3-fold resampling, classification error loss, and tested on the simplified penguins dataset. The plot shows that the models with 10 and 100 trees are better performing across all three folds and 100 trees may be better than 10.
+#| fig-alt: Boxplots for each of the three configurations showing classification error over the three folds. Image shows worst performance in model with 1 trees and similar performance with 10 and 100 trees.
 autoplot(benchmark(benchmark_grid(
   tsk("penguins_simple"),
   c(lrn("classif.ranger", num.trees = 1, id = "1 tree"),
@@ -41,10 +43,10 @@ autoplot(benchmark(benchmark_grid(
 )))
 ```
 
-However, human trial-and-error (which is essentially what we are doing above), is time-consuming, often biased, error-prone, and computationally irreproducible.
+Human trial-and-error (which is essentially what we are doing above), is time-consuming, often biased, error-prone, and computationally irreproducible.
 Instead, many sophisticated HPO methods (@sec-tuner) (or 'tuners') have been developed over the last few decades for robust and efficient HPO.
 Most HPO methods are iterative and propose different configurations until some termination criterion is met, at which point the optimal configuration is then returned (@fig-optimization-loop).
-Popular examples are given by algorithms based on evolutionary algorithms or Bayesian optimization methods.
+Popular, modern examples are given by algorithms based on evolutionary algorithms or Bayesian optimization methods.
 Recent HPO methods often also make use of evaluating a configuration at multiple so-called fidelity levels, e.g., a neural network can be trained for an increasing number of epochs, gradient boosting can be performed for an increasing number of boosting steps and training data can always be subsampled to only include a smaller fraction of all available data.
 The general idea of multi-fidelity HPO methods is that the performance of a model obtained by using computationally cheap lower fidelity evaluations (few numbers of epochs or boosting steps, only using a small sample of all available data for training) is predictive of the performance of the model obtained using computationally expensive higher fidelity evaluations and this concept can be leveraged to make HPO more efficient (e.g., only continuing to evaluate those configurations on higher fidelities that appear to be promising).
 Another interesting direction of HPO is to optimize multiple metrics (@sec-multi-metrics-tuning) simultaneously, e.g., minimizing the generalization error along with the size of the model.
@@ -53,7 +55,8 @@ For more details on HPO in general, the reader is referred to @hpo_practical and
 
 ```{mermaid optimization-002}
 %%| label: fig-optimization-loop
-%%| fig-cap: Hyperparameter Optimization Loop.
+%%| fig-cap: Representation of hyperparameter optimization. Shows the iterative process selecting and evaluating configurations until termination criteria is reached.
+%%| alt-text: Flowchart representing hyperparameter optimization. Diagram shows inputs 'Algorithm' and 'Search Space' passing into 'Set new configuration from search space' which passes into 'Resample, Evaluate, Store results, Update tuner', which next feeds into 'Termination criteria reached?', which either shows an arrow with text saying 'No' pointing back to 'Set new configuration from search space', or an arrow with text saying 'Yes' pointing to the final node 'Return optimal configuration'.
 %%{init: { 'flowchart': { 'curve': 'basis', 'rankSpacing': 30}}}%%
 flowchart TB
     alg[/Algorithm/]
@@ -73,14 +76,13 @@ flowchart TB
 `r mlr3tuning` is the hyperparameter optimization package of the mlr3 ecosystem.
 At the heart of the package are the R6 classes
 
-* `r ref("TuningInstanceSingleCrit")`, `r ref("TuningInstanceMultiCrit")` to describe the tuning problem and store the results, and
-* `r ref("Tuner")` as the base class for implementations of optimization algorithms.
+* `r ref("TuningInstanceSingleCrit")` and `r ref("TuningInstanceMultiCrit")`, which are used to describe the tuning problem and store the results; and
+* `r ref("Tuner")` which is used to get and set optimization algorithms.
 
-There are two options for constructing a tuning instance (a) manually (@sec-tuning-instance) with the `r ref("ti()")` function or (b) automated (@sec-simplified-tuning) with the `r ref("tune()")` function.
-We cover the manual approach here first because it gives you a better understanding of mlr3tuning.
+A tuning instance can be constructed manually (@sec-tuning-instance) with the `r ref("ti()")` function or automated (@sec-simplified-tuning) with the `r ref("tune()")` function.
+We cover the manual approach first as this allows finer control of tuning and a more nuanced discussion about how `r mlr3tuning` functions.
 
-We will examine the optimization of a support vector machine (SVM) on the `r ref("mlr_tasks_sonar", text = "Sonar")` data set as an introductory example here.
-We start by introducing all the objects that describe the tuning problem.
+Throughout this section we will look at optimizing a support vector machine (SVM) on the `r ref("mlr_tasks_sonar", text = "Sonar")` data set as a running example.
 
 ### Learner and Search Space {#sec-learner-search-space}
 
@@ -90,23 +92,17 @@ We apply a support vector machine with a radial basis function from the `r ref_p
 learner = lrn("classif.svm", type = "C-classification", kernel = "radial")
 ```
 
-The learner stores all information about its hyperparameters in the slot `$param_set`.
-Not all parameters are tunable.
-Information on what they do can be found in `r ref("e1071::svm", text = "the documentation of the learner")`.
+Learner hyperparameter information is stored in the `$param_set` field, including parameter name, class (e.g., discrete or numeric), levels it can be tuned over, tuning limits, and more.
 
 ```{r optimization-004}
 as.data.table(learner$param_set)[, list(id, class, lower, upper, nlevels)]
 ```
 
-We have to choose a subset of the hyperparameters we want to tune.
-This is often referred to as the search space or tuning space.
-Here, we opt to tune two hyperparameters:
+Note that `$param_set` also displays non-tunable parameters. Detailed information about parameters can be found in the help pages of the underlying implementation, for example `r ref("e1071::svm")`.
 
-* The regularization hyperparameter `cost`
-* The `gamma` hyperparameter
+Given infinite resources, we could tune every single hyperparameter, but in reality that's not possible so instead only a subset of hyperparameter can be tuned. This subset is referred to as the 'search space' or 'tuning space'. In this example we will tune the regularization and influence hyperparameters, `cost` and `gamma`.
 
-The search space defines the range over which the hyperparameter should be tuned.
-We use the `r ref("to_tune()")` function to set the lower and upper bounds.
+For numeric hyperparameters (we will explore others later) one must specify the bounds to tune over. We do this by constructing a learner and using `r ref("to_tune()")` to set the lower and upper limits for parameters we want to tune. This function allows us to construct a learner in the usual way but to leave the hyperparameters of interest to be unspecified within a set range. This is best demonstrated by example:
 
 ```{r optimization-005}
 learner = lrn("classif.svm",
@@ -115,17 +111,23 @@ learner = lrn("classif.svm",
   type  = "C-classification",
   kernel = "radial"
 )
+learner
 ```
 
-The `logscale` option indicates that the hyperparameters are tuned on the logarithmic scale.
-The optimization algorithm proposes hyperparameter values that are transformed with the exponential function before they are passed to the learner.
-For example, the `cost` parameter is bounded between `1e-5` and `1e5`.
-The optimization algorithm searches between `log(1e-5)` and `log(1e-5)` but the learner gets the transformed values between `1e-5` and `1e5`.
-Using the log transformation emphasizes smaller `cost` values but also creates large values.
-@sec-advanced-search-spaces (Advanced Search Spaces) describes the construction of more complex search spaces.
+Here we have constructed a classification SVM by setting the type to "C-classification", the kernel to "radial", and not fully specifying the `cost` and `gamma` hyperparameters but instead indicating that we will tune these parameters.
 
-The bounds are usually set based on experience.
-@sec-tuning-spaces (Tuning Spaces) introduces the `r mlr3tuningspaces` extension package which is a collection of search spaces from scientific articles.
+Note the use of `logscale = TRUE`, which means the optimization algorithm searches in [log(1e-5), log(1e5)] but transforms the selected configuration with `exp()` before passing to the learner.
+
+{{< include _complex.qmd >}}
+Using the log transformation emphasizes smaller values but can also result in large values. The code below demonstrates this more clearly. The summaries show how the algorithm searches within a narrow range but exponentiating then results in the majority of points being reltively small but a few being very large.
+
+```{r optimization-005gen}
+sim <- runif(1000, log(1e-5), log(1e5))
+summary(sim)
+summary(exp(sim))
+```
+
+Search spaces are usually chosen by experience. In some cases these can be quite complex, @sec-paradox describes how to construct these. @sec-tuning-spaces introduces the `r mlr3tuningspaces` extension package which allows loading of search spaces that have been established in published scientific articles.
 
 ### Terminator {#sec-terminator}
 
