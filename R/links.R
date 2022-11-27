@@ -163,6 +163,18 @@ index = function(main) {
   sprintf("\\index{%s}%s", toproper(main), main)
 }
 
+#' @title Create markdown and print-friendly link
+#'
+#' @description
+#' Creates markdown link and footnote with full link
+#'
+#' @param url URL to link to
+#' @param text Text to display in main text
+#'
+#' @export
+link = function(url, text = url) {
+  sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
+}
 
 #' @name paradox
 #' @title Helper mlr links
