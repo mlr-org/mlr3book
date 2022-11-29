@@ -339,7 +339,7 @@ svm_tuned$model
 
 {{< include _complex.qmd >}}
 
-A common mistake when tuning is to report the performance estimated on the resampling sets on which the tuning was performed (`instance$result$classif.ce`) as the model's performance. However doing so would lead to bias and therefore nested resampling is required (@sec-nested-resampling-unbiased-performance). Therefore when tuning as above ensure that you do not make any statements about model performance without testing the model on more unseen data. We will come back to this in more detail in @sec-autotuner.
+A common mistake when tuning is to report the performance estimated on the resampling sets on which the tuning was performed (`instance$result$classif.ce`) as the model's performance. However doing so would lead to bias and therefore nested resampling is required (@sec-nested-resampling). Therefore when tuning as above ensure that you do not make any statements about model performance without testing the model on more unseen data. We will come back to this in more detail in @sec-autotuner.
 
 ### Encapsulation and Fallback Learner {#sec-encapsulation-fallback}
 
@@ -514,53 +514,13 @@ ggplot(mapping = aes(x = selected_features, y = classif.ce)) +
   mlr3viz::theme_mlr3()
 ```
 
-## Nested Resampling for Unbiased Performance Estimation {#sec-nested-resampling-unbiased-performance}
+## Automated Tuning with `AutoTuner` {#sec-autotuner}
 
-Hyperparameter optimisation generally requires an additional layer or resampling to prevent bias in tuning.
-As an example, consider an HPO run, on which basis we can select a configuration that results in a model that performs best with respect to a performance metric.
-If the same data is used for the configuration selection step and the evaluation of the resulting model itself, the actual performance estimate of the model might be severely biased [@Simon2007].
-One reason for this bias is that the repeated evaluation of the model on the test data could leak information about its structure into the model, resulting in over-optimistic performance estimation.
+One of the most powerful classes in mlr3 is the `r ref("AutoTuner")`.
+The `r ref("AutoTuner")` wraps a learner and augments it with an automatic tuning process for a given set of hyperparameters -- this allows transparent tuning of any learner, without the need to extract information on the best hyperparameter settings at the end.
+As the `r ref("AutoTuner")` itself inherits from the `r ref("Learner")` base class, it can be used like any other learner!
 
-`r define("Nested resampling")` separates these model configuration steps from the process of estimating the performance of the model.
-
-Therefore, to ensure unbiased performance estimation, another resampling step is needed, i.e., the performance is to be estimated in an outer resampling loop.
-For more details and a formal introduction to nested resampling the reader is refered to @hpo_practical.
-Keep in mind that nested resampling is a statistical procedure to estimate the predictive performance of the model trained on the full dataset.
-Nested resampling is not a procedure to select optimal hyperparameters.
-The resampling produces many hyperparameter configurations which should not be used to construct a final model [@Simon2007].
-This means that nested resampling is an additional step after fitting a final model (@sec-final-model).
-
-```{r optimization-037}
-#| label: fig-nested-resampling
-#| fig-cap: Nested Resampling.
-#| echo: false
-
-knitr::include_graphics("images/nested_resampling.png")
-```
-
-The graphic above illustrates nested resampling for hyperparameter tuning with 3-fold cross-validation in the outer resampling and 4-fold cross-validation in the inner resampling.
-
-The nested resampling process:
-
-1. Uses a 3-fold cross-validation to get different testing and training data sets (outer resampling).
-1. Within the training data uses a 4-fold cross-validation to get different inner testing and training data sets (inner resampling).
-1. Tunes the hyperparameters using the inner data splits.
-1. Fits the learner on the outer training data set using the tuned hyperparameter configuration obtained with the inner resampling.
-1. Evaluates the performance of the learner on the outer testing data.
-1. 2-5 is repeated for each of the three folds (outer resampling).
-1. The three performance values are aggregated for an unbiased performance estimate.
-
-See also [this article](https://machinelearningmastery.com/k-fold-cross-validation/) for more explanations.
-
-### Automating the Tuning {#sec-autotuner}
-
-Before we can start with nested resampling, we need to learn about the `r ref("AutoTuner")`.
-We can automate the tuning process in `r mlr3` so that learners are tuned transparently, without the need to extract information on the best hyperparameter settings at the end.
-The `r ref("AutoTuner")` wraps a learner and augments it with an automatic tuning process for a given set of hyperparameters.
-Because the `r ref("AutoTuner")` itself inherits from the `r ref("Learner")` base class, it can be used like any other learner.
-In keeping with our example above, we create a classification learner that tunes itself automatically.
-This SVM learner tunes the parameters `cost` and `gamma` using an inner resampling (holdout).
-We create a terminator which allows 10 evaluations, and use a simple random search as the tuning algorithm:
+Let us see this in practice. We will run the exact same example as above but this time using the `r ref("AutoTuner")` for automated tuning:
 
 ```{r optimization-038}
 learner = lrn("classif.svm",
@@ -574,29 +534,84 @@ at = auto_tuner(
   method = tnr("grid_search", resolution = 5, batch_size = 5),
   learner = learner,
   resampling = rsmp("cv", folds = 3),
-  measure = msr("classif.ce"),
-  term_evals = 20,
+  measure = msr("classif.ce")
 )
+
 at
 ```
 
-We can now use the learner like any other learner, calling the `$train()` and `$predict()` methods. The difference to a normal learner is that `$train()` runs the tuning, which will take longer than a normal training process.
+We can now use this like any other learner, calling the `$train()` and `$predict()` methods. The key difference to a normal learner, is that calling `$train()` also tunes the model.
 
 ```{r optimization-039}
-at$train(tsk("sonar"))
+task = tsk("sonar")
+split = partition(task)
+at$train(task, row_ids = split$train)
+at$predict(task, row_ids = split$test)$score()
 ```
 
-We can also pass it to `r ref("resample()")` and `r ref("benchmark()")`, just like any other learner.
-This would result in a nested resampling (@sec-nested-resampling) and is explained in the next section.
+We could also pass the `r ref("AutoTuner")` to `r ref("resample()")` and `r ref("benchmark()")`, which would result in a nested resampling (@sec-nested-resampling), discussed next.
 
-### Nested Resampling {#sec-nested-resampling}
+## Nested Resampling {#sec-nested-resampling}
 
-The previous sections examined the optimization of a simple classification tree on the `r ref("mlr_tasks_sonar", text = "Sonar")` data set.
-We continue the example and estimate the predictive performance of the model with nested resampling.
+Hyperparameter optimisation generally requires an additional layer or resampling to prevent bias in tuning. If the same data is used for determining the optimal configuration and the evaluation of the resulting model itself, the actual performance estimate of the model might be severely biased [@Simon2007].
+This is analogous to `r index("optimism of the training error")` described in [@james_introduction_2014], which occurs when training error is taken as an estimate of out-of-sample performance.
+This bias is represented in @fig-bad-tuning which shows an algorithm being tuned on data that has been split intro training and testing data, and then the same data is used to estimate the model performance after selecting the best configuration after HPO.
 
-We use a 4-fold cross-validation in the inner resampling loop.
-The `r ref("AutoTuner")` executes the hyperparameter tuning and is stopped after 5 evaluations.
-The hyperparameter configurations are proposed by random search.
+```{mermaid wrong-tuning}
+%%| label: fig-bad-tuning
+%%| fig-cap: Illustration of biased tuning. An algorithm is tuned by training on the `Train` dataset and then the optimal configuration is selected by evaluation on the `Test` data. The model's performance is then evaluated with the optimal configuration on the same data.
+%%| alt-text: Flowchart representing biased tuning. Diagram shows input 'Search Space' passed into 'Algorithm' which then has a black arrow to 'Train' then a black arrow to 'Test' then a black arrow to 'Optimal configuration'. This has a red arrow back to 'Algorithm' then to 'Train' then to 'Test' then to 'Performance'. The diagram clearly shows reuse of the same training and testing data.
+%%{init: { 'flowchart': {'rankSpacing': 25}}}%%
+flowchart LR
+    search[(Search Space)]
+    opt[(Optimal<br>configuration)]
+    train[(Train)]
+    test[(Test)]
+    alg[/Algorithm/]
+    search --> alg
+    alg --> train
+    alg --> train
+    train --> test
+    train --> test
+    test --> opt
+    test --> perf(Performance)
+    opt --> alg
+
+    linkStyle 1,3,6,7 stroke-width:2px, stroke:red;
+```
+
+`r define("Nested resampling")` separates model optimisation from the process of estimating the performance of the model by adding an additional layer of resampling, i.e., whilst model performance is estimated using a resampling method in the 'usual way', tuning is then performed by resampling the resampled data (@fig-nested-resampling).
+For more details and a formal introduction to nested resampling the reader is refered to @hpo_practical.
+
+A common confusion is how and when to use nested resampling. In the rest of this section we will answer the 'how' question but first the 'when'.
+A common mistake is to confuse nested resampling for model evaluation and comparison, with tuning for model deployment.
+To put it differently, nested resampling is a statistical procedure to estimate the predictive performance of the model trained on the full dataset, it is *not* a procedure to select optimal hyperparameters.
+Nested resampling produces many hyperparameter configurations which should not be used to construct a final model [@Simon2007].
+
+```{r optimization-037}
+#| label: fig-nested-resampling
+#| fig-cap: An illustration of nested resampling. The green blocks represent 3-fold coss-validation for the outer resampling for model evaluation and the blue and gray blocks represent 4-fold cross-validation for the innner resampling for HPO.
+#| fig-alt: Image shows three rows of blocks in light and dark green representing three-fold cross-validation for the outer resampling. Below the dark green blocks are four further rows of blue and gray blocks representing four-fold cros-validation for the inner resampling.
+#| echo: false
+
+knitr::include_graphics("images/nested_resampling.png")
+```
+
+In words this process runs as follows:
+
+1. `r index("Outer resampling")` -- Instantiate 3-fold cross-validation to create different testing and training data sets.
+1. `r index("Inner resampling")` -- Within the training data instantiate 4-fold cross-validation to create different inner testing and training data sets.
+1. HPO -- Tune the hyperparameters using the inner data splits (blue and gray blocks).
+1. Training -- Fit the learner on the outer training data set using the optimal hyperparameter configuration obtained from the inner resampling (dark green blocks).
+1. Evaluation -- Evaluate the performance of the learner on the outer testing data (light green blocks).
+1. Cross-validation -- Repeat (2)-(5) for each of the three folds.
+1. Aggregation -- Take the sample mean of the three performance values for an unbiased performance estimate.
+
+That is enough theory for now, let us take a look at how this works in mlr3.
+
+### Nested Resampling with `AutoTuner`
+
+Nested resampling in mlr3 becomes quite simple with the `AutoTuner` (@sec-autotuner). We simply specify the inner-resampling and tuning setup with the `AutoTuner` and then pass this to `r ref("resample()")` or `r ref("benchmark()")`. Continuing with our previous example we will use the auto-tuner to resample a support vector classifier with 3-fold cross-validation in the outer-resampling and 4-fold cross-validation in the inner-resampling.
 
 ```{r optimization-040}
 learner = lrn("classif.svm",
@@ -613,68 +628,56 @@ at = auto_tuner(
   measure = msr("classif.ce"),
   term_evals = 20,
 )
-```
 
-A 3-fold cross-validation is used in the outer resampling loop.
-On each of the three outer train sets, hyperparameter tuning is done and we receive three optimized hyperparameter configurations.
-To execute the nested resampling, we pass the `r ref("AutoTuner")` to the `r ref("resample()")` function.
-We have to set `store_models = TRUE` because we need the `r ref("AutoTuner")` models to investigate the inner tuning.
-
-```{r optimization-041}
 task = tsk("sonar")
 outer_resampling = rsmp("cv", folds = 3)
 
 rr = resample(task, at, outer_resampling, store_models = TRUE)
+
+rr
 ```
 
-You can freely combine different inner and outer resampling strategies.
-Nested resampling is not restricted to hyperparameter tuning.
-You can swap the `r ref("AutoTuner")` for an `r ref("AutoFSelector")` and estimate the performance of a model which is fitted on an optimized feature subset.
+Note we set `store_models = TRUE` because so that the `r ref("AutoTuner")` models to investigate the inner tuning. In this example we utilised the same resampling strategy (K-fold cross-validation) but the mlr3 infrastructure is not limited to this, you can freely combine different inner and outer resampling strategies as you choose. You can also mix-and-match parallelisation methods for controlling the process (@sec-nested-resampling-parallelization).
 
-With the created `r ref("ResampleResult")` we can now inspect the executed resampling iterations more closely.
-See the section on resampling (@sec-resampling) for more detailed information about `r ref("ResampleResult")` objects.
+There are some specialist functions for nested resampling available in addition to the methods described in @sec-resampling.
 
-The `extract_inner_tuning_results()` function prints the three optimized hyperparameter configurations and the corresponding performance estimates on the inner resampling.
-We observe a trend toward large `cost` and small `gamma` values.
-Keep in mind that these values should not be used to fit a final model.
-The selected hyperparameters might differ greatly between the resampling iterations.
-On the one hand, this could be due to the optimization algorithm used.
-For simple algorithms like random search, we don't expect stable hyperparameters but more advanced methods like irace converge to an optimal hyperparameter configuration.
-On the other hand, small data sets and a low number of resampling iterations might introduce too much randomness for stable hyperparameters.
+The `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` functions return the optimal configurations (across all outer folds) and full tuning archives respectively.
 
 ```{r optimization-042}
-extract_inner_tuning_results(rr)[, list(iteration, cost, gamma, classif.ce)]
+extract_inner_tuning_results(rr)[,
+  list(iteration, cost, gamma, classif.ce)]
+head(extract_inner_tuning_archives(rr)[,
+  list(iteration, cost, gamma, classif.ce)])
 ```
 
-Now we want to compare the predictive performances estimated on the outer resampling to the inner resampling.
-Significantly lower predictive performances on the outer resampling indicate that the models with the optimized hyperparameters overfit the data.
+From the optimal results we observe a trend toward larger `cost` and smaller `gamma` values.
+However, as we discussed earlier, these values should not be used to fit a final model as the selected hyperparameters might differ greatly between the resampling iterations.
+On the one hand, this could be due to the optimization algorithm used, for example, with simple algorithms like random search, we do not expect stability of hyperparameters. On the other hand, more advanced methods like irace converge to an optimal hyperparameter configuration.
+Another reason for instability in hyperparameters could be due to small data sets and/or a low number of resampling iterations (i.e., the usual small data high variance problem).
+
+### Performance comparison
+
+Finally we will compare the predictive performances estimated on the outer resampling to the inner resampling to gain an understanding of model overfitting and general performance.
 
 ```{r optimization-043}
-rr$score()[, list(iteration, classif.ce)]
+extract_inner_tuning_results(rr)[,
+  list(iteration, cost, gamma, classif.ce)]
+
+rr$score()[,
+  list(iteration, classif.ce)]
 ```
 
-We see a slightly over-optimistic performance estimation on the inner resampling.
+Significantly lower predictive performances on the outer resampling indicate that the models with the optimized hyperparameters overfit the data.
 
-If we want to examine the results even more in detail, we can also display the inner archives.
-
-```{r optimization-044}
-head(extract_inner_tuning_archives(rr)[, list(iteration, cost, gamma, classif.ce)])
-```
-
-The aggregated performance of all outer resampling iterations is essentially the unbiased performance of the model with optimal hyperparameters found by grid search.
-This classification error should be reported as the performance of the final model.
-Note that the term *unbiased* only refers to the statistical procedure of the performance estimation.
+It is therefore important to ensure that the performance of a tuned model is *always* reported as the aggregated performance of all outer resampling iterations, which is an unbiased estimate of future model performance.
+Note here we use the term *unbiased* to refer only to the statistical procedure of the performance estimation.
 The underlying prediction of the model could still be biased e.g. due to a bias in the data set.
-In this case, the performance estimate of the model would be also biased.
 
 ```{r optimization-045}
 rr$aggregate()
 ```
 
-Note that nested resampling is computationally expensive.
-For this reason, we use a relatively small number of hyperparameter configurations and a low number of resampling iterations in this example.
-In practice, you normally have to increase both.
-As this is computationally intensive you might want to have a look at the section on parallelization (@sec-parallelization).
+As a final note, nested resampling is computationally expensive, as a simple example using five outer folds and three inner folds with a grid search of resolution 5 used to tune 2 parameters, results in 5*3*5*5 = 375 iterations of model training/testing. In practice you may often see closer to three folds used in inner resampling or even holdout, or if you have the resources then we recommend parallelization (@sec-parallelization).
 
 ## Conclusion
 

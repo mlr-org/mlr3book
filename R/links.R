@@ -55,8 +55,8 @@ ref = function(topic, text = topic, format = "markdown") {
   }
 
   switch(format,
-    "markdown" = sprintf("[`%s`](%s)", text, url),
-    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
+    "markdown" = sprintf("[`%s::%s`](%s)", pkg, text, url),
+    "html" = sprintf("<a href=\"%s\">%s::%s</a>", url, pkg, text)
   )
 }
 
@@ -100,7 +100,7 @@ cran_pkg = function(pkg, format = "markdown") {
   }
   url = sprintf("https://cran.r-project.org/package=%s", pkg)
   switch(format,
-    "markdown" = sprintf("[%s](%s)", pkg, url),
+    "markdown" = sprintf("[`%s`](%s)", pkg, url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
   )
 }
@@ -112,7 +112,7 @@ mlr_pkg = function(pkg, format = "markdown") {
 
   url = sprintf("https://%1$s.mlr-org.com", pkg)
   switch(format,
-    "markdown" = sprintf("[%s](%s)", pkg, url),
+    "markdown" = sprintf("[`%s`](%s)", pkg, url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
   )
 }
@@ -125,7 +125,7 @@ gh_pkg = function(pkg, format = "markdown") {
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://github.com/%s", pkg)
   switch(format,
-    "markdown" = sprintf("[%s](%s)", parts[2L], url),
+    "markdown" = sprintf("[`%s`](%s)", parts[2L], url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
   )
 }
@@ -137,7 +137,7 @@ ru_pkg = function(pkg, format = "markdown") {
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://%s.r-universe.dev/ui#package:%s", parts[1L], parts[2L])
   switch(format,
-    "markdown" = sprintf("[%s](%s)", parts[2L], url),
+    "markdown" = sprintf("[`%s`](%s)", parts[2L], url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
   )
 }
