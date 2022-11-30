@@ -17,15 +17,14 @@ update_db = function() {
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = topic, format = "markdown") {
+ref = function(topic, text = NULL, format = "markdown") {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
-  checkmate::assert_string(text, min.chars = 1L)
+  checkmate::assert_string(text, min.chars = 1L, null.ok = TRUE)
   checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
-  text = trimws(text)
 
   if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
@@ -54,9 +53,15 @@ ref = function(topic, text = topic, format = "markdown") {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
+  text = if (is.null(text)) {
+    paste0(pkg, "::", topic)
+  } else {
+    trimws(text)
+  }
+
   switch(format,
-    "markdown" = sprintf("[`%s::%s`](%s)", pkg, text, url),
-    "html" = sprintf("<a href=\"%s\">%s::%s</a>", url, pkg, text)
+    "markdown" = sprintf("[`%s`](%s)", text, url),
+    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
   )
 }
 
