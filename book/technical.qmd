@@ -15,10 +15,10 @@ This includes the following topics:
 
 Parallelization refers to running multiple jobs in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 This process allows for significant savings in computing power.
-We distinguish between *implicit parallelism* and *explicit parallelism*.
+We distinguish between [*implicit parallelism*](#sec-implicit) and [*explicit parallelism*](#sec-explicit).
 For the former, no special directives are required to enable the parallelization, everything works fully automatically.
 For the later, parallelization has to be manually configured.
-On the one hand, this gives you full control over the execution, but on the other hand this poses a greater obstacle for non-experts.
+On the one hand, this gives you full control over the execution, but on the other hand, this poses a greater obstacle for non-experts.
 
 :::{.callout-note}
 We don't cover parallelization on GPUs here.
@@ -28,7 +28,7 @@ Instead, some learning procedures can be compiled against CUDA/OpenCL to utilize
 We refer to the respective documentation of the learner's implementation, e.g., [here](https://xgboost.readthedocs.io/en/stable/gpu/index.html) for `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
 :::
 
-### Implicit Parallelization
+### Implicit Parallelization {#sec-implicit}
 
 We talk about implicit parallelization in the context of `mlr3`, if `mlr3` calls external code (i.e., code from foreign CRAN packages which implements a `r ref("Learner")`) that itself runs in parallel.
 Many machine learning algorithms can parallelize their model fit using threading, e.g., the random forest implementation in `r ref("mlr_learners_classif.ranger", text = "ranger")` or the boosting implemented in `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
@@ -43,7 +43,7 @@ I.e., for our example of the decision tree, (1) the $p$ best cutpoints per featu
 
 :::{.callout-warning}
 It does not make practical sense to actually execute in parallel every operation that can be parallelized.
-Starting and terminating workers (i.e., threads) as well as possible communication between workers comes at a price in the form of additionally required runtime and is called (parallelization) overhead.
+Starting and terminating workers (here: threads) as well as possible communication between workers comes at a price in the form of additionally required runtime which is called (parallelization) overhead.
 The overhead must be related to the runtime of the sequential execution.
 If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity and slows down the execution.
 :::
@@ -71,7 +71,7 @@ set_threads(learner)
 
 :::{.callout-caution}
 Automatic detection of the number of CPUs is sometimes flaky, and utilizing all available cores is occasionally counterproductive as overburdening the system often has negative effects on the overall runtime.
-The function which determines the number of CPUs is implemented in `r ref("parallelly::availableCores()")` and comes with reasonable heuristics for many setups.
+The function which determines the number of CPUs for `r mlr3` is implemented in `r ref("parallelly::availableCores()")` and comes with reasonable heuristics for many setups.
 However, there are still some scenarios where it is better to reduce the number of utilized CPUs manually:
 
 * You want to simultaneously work on the same system, e.g., browse the web or watch a video.
@@ -89,7 +89,7 @@ We recommend setting this in your system's `.Rprofile` file, c.f. `r ref("Startu
 :::
 
 
-### Explicit Parallelization
+### Explicit Parallelization {#sec-explicit}
 
 Here, we talk about explicit parallelization if `r mlr3` starts and controls the parallelization itself.
 For this purpose, an additional abstraction layer is used to be able to operate on a unified interface for a broad range of parallel backends: the `r ref_pkg("future")` package.
@@ -170,8 +170,8 @@ resample(
 )
 ```
 
-Here, we have two opportunities to tune: the inner cross validation of the auto tuner with 2 folds, or the outer cross validation of the resampling with 5 folds.
-Lets say that we have a single CPU with four cores available.
+Here, we have two opportunities to tune: the inner cross-validation of the auto tuner with 2 folds, or the outer cross-validation of the resampling with 5 folds.
+Let's say that we have a single CPU with four cores available.
 
 If we opt to parallelize the outer CV, all four cores would be utilized first with the computation of the first 4 resampling iterations.
 The computation of the fifth iteration has to wait, i.e., depending on the parallelization backend and its scheduling strategy,
@@ -181,96 +181,103 @@ The computation of the fifth iteration has to wait, i.e., depending on the paral
 
 :::{.callout-note}
 The former method usually comes with less synchronization overhead and is best suited for short jobs with homogeneous runtimes.
-The later yields better runtimes if the runtimes are heterogeneous, especially if the parallelization overhead is neglectable in comparison with the runtime for the computation.
+The latter yields better runtimes if the runtimes are heterogeneous, especially if the parallelization overhead is neglectable in comparison with the runtime for the computation.
 E.g., for `r ref("parallel::mclapply()")`, the behavior of the scheduler can be controlled with the `mc.preschedule` option.
 For many backends, you cannot control the scheduling.
-However, `r ref_pkg("future")` allows you to first chunk jobs together which combines multiple tasks into blocks which run sequentially on a worker, avoiding the intermediate synchronization steps.
+However, `r ref_pkg("future")` allows you to first chunk jobs together which combines multiple tasks into blocks that run sequentially on a worker, avoiding the intermediate synchronization steps.
 :::
 
-The resulting CPU utilization is visualized in Figure XX/Mermaid.
+The resulting CPU utilization of the nested resampling example on 4 CPUs is visualized in two Figures:
+
+* @fig-parallel-outer as an example for parallelizing the outer 5-fold cross-validation.
+  ```{r, eval = FALSE}
+  # Runs the outer loop in parallel and the inner loop sequentially
+  future::plan(list("multisession", "sequential"))
+  ```
+  We assume that each fit during the inner resampling takes 4 seconds to compute and that there is no other significant overhead.
+  First, each of the four workers starts with the computation of an inner 2-fold cross-validation.
+  As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on CPU1 **after** the first 4 iterations are finished after 8 secs.
+  During the computation of the 5th outer resampling iteration, only CPU1 is utilized, the other 3 CPUs are idling.
+* @fig-parallel-inner as an example for parallelizing the inner 2-fold cross-validation.
+  ```{r technical-006, eval = FALSE}
+  # Runs the outer loop sequentially and the inner loop in parallel
+  future::plan(list("sequential", "multisession"))
+  ```
+  Here, the outer loop runs sequentially and distributes the 2 computations for the inner resampling on 2 CPUs. Meanwhile, CPU3 and CPU4 are idling.
 
 ```{mermaid}
+%%| label: fig-parallel-outer
+%%| fig-cap: CPU utilization while parallelizing the outer resampling of a 2-fold cross-validation nested inside a 5-fold cross-validation on 4 CPUs.
 gantt
     title CPU Utilization
     dateFormat  s
     axisFormat %S
-    section CPU 1
-    Iteration 1-1           :0, 4s
-    Iteration 1-5           :4, 4s
-    Iteration 2-1           :8, 4s
-    Iteration 2-5           :12, 4s
-
-    section CPU 2
-    Iteration 1-2           :0, 4s
-    Idle                    :crit, 4, 4s
-    Iteration 2-2           :8, 4s
-    Idle                    :crit, 12, 4s
-
-    section CPU 3
-    Iteration 1-3           :0, 4s
-    Idle                    :crit, 4, 4s
-    Iteration 2-3           :8, 4s
-    Idle                    :crit, 12, 4s
-
-    section CPU 4
-    Iteration 1-4           :0, 4s
-    Idle                    :crit, 4, 4s
-    Iteration 2-4           :8, 4s
-    Idle                    :crit, 12, 4s
-```
-
-```{mermaid}
-gantt
-    title CPU Utilization
-    dateFormat  s
-    axisFormat %S
-    section CPU 1
+    section CPU1
     Iteration 1-1           :0, 4s
     Iteration 1-2           :4, 4s
-    Iteration 1-3           :8, 4s
-    Iteration 1-4           :12, 4s
-    Iteration 1-5           :16, 4s
+    Iteration 5-1           :8, 4s
+    Iteration 5-2           :12, 4s
 
-    section CPU 2
+    section CPU2
     Iteration 2-1           :0, 4s
     Iteration 2-2           :4, 4s
-    Iteration 2-3           :8, 4s
-    Iteration 2-4           :12, 4s
-    Iteration 2-5           :16, 4s
+    Idle                    :crit, 8, 8s
 
-    section CPU 3
+    section CPU3
+    Iteration 3-1           :0, 4s
+    Iteration 3-2           :4, 4s
+    Idle                    :crit, 8, 8s
+
+    Iteration 4-1           :0, 4s
+    section CPU4
+    Iteration 4-2           :4, 4s
+    Idle                    :crit, 8, 8s
+```
+
+```{mermaid}
+%%| label: fig-parallel-inner
+%%| fig-cap: CPU utilization while parallelizing the inner resampling of a 2-fold cross-validation nested inside a 5-fold cross-validation on 4 CPUs.
+gantt
+    title CPU Utilization
+    dateFormat  s
+    axisFormat %S
+    section CPU1
+    Iteration 1-1           :0, 4s
+    Iteration 2-1           :4, 4s
+    Iteration 3-1           :8, 4s
+    Iteration 4-1           :12, 4s
+    Iteration 5-1           :16, 4s
+
+    section CPU2
+    Iteration 1-2           :0, 4s
+    Iteration 2-2           :4, 4s
+    Iteration 3-2           :8, 4s
+    Iteration 4-2           :12, 4s
+    Iteration 5-2           :16, 4s
+
+    section CPU3
     Idle                    :crit, 0, 20s
 
-    section CPU 4
+    section CPU4
     Idle                    :crit, 0, 20s
 ```
 
-To optimize the overall runtime, the red boxes which indicate idling cores have to be minimized.
-Apparently there is room for optimization, as three cores have nothing to work on while waiting for the computation of the fifth resampling iteration.
-Note that in this simple example, the scheduling strategy has no influence since the runtimes are identical.
+Both possibilities for parallelization are not exploiting the full potential of the 4 CPUs.
+With parallelization of the outer loop, all results are computed after 16s, in contrast to parallelization of the inner loop where the results are only available after 20s.
 
-Alternatively, you can also opt to parallelize the inner CV with 2 folds, which yields a CPU utilization as displayed in Figure YY/Mermaid.
-The outer loop runs sequentially and starts the parallelization five times on two cores.
-As a result, two of the four available cores are constantly underutilized.
+If possible, the number of iterations can be adapted to the available hardware. There is no law set in stone that you have to do, e.g., 10 folds in cross-validation.
+If you have 4 CPUs and a reasonable variance, 8 iterations are often sufficient, or you do 12 iterations because you get the last two iterations basically for free.
 
-
-We can choose different parallelization backends for the inner and outer resampling loop, respectively.
-We just have to pass a list of `r ref_pkg("future")` backends:
-
-```{r technical-006, eval = FALSE}
-# Runs the outer loop in parallel and the inner loop sequentially
-future::plan(list("multisession", "sequential"))
-# Runs the outer loop sequentially and the inner loop in parallel
-future::plan(list("sequential", "multisession"))
-```
-
+Alternatively, you can also enable parallelization for both loops for nested parallelization, even on different parallelization backends.
 While nesting real parallelization backends is often unintended and causes unnecessary overhead, it is useful in some distributed computing setups.
-It can be achieved with `r ref_pkg("future")` by forcing a fixed number of workers for each loop:
+In this case, the number of workers must be manually tweaked so that the system does not get overburdend:
 
 ```{r technical-007, eval = FALSE}
 # Runs both loops in parallel
-future::plan(list(future::tweak("multisession", workers = 2),
-  future::tweak("multisession", workers = 4)))
+future::plan(list(
+  future::tweak("multisession", workers = 2),
+  future::tweak("multisession", workers = 4)
+))
 ```
 
 This example would run on 8 cores (`= 2 * 4`) on the local machine.

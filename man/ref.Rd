@@ -4,7 +4,7 @@
 \alias{ref}
 \title{Hyperlink to Function Reference}
 \usage{
-ref(topic, text = topic, format = "markdown")
+ref(topic, text = NULL, format = "markdown")
 }
 \arguments{
 \item{topic}{Name of the topic to link against.}
