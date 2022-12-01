@@ -5,6 +5,7 @@ help :
 	@echo "install : Install mlr3book and dependencies."
 	@echo "bookinstall : Install mlr3book without dependencies."
 	@echo "serve   : Start a http server to serve the book."
+	@echo "serverefresh   : Clear cache and start a http server to serve the book."
 	@echo "pdf     : Render book as pdf."
 	@echo "html    : Render book as html."
 	@echo "names   : Re-creates chunk names using mlr3book::name_chunks_mlr3book()."
@@ -24,6 +25,9 @@ bookinstall:
 
 serve:
 	quarto preview book/
+
+serverefresh:
+	quarto preview book/ --cache-refresh
 
 clean:
 	$(RM) -r book/_book book/.quarto book/site_libs;\
