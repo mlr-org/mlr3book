@@ -292,7 +292,7 @@ In the following two sections, these classes will be created manually, to learn 
 
 ### The `FSelectInstance` Classes {#fs-wrapper-optimization}
 
-To create an `r ref("FSelectInstanceSingleCrit")` object, we use the sugar function `r ref("fsi")`, which is short for `FSelectInstanceSingleCrit$new()` or `FSelectInstanceSingleCrit$new()`, depending on the selected measure(s):
+To create an `r ref("FSelectInstanceSingleCrit")` object, we use the sugar function `r ref("fsi")`, which is short for `FSelectInstanceSingleCrit$new()` or `FSelectInstanceMultiCrit$new()`, depending on the selected measure(s):
 
 ```{r feature-selection-015}
 instance = fsi(
@@ -385,95 +385,91 @@ Note that predicting on observations present in the `r ref("Task")`, should be a
 The model has seen these observations already during feature selection and therefore performance evaluation results would be over-optimistic.
 Instead, to get unbiased performance estimates for the current task, [nested resampling](#nested-resampling) is required.
 
-### Filtering with Multiple Performance Measures {#mult-measures-filtering}
+### Optimizing Multiple Performance Measures {#mult-measures-filtering}
 
-When filtering, you might want to use multiple criteria to evaluate the performance of the feature subsets. For example, you might want the subset with the lowest classification error and lowest time to train the model. The full list of performance measures can be found [here](https://mlr3.mlr-org.com/reference/mlr_measures.html).
+You might want to use multiple criteria to evaluate the performance of the feature subsets. For example, you might want to select the subset with the lowest classification error and lowest time to train the model. The full list of performance measures can be found [here](https://mlr3.mlr-org.com/reference/mlr_measures.html).
 
-We will expand the previous example and perform feature selection on the same dataset, `r ref("mlr_tasks_pima", text = "Pima Indian Diabetes")`, however, this time we will use `r ref("FSelectInstanceMultiCrit")` to select the subset of features that has the lowest classification error and the lowest time to train the model.
+We will expand the previous example and perform feature selection on the `r ref("mlr_tasks_penguins", text = "Penguins")` dataset, however, this time we will use `r ref("FSelectInstanceMultiCrit")` to select the subset of features that has the highest classification accuracy and the lowest time to train the model.
 
-The filtering process with multiple criteria is very similar to filtering with a single criterion.
+The feature selection process with multiple criteria is similar to that with a single criterion, except that we select two measures to be optimized:
 
-```{r feature-selection-021, eval=FALSE}
-measures = msrs(c("classif.ce", "time_train"))
-```
-
-Instead of creating a new `r ref("FSelectInstanceSingleCrit")` with a single measure, we create a new `r ref("FSelectInstanceMultiCrit")` with the two measures we are interested in here.
-Otherwise, it is the same as above.
-
-```{r feature-selection-022, eval=FALSE}
-library("mlr3filters")
-
-evals20 = trm("evals", n_evals = 20)
-instance = FSelectInstanceMultiCrit$new(
-task = task,
-learner = learner,
-resampling = hout,
-measures = measures,
-terminator = evals20
+```{r feature-selection-021}
+instance = fsi(
+  task = tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msrs(c("classif.acc", "time_train")),
+  terminator = trm("evals", n_evals = 20)
 )
-instance
 ```
+The function `r ref("fsi")` creates an instance of `FSelectInstanceMultiCrit` if more than one measure is selected.
+We now create an `r ref("FSelector")`, e.g. using random search, and call the `$optimize()` function of the `FSelector` with the `FSelectInstanceMultiCrit` object, to search for the subset of features with the best classification accuracy and time to train the model.
 
-After triggering the filtering, we will have the subset of features with the best classification error and time to train the model.
-
-```{r feature-selection-023, eval=FALSE}
-# reduce logging output
-lgr::get_logger("bbotk")$set_threshold("warn")
-
+```{r feature-selection-022}
+fselector = fs("random_search")
 fselector$optimize(instance)
 ```
 
-```{r feature-selection-024, eval=FALSE}
+As above, the best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance. However, in this simple case, if the fastest subset is not also the best performing subset, the result consists of two subsets: one with the lowest training time and one with the best classification accuracy.
+
+```{r feature-selection-024}
 instance$result_feature_set
 ```
 
-```{r feature-selection-025, eval=FALSE}
+```{r feature-selection-025}
 instance$result_y
 ```
 
+More generally, the result is the pareto-optimal solution, i.e. the best feature subset for each of the criteria that is not dominated by another subset. For the example with classification accuracy and training time, a feature subset that is best in accuracy *and* training time will dominate all other subsets and thus will be the only pareto-optimal solution. If, however, different subsets are best in the two criteria, both subsets are pareto-optimal. 
+
 ### Automating the Feature Selection {#autofselect}
 
-The `r ref("AutoFSelector")` wraps a learner and augments it with an automatic feature selection for a given task.
+The `r ref("AutoFSelector")` class wraps a learner and augments it with an automatic feature selection for a given task.
 Because the `r ref("AutoFSelector")` itself inherits from the `r ref("Learner")` base class, it can be used like any other learner.
-Analogously to the previous subsection, a new classification tree learner is created.
-This classification tree learner automatically starts a feature selection on the given task using an inner resampling (holdout).
-We create a terminator which allows 10 evaluations, and uses a simple random search as feature selection algorithm:
+Analogously to the previous subsection, a new classification tree (`"classif.rpart`) learner is created.
+This classification tree learner is then wrapped in a random search feature selector, which automatically starts a feature selection on the given task using an inner resampling (holdout), as soon as the wrapped learner is trained.
+Here, the function `r ref("auto_fselector")` creates an instance of `AutoFSelector`, i.e. it is short for `AutoFSelector$new()`.
 
-```{r feature-selection-026, eval=FALSE}
+```{r feature-selection-026}
 learner = lrn("classif.rpart")
-terminator = trm("evals", n_evals = 10)
-fselector = fs("random_search")
 
-at = AutoFSelector$new(
+at = auto_fselector(
+  method = fs("random_search"),
   learner = learner,
   resampling = rsmp("holdout"),
-  measure = msr("classif.ce"),
-  terminator = terminator,
-  fselector = fselector
+  measure = msr("classif.acc"),
+  terminator = trm("evals", n_evals = 10)
 )
 at
 ```
 
-We can now use the learner like any other learner, calling the `$train()` and `$predict()` method.
+We can now, as with any other learner, call the `$train()` and `$predict()` method.
 This time however, we pass it to `r ref("benchmark()")` to compare the optimized feature subset to the complete feature set.
 This way, the `r ref("AutoFSelector")` will do its resampling for feature selection on the training set of the respective split of the outer resampling.
 The learner then undertakes predictions using the test set of the outer resampling.
-This yields unbiased performance measures, as the observations in the test set have not been used during feature selection or fitting of the respective learner.
-This is called [nested resampling](#nested-resampling).
+Here, the outer resampling refers to the resampling specified in `benchmark()`, whereas the inner resampling is that specified in `auto_fselector()`.
+This is called [nested resampling](#nested-resampling) and yields unbiased performance measures, as the observations in the test set have not been used during feature selection or fitting of the respective learner.
 
-To compare the optimized feature subset with the complete feature set, we can use `r ref("benchmark()")`:
+In the call to `benchmark()`, we compare our wrapped learner `at` with a normal classification tree `lrn("classif.rpart")`. 
+For that, we create a benchmark grid with the task, the learners and a 3-fold cross validation.  
 
-```{r feature-selection-027, eval=FALSE}
+```{r feature-selection-027}
 grid = benchmark_grid(
-  task = tsk("pima"),
+  task = tsk("penguins"),
   learner = list(at, lrn("classif.rpart")),
   resampling = rsmp("cv", folds = 3)
 )
 
-bmr = benchmark(grid, store_models = TRUE)
-bmr$aggregate(msrs(c("classif.ce", "time_train")))
+bmr = benchmark(grid)
 ```
 
-Note that we do not expect any significant differences since we only evaluated a small fraction of the possible feature subsets.
+Now, we compare those two learners regarding classification accuracy and training time: 
+
+```{r feature-selection-028}
+aggr <- bmr$aggregate(msrs(c("classif.acc", "time_train")))
+as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
+```
+
+Because of the implicit feature selection in classification trees, we do not expect huge performance improvements by the the feature selection in this example. 
 
 ## Conclusion
