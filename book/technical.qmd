@@ -286,16 +286,25 @@ For more background information about parallelization during tuning, see Section
 
 :::{.callout-caution}
 During tuning with `r mlr3tuning`, you can often adjust the **batch size** of the `r ref("Tuner")`, i.e., control how many hyperparameter configurations are evaluated in parallel.
-If you want full parallelization, make sure that the batch size multiplied by the number of (inner) resampling iterations is at least equal to the number of cores or workers.
+If you want full parallelization, make sure that the batch size multiplied by the number of (inner) resampling iterations is at least equal to the number of available workers.
+If you expect homogeneous runtimes, i.e., you are tuning over a single learner or linear pipeline and you have no hyperparameter which is likely to influence the performance, aim for a multiple of the number of workers.
 
-In general, larger batches mean more parallelization, while smaller batches imply a more fine-grained checking of termination criteria.
-We default to a `batch_size` of 1 that ensures that all `r ref("Terminator", text = "Terminators")` work as intended, and you cannot exceed the computational budget.
+In general, larger batches mean more parallelization, while smaller batches imply a more frequent evaluation of termination criteria.
+We default to a `batch_size` of 1 that ensures that all `r ref("Terminator", text = "Terminators")` work as intended and you cannot exceed the computational budget.
 :::
 
 ## Error Handling {#sec-error-handling}
 
-To demonstrate how to properly deal with misbehaving learners, `r mlr3` ships with the learner `r ref("mlr_learners_classif.debug", "classif.debug")` and `r ref("mlr_learners_regr.debug", "regr.debug")`.
-Here, we will concentrate on the former debug learner for classification:
+In ML, it is not uncommon for something to break.
+This is because the algorithms have to process arbitrary data, and not all eventualities can always be handled.
+While we try to identify obvious problems before execution, such as when missing values occur but a learner can't handle them, other problems are far more complex to detect.
+Examples include correlations or collinearity that make model fitting impossible, outliers that lead to numerical problems, or new levels of categorical variables emerging in the predict step.
+The learners behave quite differently when encountering such problems: some models signal a warning during the train step that they failed to fit but return a baseline model while other models stop the execution.
+During prediction, some learners just refuse to predict the response for observations they cannot handle while others predict a missing value.
+How to deal with these problems even in more complex setups like benchmarking or tuning is the topic of this section.
+
+For illustration (and internal testing) of error handling, `r mlr3` ships with the learners `r ref("mlr_learners_classif.debug", "classif.debug")` and `r ref("mlr_learners_regr.debug", "regr.debug")`.
+Here, we will concentrate on the debug learner for classification:
 
 ```{r technical-008}
 task = tsk("penguins")
@@ -306,8 +315,8 @@ print(learner)
 This learner comes with special hyperparameters that let us simulate problems frequently encountered in ML.
 E.g., the debug learner comes with hyperparameters to control
 
-1. what conditions should be signaled (message, warning, error, segfault) with what probability.
-1. during which stage the conditions should be signaled (train or predict).
+1. what conditions should be signaled (message, warning, error, segfault) with what probability,
+1. during which stage the conditions should be signaled (train or predict), and
 1. the ratio of predictions being `NA` (`predict_missing`).
 
 ```{r technical-009}
@@ -322,27 +331,28 @@ learner$train(task)$predict(task)$confusion
 ```
 
 We now set a hyperparameter to let the debug learner signal an error during the train step.
-By default, `r mlr3` does not catch conditions such as warnings or errors raised by third-party code like learners:
+By default, `r mlr3` does not catch conditions such as warnings or errors raised while calling learners:
 
 ```{r technical-011, error = TRUE}
+# set probability to signal an error to 1
 learner$param_set$values = list(error_train = 1)
+
 learner$train(tsk("iris"))
 ```
-If this would be a regular learner, we could now start debugging with `r ref("traceback()")` (or create a [MRE](https://stackoverflow.com/help/minimal-reproducible-example) to file a bug report).
+If this would be a regular learner, we could now start debugging with `r ref("traceback()")` (or create a [MRE](https://stackoverflow.com/help/minimal-reproducible-example) to file a bug report upstream).
 
-However, machine learning algorithms raising errors is not uncommon as algorithms typically cannot process all possible data.
-Thus, we need a mechanism to
+However, as ML algorithms raising errors is not uncommon and we often just need to move on, we need a mechanism to
 
-  1. capture all signaled conditions such as messages, warnings and errors so that we can analyze them post-hoc, and
-  1. a statistically sound way to proceed the calculation and be able to aggregate over partial results.
+  1. capture all signaled conditions such as messages, warnings and errors so that we can analyze them post-hoc (@sec-encapsulation), and
+  1. a statistically sound way to proceed while being able to aggregate over partial results (@sec-fallback).
 
 These two mechanisms are explained in the following subsections.
 
 ### Encapsulation {#sec-encapsulation}
 
-With encapsulation, exceptions do not stop the program flow and all output is logged to the learner (instead of printed to the console).
-Each `r ref("Learner")` has a field `encapsulate` to control how the train or predict steps are executed.
-One way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")` (see the documentation of the `r ref("encapsulate()")` helper function for more details):
+Encapsulation ensures that signaled conditions (such as messages, warnings and errors) are intercepted: all conditions are logged into the learner, and errors do not interrupt the program flow.
+Each `r ref("Learner")` has a field `encapsulate` to control how the train or predict steps are wrapped.
+The easiest way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")` (see the documentation of the `r ref("encapsulate()")` helper function for more details):
 
 ```{r technical-012}
 task = tsk("penguins")
@@ -366,7 +376,8 @@ learner$errors
 ```
 
 Another method for encapsulation is implemented in the `r ref_pkg("callr")` package.
-`r ref_pkg("callr")` spawns a new R process to execute the respective step and thus even guards the current R session against segfaults tearing down the complete R session.
+In contrast to `r ref_pkg("evaluate")`, the computation is taken out in a separate R process.
+This guards the calling session against segfaults which otherwise would tear down the complete R session.
 On the downside, starting new processes comes with comparably more computational overhead.
 
 ```{r technical-014}
@@ -376,34 +387,37 @@ learner$train(task = task)
 learner$errors
 ```
 
-Unfortunately, catching errors is only half the battle.
+With either of these encapsulation methods, we can now catch errors and post-hoc analyse the messages, warnings and error messages.
+Unfortunately, this is only half the battle.
 Without a model, it is not possible to get predictions:
 
 ```{r technical-015, error = TRUE}
 learner$predict(task)
 ```
 
-To handle the missing predictions gracefully during `r ref("resample()")` or `r ref("benchmark()")`, fallback learners are introduced next.
+To handle the missing predictions gracefully during `r ref("resample()")`, `r ref("benchmark()")` or tuning, fallback learners are introduced next.
 
-### Fallback learners
 
-Fallback learners have the purpose of allowing scoring results in cases where a `r ref("Learner")` is misbehaving.
+### Fallback learners {#sec-fallback}
+
+Fallback learners have the purpose of allowing scoring results in cases where a `r ref("Learner")` failed to fit a model, refuses to provide predictions for all observations or predicts missing values.
 
 We will first handle the case that a learner fails to fit a model during training, e.g., if some convergence criterion is not met or the learner ran out of memory.
 There are in general three possibilities to proceed:
 
 1. Ignore missing scores.
-   Although this is arguably the most frequent approach in practice, it is not statistically sound.
+   Although this is arguably the most frequent approach in practice, it is **not** statistically sound.
    For example, consider the case where a researcher wants a specific learner to look better in a benchmark study.
    To do this, the researcher takes an existing learner but introduces a small adaptation: If an internal goodness-of-fit measure is not achieved, an error is thrown.
    In other words, the learner only fits a model if the model can be reasonably well learned on the given training data.
    In comparison with the learning procedure without this adaptation and a good threshold, however, we now compare the mean over only the "easy" splits with the mean over all splits - an unfair advantage.
 2. Penalize failing learners.
    If a score is missing, we can simply impute the worst possible score (as defined by the `r ref("Measure")`) and thereby heavily penalize the learner for failing.
-   However, this often seems too harsh for many problems.
+   However, this often seems too harsh for many problems, and for some measures there is no reasonable value to impute.
 3. Impute a value that corresponds to a (weak) baseline.
-   Instead of imputing with the worst possible score, impute with a reasonable baseline, e.g., by just predicting the majority class or the mean of the training data with a featureless learner.
-   Note that a reasonable baseline value depends on the data in the training split.
+   Instead of imputing with the worst possible score, impute with a reasonable baseline, e.g., by just predicting the majority class or the mean of the response in the training data.
+   Such simple baselines are implemented as featureless learners (`r ref("mlr_learners_classif.featureless")` or `r ref("mlr_learners_regr.featureless")`).
+   Note that a reasonable baseline value is different in different training splits.
    Retrieving these values after a larger benchmark study has been conducted is possible, but tedious.
 
 We strongly recommend option (3): it is statistically sound and very flexible.
