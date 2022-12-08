@@ -14,7 +14,6 @@ help :
 
 install:
 	Rscript --no-init-file -e 'install.packages("renv")' \
-												 -e 'getwd()' \
 												 -e 'renv::activate("book/")' \
 												 -e 'renv::restore("book/", prompt = FALSE)'
 
