@@ -2,31 +2,35 @@ all: install serve
 
 .PHONY : help
 help :
-	@echo "install : Install mlr3book and dependencies."
-	@echo "bookinstall : Install mlr3book without dependencies."
-	@echo "serve   : Start a http server to serve the book."
+	@echo "install 				: Install renv and restore virtual environment."
+	@echo "bookinstall 		: Install mlr3book without dependencies to virtual environment."
+	@echo "serve   				: Start a http server to serve the book."
 	@echo "serverefresh   : Clear cache and start a http server to serve the book."
-	@echo "pdf     : Render book as pdf."
-	@echo "html    : Render book as html."
-	@echo "names   : Re-creates chunk names using mlr3book::name_chunks_mlr3book()."
-	@echo "clean   : Remove auto-generated files."
-	@echo "bibtex  : Reformats the bibtex file."
+	@echo "pdf     				: Render book as pdf."
+	@echo "html    				: Render book as html."
+	@echo "names   				: Re-creates chunk names using mlr3book::name_chunks_mlr3book()."
+	@echo "clean   				: Remove auto-generated files."
+	@echo "bibtex  				: Reformats the bibtex file."
 
 install:
-	Rscript -e 'if (length(find.package("devtools", quiet = TRUE)) == 0) install.packages("devtools")' \
-	        -e 'devtools::install_dev_deps(upgrade = "always")' \
-			-e 'devtools::update_packages(upgrade = "always")' \
-	        -e 'devtools::document()' \
-			-e 'devtools::install()'
+	Rscript --no-init-file -e 'install.packages("renv")' \
+												 -e 'getwd()' \
+												 -e 'renv::activate("book/")' \
+												 -e 'renv::restore("book/", prompt = FALSE)'
+
+restore:
+	Rscript --no-init-file -e 'renv::restore("./book/", prompt = FALSE)'
 
 bookinstall:
-	Rscript -e 'devtools::document()' \
-			-e 'devtools::install()'
+	Rscript --no-init-file -e 'devtools::document()' \
+												 -e 'renv::install(".", project = "./book/")'
 
 serve:
+	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto preview book/
 
 serverefresh:
+	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto preview book/ --cache-refresh
 
 clean:
@@ -37,9 +41,11 @@ clean:
 	find . -type d -name "*_cache" -exec rm -rf {} \;
 
 html:
+	Rscript -e 'renv::restore("./book/", prompt = FALSE)'
 	quarto render book/ --to html
 
 pdf:
+	Rscript -e 'renv::restore("./book/", prompt = FALSE)'
 	quarto render book/ --to pdf
 
 names:
