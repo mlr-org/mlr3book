@@ -26,11 +26,11 @@ bookinstall:
 												 -e 'renv::install(".", project = "./book/")'
 
 serve:
-	Rscript -e 'renv::restore("book/", prompt = FALSE)'
+	Rscript --no-init-file -e 'renv::restore("book/", prompt = FALSE)'
 	quarto preview book/
 
 serverefresh:
-	Rscript -e 'renv::restore("book/", prompt = FALSE)'
+	Rscript --no-init-file -e 'renv::restore("book/", prompt = FALSE)'
 	quarto preview book/ --cache-refresh
 
 clean:
@@ -41,11 +41,11 @@ clean:
 	find . -type d -name "*_cache" -exec rm -rf {} \;
 
 html:
-	Rscript -e 'renv::restore("./book/", prompt = FALSE)'
+	Rscript --no-init-file -e 'renv::restore("./book/", prompt = FALSE)'
 	quarto render book/ --to html
 
 pdf:
-	Rscript -e 'renv::restore("./book/", prompt = FALSE)'
+	Rscript --no-init-file -e 'renv::restore("./book/", prompt = FALSE)'
 	quarto render book/ --to pdf
 
 names:
