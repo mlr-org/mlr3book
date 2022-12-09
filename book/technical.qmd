@@ -2,35 +2,48 @@
 
 {{< include _setup.qmd >}}
 
-This chapter provides an overview of technical details of the `r mlr3` framework.
+This chapter provides an overview of the technical details of the `r mlr3` framework.
 This includes the following topics:
 
-* Parallelization with the `r ref_pkg("future")` framework,
-* how to handle errors and troubleshoot,
-* working with out-of-memory data, e.g., data stored in data bases,
-* working with hyperparameters (define parameter spaces, sample from parameter spaces, apply transformations), and
-* adjust the logger to your needs.
+* Parallelization with the `r ref_pkg("future")` framework (@sec-parallelization),
+* how to handle errors and troubleshoot (@sec-error-handling),
+* working with out-of-memory data, e.g., data stored in data bases (@sec-backends),
+* working with hyperparameters (@sec-paradox), and
+* adjust the logger to your needs (@sec-logging).
 
 ## Parallelization {#sec-parallelization}
 
 Parallelization refers to running multiple jobs in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 This process allows for significant savings in computing power.
+
+In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single machine but multiple cores, [threads](https://en.wikipedia.org/wiki/Thread_(computing)) or [forks](https://en.wikipedia.org/wiki/Fork_(system_call)) are ways to utilize all cores.
+If you have multiple machines, they need a way to communicate and exchange information, e.g. via protocols like network sockets or the [Message Passing Interface (MPI)](https://en.wikipedia.org/wiki/Message_Passing_Interface).
+We don't want to delve too deep into such details here, but want to introduce some terminology:
+
+* We call the parallelization platform together with its implementation for R the **parallelization backend**.
+  As many parallelization backends have a different API, we are using the `r ref_pkg("future")` package as an additional abstraction layer.
+  `r mlr3` just interfaces `r ref_pkg("future")` while the user can control how the code is executed.
+* The R session or process which orchestrates the computational work is called **main** and it starts computational **jobs**.
+* The R sessions, processes, forks or machines which receive the jobs, do the calculation and then send back the result are called **workers**.
+
 We distinguish between [*implicit parallelism*](#sec-implicit) and [*explicit parallelism*](#sec-explicit).
 For the former, no special directives are required to enable the parallelization, everything works fully automatically.
-For the later, parallelization has to be manually configured.
+For the latter, parallelization has to be manually configured.
 On the one hand, this gives you full control over the execution, but on the other hand, this poses a greater obstacle for non-experts.
 
 :::{.callout-note}
 We don't cover parallelization on GPUs here.
 `mlr3` only distributes the fitting of multiple learners, e.g., during resampling, benchmarking, or tuning.
 On this rather abstract level, GPU parallelization doesn't work efficiently.
-Instead, some learning procedures can be compiled against CUDA/OpenCL to utilize the GPU while fitting a single model.
+Some learning procedures can be compiled against CUDA/OpenCL to utilize the GPU while fitting a single model.
 We refer to the respective documentation of the learner's implementation, e.g., [here](https://xgboost.readthedocs.io/en/stable/gpu/index.html) for `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
 :::
 
 ### Implicit Parallelization {#sec-implicit}
 
 We talk about implicit parallelization in the context of `mlr3`, if `mlr3` calls external code (i.e., code from foreign CRAN packages which implements a `r ref("Learner")`) that itself runs in parallel.
+Note that this definition includes GPU acceleration.
+
 Many machine learning algorithms can parallelize their model fit using threading, e.g., the random forest implementation in `r ref("mlr_learners_classif.ranger", text = "ranger")` or the boosting implemented in `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
 During threading, the implementation instructs some sequential parts of the code to be executed independently from the other parts in the same process.
 
@@ -119,7 +132,7 @@ future::plan("multisession")
 # define objects to perform a resampling
 task = tsk("spam")
 learner = lrn("classif.rpart")
-resampling = rsmp("subsampling")
+resampling = rsmp("cv", folds = 3)
 
 time = proc.time()[3]
 resample(task, learner, resampling)
@@ -130,6 +143,32 @@ By default, all CPUs of your machine are used unless you specify the argument `w
 You should see a decrease in the reported elapsed time, but in practice, you cannot expect the runtime to fall linearly as the number of cores increases ([Amdahl's law](https://www.wikiwand.com/en/Amdahl%27s_law)).
 In contrast to threads, the technical overhead for starting workers, communicating objects, sending back results, and shutting down the workers is quite large for the multisession backend.
 Therefore, it is advised to only consider parallelization for resamplings where each iteration runs at least several seconds.
+
+
+@fig-parallel-overview illustrates the parallelization from the above example. From left to right:
+
+1. The main process calls the `resample()` function.
+2. The task is split into 3 folds.
+3. The folds are passed to three workers, each fitting a model on the respective subset of the task and predicting on the left-out observations.
+4. The predictions (and trained models) are communicated back to main process which combines them into a `ResampleResult`.
+
+```{mermaid}
+%%| label: fig-parallel-overview
+%%| fig-cap: Parallelization of a resampling using a 3-fold cross-validation
+graph LR
+    M[fa:fa-server Main]
+    S{"resample()"}
+    C{ResampleResult}
+
+    M --> S
+    S -->|Fold 1| W1[fa:fa-microchip Worker 1]
+    S -->|Fold 2| W2[fa:fa-microchip Worker 2]
+    S -->|Fold 3| W3[fa:fa-microchip Worker 3]
+    W1 -->|Prediction 1| C
+    W2 -->|Prediction 2| C
+    W3 -->|Prediction 3| C
+```
+
 
 :::{.callout-note}
 If you are transitioning from `r ref_pkg("mlr")`, you might be used to selecting different parallelization levels, e.g., for resampling, benchmarking, or tuning.
@@ -446,10 +485,10 @@ prediction = learner$predict(task)
 prediction$score()
 ```
 
-In this this stepwise train-predict procedure, the fallback learner is of limited use.
+In this stepwise train-predict procedure, the fallback learner is of limited use.
 However, it is invaluable for larger benchmark studies.
 
-In the following snippet we compare the previously created debug learner with a simple classification tree.
+In the following snippet, we compare the previously created debug learner with a simple classification tree.
 We re-parametrize the debug learner to fail in roughly 30% of the resampling iterations during the training step:
 
 ```{r technical-018}
@@ -461,16 +500,18 @@ aggr[, .(learner_id, warnings, errors, classif.ce)]
 ```
 
 Even though the debug learner occasionally failed to provide predictions, we still got a statistically sound aggregated performance value which we can compare to the aggregated performance of the classification tree.
-To further investigate the errors, we can also extract the `"ResampleResult")`:
+It is also possible to split the benchmark up into separate `ResampleResult` objects which sometimes helps to get more context.
+E.g., if we only want to have a closer look into the debug learner, we can extract the errors from the corresponding resample results:
+
 
 ```{r technical-019}
 rr = aggr[learner_id == "classif.debug"]$resample_result[[1L]]
 rr$errors
 ```
 
-A similar problem emerges when a learner predicts only a subset of the observations in the test set (and predicts `NA` for others).
+A similar problem to failed model fits emerges when a learner predicts only a subset of the observations in the test set (and predicts `NA` or no value for others).
 A typical case is, e.g., when new and unseen factor levels are encountered in the test data.
-Imagine again that our goal is to benchmark two algorithms using a cross validation on some binary classification task:
+Imagine again that our goal is to benchmark two algorithms using cross-validation on some binary classification task:
 
 * Algorithm A is an ordinary logistic regression.
 * Algorithm B is also an ordinary logistic regression, but with a twist:
@@ -500,23 +541,38 @@ table(p$response, useNA = "always")
 
 Summed up, by combining encapsulation and fallback learners, it is possible to benchmark even quite unreliable or unstable learning algorithms in a convenient and statistically sound fashion.
 
+### Actionable Errors
+
+All problems demonstrated so far are artificial and non-actionable.
+The usefulness of encapsulation and error logging usually only really becomes apparent in large benchmarks, especially in combination with parallelization.
+For a fair comparison, you need to distinguish between the following cases:
+
+(a) You have made a mistake, e.g., forgot a required preprocessing step in your pipeline. Action: Fix problems, restart computation.
+(b) Temporary problems related to the executing system, e.g., network hiccups. Action: Restart computation.
+(c) Intrinsic, deterministic and reproducible problem with the model fitting. Action: Impute with fallback learner.
+
+The package [mlr3batchmark](https://github.com/mlr-org/mlr3batchmark) provides functionality to map jobs of a benchmark to computational jobs for the package `r ref_pkg("batchtools")`.
+This provides a convenient way get fine-grained control over the execution of each single resampling iteration and then combine the results afterwards to a `r ref("BenchmarkResult")` again to proceed with the analysis.
+
+
+
 ## Database Backends {#sec-backends}
 
 In mlr3, `r ref("Task", text = "Tasks")` store their data in an abstract data object, the `r ref("DataBackend")`.
-The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` as an very fast and efficient in-memory data base.
+The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` as a very fast and efficient in-memory database.
 
-For bigger data, or when working with many tasks simultaneously in the same R session, it can be advantageous to interface an out-of-memory data to reduce the memory requirements.
+For bigger data, or when working with many tasks simultaneously in the same R session, it can be required to interface out-of-memory data to reduce the memory requirements.
 There are multiple options to archive this:
 
-1. `r ref("DataBackendDplyr")` which interfaces the R package `r ref_pkg("dbplyr")`, extending `r ref_pkg("dplyr")` to work on many popular data bases like [MariaDB](https://mariadb.org/), [PostgreSQL](https://www.postgresql.org/) or [SQLite](https://www.sqlite.org).
-2. `r ref("DataBackendDuckDB")` for the impressive [DuckDB](https://duckdb.org/) data base connected via `r ref_pkg("duckdb")`: a fast, zero configuration alternative to SQLite.
-3. `r ref("DataBackendDuckDB")`, again, but to work directly on [parquet files](https://parquet.apache.org/).
+1. `r ref("DataBackendDplyr")` which interfaces the R package `r ref_pkg("dbplyr")`, extending `r ref_pkg("dplyr")` to work on many popular databases like [MariaDB](https://mariadb.org/), [PostgreSQL](https://www.postgresql.org/) or [SQLite](https://www.sqlite.org).
+2. `r ref("DataBackendDuckDB")` for the impressive [DuckDB](https://duckdb.org/) database connected via `r ref_pkg("duckdb")`: a fast, zero-configuration alternative to SQLite.
+3. `r ref("DataBackendDuckDB")`, again, but to work directly on [parquet files](https://parquet.apache.org/) stored on the local file system.
 
 
-### DataBackendDplyr
+### Databases with DataBackendDplyr
 
-To demonstrate the `r ref("DataBackendDplyr")` we use the NYC flights data set from the `r ref_pkg("nycflights13")` package and move it into a SQLite data base.
-Although `as_sqlite_backend()` provides a convenient function to perform this step, we contruct the data base manually here.
+To demonstrate the `r ref("DataBackendDplyr")` we use the NYC flights data set from the `r ref_pkg("nycflights13")` package and move it into a SQLite database.
+Although `as_sqlite_backend()` provides a convenient function to perform this step, we construct the database manually here.
 
 ```{r technical-021, message = FALSE}
 # load data
@@ -541,7 +597,7 @@ rm(flights)
 
 #### Preprocessing with `dplyr`
 
-With the SQLite database in `path`, we now re-establish a connection and switch to `r ref_pkg("dplyr")`/`r ref_pkg("dbplyr")` for some essential preprocessing.
+With the SQLite database stored in file `path`, we now re-establish a connection and switch to `r ref_pkg("dplyr")`/`r ref_pkg("dbplyr")` for some essential preprocessing.
 
 ```{r technical-022}
 # establish connection
@@ -590,7 +646,7 @@ library("mlr3db")
 b = as_data_backend(tbl, primary_key = "row_id")
 ```
 
-We can now use the interface of `r ref("DataBackend")` to query some basic information of the data:
+We can now use the interface of `r ref("DataBackend")` to query some basic information about the data:
 
 ```{r technical-028}
 b$nrow
@@ -617,7 +673,7 @@ resampling = rsmp("subsampling", repeats = 3, ratio = 0.02)
 ```
 
 We pass all these objects to `r ref("resample()")` to perform a simple resampling with three iterations.
-In each iteration, only the required subset of the data is queried from the SQLite data base and passed to `r ref("rpart::rpart()")`:
+In each iteration, only the required subset of the data is queried from the SQLite database and passed to `r ref("rpart::rpart()")`:
 
 ```{r technical-030}
 rr = resample(task, learner, resampling)
@@ -637,19 +693,54 @@ DBI::dbDisconnect(con)
 
 ### DataBackendDuckDB
 
-#### Working with DuckDBs
-
-While storing the Task's data in memory is most efficient w.r.t. accessing it, this has two major disadvantages:
+While storing the Task's data in memory is most efficient w.r.t. accessing it for model fitting, this has two major disadvantages:
 
 1. Although you might only need a small proportion of the data, the complete data frame sits in memory and consumes memory.
   This is especially a problem if you work with many tasks simultaneously.
-2. During parallelization, the complete data needs to be transferred to the workers which can cause a significant overhead.
+2. During parallelization, the complete data needs to be transferred to the workers which can cause significant overhead.
 
 A very simple way to avoid this is given by just converting the `r ref("DataBackendDataTable")` to a `r ref("DataBackendDuckDB")`.
+As we have already demonstrated how to operate on a SQLite data base, we just briefly demonstrate how to convert a task to a DuckDB and then focus on parquet files.
 
-...
+To convert a `data.frame` to DuckDB, we have the helper function `r ref("as_duckdb_backend()")` and provide a path.
+Here, we create the flights dataset in a temporary folder:
+```{r}
+library("mlr3db")
+data("flights", package = "nycflights13")
+backend = as_duckdb_backend(flights[complete.cases(flights),], path = tempfile())
+```
 
-#### Working with Parquet Files
+Next, we convert it to a regression task with the target column `"arr_delay"`:
+```{r}
+task = as_task_regr(backend, target = "arr_delay")
+```
+We can work with the task normally.
+When the data is requested, it is queried in the background from the database on the file system and the required parts are loaded into memory, e.g., for learners to train and predict on:
+```{r}
+learner = lrn("regr.rpart")
+
+# remove POSIXct column for the rpart learner
+task$set_col_roles("time_hour", remove_from = "feature")
+
+# train on the first 1000 rows
+learner$train(task, row_ids = 1:1000)
+
+learner$predict(task, row_ids = 1001:2000)$score()
+```
+
+It is also possible to directly operate on [parquet files](https://en.wikipedia.org/wiki/Apache_Parquet), without converting them.
+To demonstrate this, we first query the location of an example parquet file shipped with `r ref_pkg("mlr3db")`:
+
+```{r}
+path = system.file(file.path("extdata", "spam.parquet"), package = "mlr3db")
+```
+We can then again create a `r ref("DataBackendDuckDB")` based on this file and create a classification task without loading the dataset into memory:
+```{r}
+backend = as_duckdb_backend(path)
+task = as_task_classif(backend, target = "type")
+print(task)
+```
+
 
 ## Parameters (using paradox) {#sec-paradox}
 
@@ -1478,7 +1569,7 @@ lgr::get_logger("bbotk")$set_threshold("info")
 ### Redirecting output
 
 Redirecting output is already extensively covered in the documentation and vignette of `r ref_pkg("lgr")`.
-Here is just a short example which adds an additional appender to log events into a temporary file in [JSON](https://en.wikipedia.org/wiki/JSON) format:
+Here is just a short example that adds an additional appender to log events into a temporary file in [JSON](https://en.wikipedia.org/wiki/JSON) format:
 
 ```{r technical-073, eval = knitr::is_html_output()}
 tf = tempfile("mlr3log_", fileext = ".json")
