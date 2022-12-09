@@ -1,0 +1,173 @@
+---
+title: "Chap 3 Exercises"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+Workshopping exercises & solutions here until they can be moved into place
+
+```{r setup}
+library(mlr3verse)
+```
+
+## Vague ideas
+
+- Case where one CV fold errors / needs further investigation?
+- Can't think of smaller projects that don't cut into the optimization chapter (e.g. nested resampling, tuning :/)
+
+## Comparing CV Strategies
+
+You want to evaluate a decision tree classification learner on the `"zoo"` task (`tsk("zoo")`), but you're unsure which resampling strategy is appropriate.
+On of your colleagues recommends to use 5-fold cross-validation while another colleague swears by leave-one-out cross-validation ("LOO").
+Your goal is to maximize classification accuracy.
+Which strategy would you use?
+Try out both and visualize the resulting scores per resampling iteration.
+Which strategy seems to be more reliable in this scenario?
+As a learner, you can use e.g. `lrn("classif.rpart")`
+
+-> Shows that LOO may sound good but with this measure it gives optimistic results, and predictions in folds arr all 0 or 1, not great.
+
+```{r}
+set.seed(3)
+rr1 = resample(
+  task = tsk("zoo"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("cv", folds = 5)
+)
+
+rr2 = resample(
+  task = tsk("zoo"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("loo")
+)
+
+
+measure = msr("classif.acc")
+
+rr1$aggregate(measure)
+rr2$aggregate(measure)
+
+mlr3viz::autoplot(rr1, measure = measure)
+mlr3viz::autoplot(rr2, measure = measure)
+```
+
+## Doing a Lil' Benchmark
+
+Use `tsk("spam")` and 5-fold cross-validation strategy to benchmark Random Forest, Logistic Regression, and xgboost with regards to AUC. Which learner appears to do best? How confident are you with your conclusion?
+
+-> Small benchmark illustration, but no tuning so not really generalizable results or anything.
+
+```{r}
+grid = benchmark_grid(
+  tasks = tsk("spam"),
+  learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"), predict_type = "prob"),
+  resamplings = rsmp("cv", folds = 5)
+)
+
+bmr = benchmark(grid)
+
+mlr3viz::autoplot(bmr, measure = msr("classif.auc"))
+```
+
+
+## Manual Resampling Pitfalls
+
+You are working the the simplified `penguins` task (`tsk("penguins_simple")`)), and want to evaluate the `rpart` classification learner using a 50% train-test split.
+Create a custom resampling strategy that uses the first 166 rows as a training set and the remaining rows as a test set.
+Calculate the classification accuracy for both the train and the test set.
+Do you achieve the performance you would have expected?
+Repeat the procedure but using the `"holdout"` strategy with a `ratio` of 0.5.
+What causes the difference in test set performance?
+
+-> Goal is to illustrate how custom resampling can be done, and how it can be done badly if one doesn't account for e.g. pre-sorted data.
+Should illustrate that the built-in resampling procedures are usually a better place to start than home-brewing something.
+Also showcases `predict_sets` I guess?
+
+```{r}
+task = tsk("penguins_simple")
+resampling_custom = rsmp("custom")
+
+resampling_custom$instantiate(
+  task = task,
+  train_sets = list(1:166),
+  test_sets = list(167:333)
+)
+
+# train_ids = resampling_custom$train_set(1)
+# test_ids = resampling_custom$test_set(1)
+# task$data(rows = train_ids)
+# task$data(rows = test_ids)
+
+rr1 = resample(
+  task = task,
+  learner = lrn("classif.rpart", predict_sets = c("train", "test")),
+  resampling = resampling_custom
+)
+
+measures = list(
+  msr("classif.acc", id = "train_acc", predict_sets = "train"), 
+  msr("classif.acc", id = "test_acc", predict_sets = "test")
+)
+
+rr1$aggregate(measures)
+```
+
+Now using the regular `"holdout"` strategy
+
+```{r}
+set.seed(3)
+
+resampling_holdout = rsmp("holdout", ratio = 0.5)
+resampling_holdout$instantiate(task = task)
+
+# train_ids = resampling_holdout$train_set(1)
+# test_ids = resampling_holdout$test_set(1)
+# task$data(rows = train_ids)
+# task$data(rows = test_ids)
+
+rr2 = resample(
+  task = task,
+  learner = lrn("classif.rpart", predict_sets = c("train", "test")),
+  resampling = resampling_holdout
+)
+
+rr2$aggregate(measures)
+
+```
+
+Checking balancing of the `target` in the train sets explain the difference:
+In the first case, the learner never got to see the `"Chinstrap"` class during training.
+
+```{r}
+table(task$data(cols = task$target_names, rows = resampling_custom$train_set(1)))
+
+table(task$data(cols = task$target_names, rows = resampling_holdout$train_set(1)))
+```
+
+
+## Reproducing Results with CustomCV
+
+A colleague claims to have achieved a 93.1% classification accuracy using the `rpart` learner on the `"penguins_simple"` task.
+You want to reproduce their results and ask them about their resampling strategy.
+They said they used 3-fold cross-validation, and they assigned rows using the `row_id` modulo 3 to generate three evenly sized folds.
+
+-> Somewhat far-fetched example of `custom_cv`. Haven't been able to think of something better yet.
+
+```{r}
+task = tsk("penguins_simple")
+
+resampling_customcv = rsmp("custom_cv")
+
+resampling_customcv$instantiate(task = task, f = factor(task$row_ids %% 3))
+
+rr = resample(
+  task = task,
+  learner = lrn("classif.rpart"),
+  resampling = resampling_customcv
+)
+
+rr$aggregate(msr("classif.acc"))
+```
+
+## <Better Benchmarking Exercise?>
