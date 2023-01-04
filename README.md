@@ -16,9 +16,7 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
 1. Clone the `mlr-org/mlr3book` repository.
 
-1. Start a new R session in the `book/` directory.
-
-1. Call `renv::activate()` and then `renv::restore()` to download and install all required packages.
+1. Call `make install` to initialize the renv virtual environment.
    The file `book/renv.lock` records all packages needed to build the book.
 
 1. To build the book, run one of the following commands:
@@ -34,6 +32,7 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
    These command use the virtual environment created by renv.
 
 1. If your change to the book requires a new R package, install the package in the renv environment.
+   For this, start an R session in the `book/` directory and install the package with `renv::install()`.
    Then call `renv::snapshot()` to update `book/renv.lock`.
    Commit `book/renv.lock` with your changes to a pull request.
 
@@ -82,14 +81,14 @@ or alternatively executing `make names` from the terminal.
 You have to options to include a figure:
 
 1) Vector graphic
-  - In the `qmd`: `knitr::include_graphics("images/some_figure.svg")`
-  - Add `book/images/some_figure.svg` **and** `book/images/some_figure.pdf` to the repository.
+  - In the `qmd`: `knitr::include_graphics("Figures/some_figure.svg")`
+  - Add `book/Figures/some_figure.svg` **and** `book/Figures/some_figure.pdf` to the repository.
 2) Pixel graphic
-  - In the `qmd`: `knitr::include_graphics("images/some_figure.png")`
-  - Add **only** `book/images/some_figure.png` to the repository.
+  - In the `qmd`: `knitr::include_graphics("Figures/some_figure.png")`
+  - Add **only** `book/Figures/some_figure.png` to the repository.
 
 * Do not use markdown syntax `[](<figure>)` to include figures.
-* Do not include `pdf` in the `qmd`: `knitr::include_graphics("images/some_figure.pdf")`.
+* Do not include `pdf` in the `qmd`: `knitr::include_graphics("Figures/some_figure.pdf")`.
 
 #### Adding a new figure
 
