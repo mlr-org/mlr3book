@@ -32,7 +32,7 @@ This includes the following topics:
 Parallelization refers to running multiple jobs in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 This process allows for significant savings in computing power.
 
-In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single machine but multiple cores, [threads](https://en.wikipedia.org/wiki/Thread_(computing)) or [forks](https://en.wikipedia.org/wiki/Fork_(system_call)) are ways to utilize all cores.
+In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, [threads](https://en.wikipedia.org/wiki/Thread_(computing)) or [forks](https://en.wikipedia.org/wiki/Fork_(system_call)) are ways to utilize all cores.
 If you have multiple machines, they need a way to communicate and exchange information, e.g. via protocols like network sockets or the [Message Passing Interface (MPI)](https://en.wikipedia.org/wiki/Message_Passing_Interface).
 We don't want to delve too deep into such details here, but want to introduce some terminology:
 
@@ -404,20 +404,22 @@ learner$param_set$values = list(error_train = 1)
 
 learner$train(tsk("iris"))
 ```
-If this would be a regular learner, we could now start debugging with `r ref("traceback()")` (or create a [MRE](https://stackoverflow.com/help/minimal-reproducible-example) to file a bug report upstream).
+If this have been a regular learner, we could now start debugging with `r ref("traceback()")` (or create a [Minimal Reproducible Example (MRE)](https://stackoverflow.com/help/minimal-reproducible-example) to file a bug report upstream).
 
-However, as ML algorithms raising errors is not uncommon, and we often just need to move on, we need a mechanism to
 
-  1. capture all signaled conditions such as messages, warnings and errors so that we can analyze them post-hoc (@sec-encapsulation), and
-  2. a statistically sound way to proceed while being able to aggregate over partial results (@sec-fallback).
-
-These two mechanisms are explained in the following subsections.
 
 ### Encapsulation {#sec-encapsulation}
 
-Encapsulation ensures that signaled conditions (such as messages, warnings and errors) are intercepted: all conditions are logged into the learner, and errors do not interrupt the program flow.
+Since ML algorithms are confronted with arbitrary, often messy data, errors are not uncommon here, and we often just need to move on during benchmarking or tuning.
+Thus, we need a mechanism to
+
+  1. capture all signaled conditions such as messages, warnings and errors so that we can analyze them post-hoc (called "encapsulation", covered in this section), and
+  2. a statistically sound way to proceed while being able to aggregate over partial results (next @sec-fallback).
+
+Encapsulation ensures that signaled conditions (such as messages, warnings and errors) are intercepted: all conditions raised during the training or predict step are logged into the learner, and errors do not interrupt the program flow.
+I.e., the execution of the calling function or package (here: `r mlr3`) continues as if there had been no error, though the result (fitted model during `train()`, predictions during `predict()`) are missing.
 Each `r ref("Learner")` has a field `encapsulate` to control how the train or predict steps are wrapped.
-The easiest way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")` (see the documentation of the `r ref("encapsulate()")` helper function for more details):
+The easiest way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")` which evaluates R expressions while tracking conditions such as outputs, messages, warnings or errors (see the documentation of the `r ref("encapsulate()")` helper function for more details):
 
 ```{r technical-012}
 task = tsk("penguins")
@@ -581,17 +583,27 @@ This provides a convenient way get fine-grained control over the execution of ea
 
 
 
-## Database Backends {#sec-backends}
+## Data Backends {#sec-backends}
 
 In mlr3, `r ref("Task", text = "Tasks")` store their data in an abstract data object, the `r ref("DataBackend")`.
+A backend provides a unified API to retrieve subsets of the data or query information about it, regardless of how the data is actually stored.
 The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` as a very fast and efficient in-memory database.
+For example, we can query some information of the `r ref("mlr_tasks_penguins")` task:
+```{r}
+task = tsk("penguins")
+backend = task$backend
+backend$nrow
+backend$ncol
+```
 
-For bigger data, or when working with many tasks simultaneously in the same R session, it can be required to interface out-of-memory data to reduce the memory requirements.
+For bigger data, or when working with many tasks simultaneously in the same R session, it can be necessary to interface out-of-memory data to reduce the memory requirements.
+This way, only the part of the data which is currently required by the learners will be placed in the main memory to operate on.
 There are multiple options to archive this:
 
 1. `r ref("DataBackendDplyr")` which interfaces the R package `r ref_pkg("dbplyr")`, extending `r ref_pkg("dplyr")` to work on many popular databases like [MariaDB](https://mariadb.org/), [PostgreSQL](https://www.postgresql.org/) or [SQLite](https://www.sqlite.org).
 2. `r ref("DataBackendDuckDB")` for the impressive [DuckDB](https://duckdb.org/) database connected via `r ref_pkg("duckdb")`: a fast, zero-configuration alternative to SQLite.
-3. `r ref("DataBackendDuckDB")`, again, but to work directly on [parquet files](https://parquet.apache.org/) stored on the local file system.
+3. `r ref("DataBackendDuckDB")`, again, but for [Parquet files](https://parquet.apache.org/).
+  The data does not need to be converted to DuckDB's native storage format, you can work directly on directories containing one or multiple files stored in the popular Parquet format.
 
 
 ### Databases with DataBackendDplyr
@@ -619,8 +631,6 @@ DBI::dbDisconnect(con)
 # remove in-memory data
 rm(flights)
 ```
-
-#### Preprocessing with `dplyr`
 
 With the SQLite database stored in file `path`, we now re-establish a connection and switch to `r ref_pkg("dplyr")`/`r ref_pkg("dbplyr")` for some essential preprocessing.
 
@@ -662,9 +672,7 @@ tbl = mutate(tbl, carrier = case_when(
   TRUE ~ carrier))
 ```
 
-#### Creating the Backend
-
-The processed table is now used to create a `r ref("mlr3db::DataBackendDplyr")` from `r mlr3db`:
+Next, the processed table is used to create a `r ref("mlr3db::DataBackendDplyr")` from `r mlr3db`:
 
 ```{r technical-027}
 library("mlr3db")
@@ -681,9 +689,7 @@ b$head()
 
 Note that the `r ref("DataBackendDplyr")` does not know about any rows or columns we have filtered out with `r ref_pkg("dplyr")` before, it just operates on the view we provided.
 
-#### Model fitting
-
-We create the following `r mlr3` objects:
+As we now have constructed a backend, we can switch over to `r mlr3` for model fitting and create the following `r mlr3` objects:
 
 * A `r ref("TaskRegr", text = "regression task")`, based on the previously created `r ref("mlr3db::DataBackendDplyr")`.
 * A regression learner (`r ref("mlr_learners_regr.rpart", text = "regr.rpart")`).
@@ -706,9 +712,8 @@ print(rr)
 rr$aggregate(measures)
 ```
 
-#### Cleanup
-
-Finally, we remove the `tbl` object and close the connection.
+Note that we still have an active connection to the database.
+To properly close it, we remove the `tbl` object referencing the connection and then close the connection.
 
 ```{r technical-031}
 rm(tbl)
@@ -729,10 +734,10 @@ As we have already demonstrated how to operate on a SQLite database, and DuckDB 
 To convert a `data.frame` to DuckDB, we provide the helper function `r ref("as_duckdb_backend()")`.
 Only two arguments are required: the `data.frame` to convert, and a `path` to store the data.
 
-While this is useful while working with many tasks simultaneously in order to keep the memory requirements reasonable, the more frequent use case for DuckDB are nowadays [parquet files](https://en.wikipedia.org/wiki/Apache_Parquet).
+While this is useful while working with many tasks simultaneously in order to keep the memory requirements reasonable, the more frequent use case for DuckDB are nowadays [Parquet files](https://en.wikipedia.org/wiki/Apache_Parquet).
 Parquet is a popular column-oriented data storage format supporting efficient compression, making it far superior to other popular data exchange formats such as CSV.
 
-To demonstrate working with parquet files, we first query the location of an example data set shipped with `r ref_pkg("mlr3db")`:
+To demonstrate working with Parquet files, we first query the location of an example data set shipped with `r ref_pkg("mlr3db")`:
 
 ```{r}
 path = system.file(file.path("extdata", "spam.parquet"), package = "mlr3db")
