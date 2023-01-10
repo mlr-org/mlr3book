@@ -10,7 +10,7 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
 - [HTML](https://mlr3book.mlr-org.com)
 
-- [PDF](https://mlr3book.mlr-org.com/mlr3book.pdf)
+- [PDF](https://mlr3book.mlr-org.com/Flexible-and-Robust-Machine-Learning-Using-mlr3-in-R.pdf)
 
 ## Working on the book
 
@@ -81,14 +81,14 @@ or alternatively executing `make names` from the terminal.
 You have to options to include a figure:
 
 1) Vector graphic
-  - In the `qmd`: `knitr::include_graphics("images/some_figure.svg")`
-  - Add `book/images/some_figure.svg` **and** `book/images/some_figure.pdf` to the repository.
+  - In the `qmd`: `knitr::include_graphics("Figures/some_figure.svg")`
+  - Add `book/Figures/some_figure.svg` **and** `book/Figures/some_figure.pdf` to the repository.
 2) Pixel graphic
-  - In the `qmd`: `knitr::include_graphics("images/some_figure.png")`
-  - Add **only** `book/images/some_figure.png` to the repository.
+  - In the `qmd`: `knitr::include_graphics("Figures/some_figure.png")`
+  - Add **only** `book/Figures/some_figure.png` to the repository.
 
 * Do not use markdown syntax `[](<figure>)` to include figures.
-* Do not include `pdf` in the `qmd`: `knitr::include_graphics("images/some_figure.pdf")`.
+* Do not include `pdf` in the `qmd`: `knitr::include_graphics("Figures/some_figure.pdf")`.
 
 #### Adding a new figure
 
