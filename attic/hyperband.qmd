@@ -1,0 +1,242 @@
+## Tuning with Hyperband {#hyperband}
+
+Besides the more traditional tuning methods, the ecosystem around `r mlr_pkg("mlr3")` offers another procedure for hyperparameter optimization called Hyperband implemented in the `r mlr_pkg("mlr3hyperband")` package.
+
+Hyperband is a budget-oriented procedure, weeding out suboptimal performing configurations early on during a partially sequential training process, increasing tuning efficiency as a consequence.
+For this, a combination of incremental resource allocation and early stopping is used: As optimization progresses, computational resources are increased for more promising configurations, while less promising ones are terminated early.
+
+To give an introductory analogy, imagine two horse trainers are given eight untrained horses.
+Both trainers want to win the upcoming race, but they are only given 32 units of food.
+Given that each horse can be fed up to 8 units food ("maximum budget" per horse), there is not enough food for all the horses.
+It is critical to identify the most promising horses early, and give them enough food to improve.
+So, the trainers need to develop a strategy to split up the food in the best possible way.
+The first trainer is very optimistic and wants to explore the full capabilities of a horse, because he does not want to pass a judgment on a horse's performance unless it has been fully trained.
+So, he divides his budget by the maximum amount he can give to a horse (lets say eight, so $32 / 8 = 4$) and randomly picks four horses - his budget simply is not enough to fully train more.
+Those four horses are then trained to their full capabilities, while the rest is set free.
+This way, the trainer is confident about choosing the best out of the four trained horses, but he might have overlooked the horse with the highest potential since he only focused on half of them.
+The other trainer is more creative and develops a different strategy.
+He thinks, if a horse is not performing well at the beginning, it will also not improve after further training.
+Based on this assumption, he decides to give one unit of food to each horse and observes how they develop.
+After the initial food is consumed, he checks their performance and kicks the slowest half out of his training regime.
+Then, he increases the available food for the remaining, further trains them until the food is consumed again, only to kick out the worst half once more.
+He repeats this until the one remaining horse gets the rest of the food.
+This means only one horse is fully trained, but on the flip side, he was able to start training with all eight horses.
+
+On race day, all the horses are put on the starting line.
+But which trainer will have the winning horse?
+The one, who tried to train a maximum amount of horses to their fullest?
+Or the other one, who made assumptions about the training progress of his horses?
+How the training phases may possibly look like is visualized in @fig-04-optimization-hyperband-01.
+
+```{r optimization-043, eval = TRUE, echo = FALSE, fig.show='hold', out.width = '99%', fig.align = 'center', fig.cap = "Visulization of how the training processes may look like. The left plot corresponds to the non-selective trainer, while the right one to the selective trainer.", warning=FALSE}
+#| label = "fig-04-optimization-hyperband-01"
+knitr::include_graphics("Figures/horse_training1.png")
+```
+
+Hyperband works very similar in some ways, but also different in others.
+It is not embodied by one of the trainers in our analogy, but more by the person, who would pay them.
+Hyperband consists of several brackets, each bracket corresponding to a trainer, and we do not care about horses but about hyperparameter configurations of a machine learning algorithm.
+The budget is not in terms of food, but in terms of a hyperparameter of the learner that scales in some way with the computational effort.
+An example is the number of epochs we train a neural network, or the number of iterations in boosting.
+Furthermore, there are not only two brackets (or trainers), but several, each placed at a unique spot between fully explorative of later training stages and extremely selective, equal to higher exploration of early training stages.
+The level of selection aggressiveness is handled by a user-defined parameter called $\eta$.
+So, $1/\eta$ is the fraction of remaining configurations after a bracket removes his worst performing ones, but $\eta$ is also the factor by that the budget is increased for the next stage.
+Because there is a different maximum budget per configuration that makes sense in different scenarios, the user also has to set this as the $R$ parameter.
+No further parameters are required for Hyperband -- the full required budget across all brackets is indirectly given by
+$$
+(\lfloor \log_{\eta}{R} \rfloor + 1)^2 * R
+$$
+
+[@Li2016].
+To give an idea how a full bracket layout might look like for a specific $R$ and $\eta$, a quick overview is given in the following table.
+
+```{r optimization-044, eval = TRUE, echo = FALSE}
+eta = 2
+R = 8
+result = data.frame()
+# add small number due to possible machine error
+smax = floor(log(R, eta) + 10 * .Machine$double.eps)
+B = (smax + 1) * R
+
+# outer loop - iterate over brackets
+for (s in smax:0) {
+
+  n = ceiling((B / R) * ((eta^s) / (s + 1)))
+  r = R * eta^(-s)
+
+  # inner loop - iterate over bracket stages
+  for (i in 0:s) {
+
+    ni = floor(n * eta^(-i))
+    ri = r * eta^i
+    result = rbind(result, c(smax - s + 1, i + 1, ri, ni))
+  }
+}
+
+names(result) = c("bracket", "stage", "budget", "n")
+
+knitr::kable(
+  list(
+    result[1:4, 2:4],
+    data.frame(stage = 1:3, budget = 2^(1:3), n = c(6, 3, 1)),
+    data.frame(stage = 1:2, budget = c(4, 8), n = c(4, 2)),
+    data.frame(stage = 1, budget = 8, n = 4)
+  ),
+  booktabs = TRUE,
+  caption = "Hyperband layout for $\\eta = 2$ and $R = 8$, consisting of four brackets with $n$ as the amount of active configurations."
+)
+```
+
+Of course, early termination based on a performance criterion may be disadvantageous if it is done too aggressively in certain scenarios.
+A learner to jumping radically in its estimated performance during the training phase may get the best configurations canceled too early, simply because they do not improve quickly enough compared to others.
+In other words, it is often unclear beforehand if having an high amount of configurations $n$, that gets aggressively discarded early, is better than having a high budget $B$ per configuration.
+The arising tradeoff, that has to be made, is called the "$n$ versus $B/n$ problem".
+To create a balance between selection based on early training performance versus exploration of training performances in later training stages, $\lfloor \log_{\eta}{R} \rfloor + 1$ brackets are constructed with an associated set of varying sized configurations.
+Thus, some brackets contain more configurations, with a small initial budget.
+In these, a lot are discarded after having been trained for only a short amount of time, corresponding to the selective trainer in our horse analogy.
+Others are constructed with fewer configurations, where discarding only takes place after a significant amount of budget was consumed.
+The last bracket usually never discards anything, but also starts with only very few configurations -- this is equivalent to the trainer explorative of later stages.
+The former corresponds high $n$, while the latter high $B/n$.
+Even though different brackets are initialized with a different amount of configurations and different initial budget sizes, each bracket is assigned (approximately) the same budget $(\lfloor \log_{\eta}{R} \rfloor + 1) * R$.
+
+The configurations at the start of each bracket are initialized by random, often uniform sampling.
+Note that currently all configurations are trained completely from the beginning, so no online updates of models from stage to stage is happening.
+
+To identify the budget for evaluating Hyperband, the user has to specify explicitly which hyperparameter of the learner influences the budget by extending a single hyperparameter in the `r ref("ParamSet")` with an argument (`tags = "budget"`), like in the following snippet:
+
+```{r optimization-045}
+library("mlr3verse")
+
+# Hyperparameter subset of XGBoost
+search_space = ps(
+  nrounds = p_int(lower = 1, upper = 16, tags = "budget"),
+  booster = p_fct(levels = c("gbtree", "gblinear", "dart"))
+)
+```
+
+Thanks to the broad ecosystem of the `r mlr_pkg("mlr3verse")` a learner does not require a natural budget parameter.
+A typical case of this would be decision trees.
+By using subsampling as preprocessing with `r mlr_pkg("mlr3pipelines")`, we can work around a lacking budget parameter.
+
+```{r optimization-046}
+set.seed(123)
+
+# extend "classif.rpart" with "subsampling" as preprocessing step
+ll = po("subsample") %>>% lrn("classif.rpart")
+
+# extend hyperparameters of "classif.rpart" with subsampling fraction as budget
+search_space = ps(
+  classif.rpart.cp = p_dbl(lower = 0.001, upper = 0.1),
+  classif.rpart.minsplit = p_int(lower = 1, upper = 10),
+  subsample.frac = p_dbl(lower = 0.1, upper = 1, tags = "budget")
+)
+```
+
+We can now plug the new learner with the extended hyperparameter set into a `r ref("TuningInstanceSingleCrit")` the same way as usual.
+Naturally, Hyperband terminates once all of its brackets are evaluated, so a `r ref("Terminator")` in the tuning instance acts as an upper bound and should be only set to a low value if one is unsure of how long Hyperband will take to finish under the given settings.
+
+```{r optimization-047}
+instance = TuningInstanceSingleCrit$new(
+  task = tsk("iris"),
+  learner = ll,
+  resampling = rsmp("holdout"),
+  measure = msr("classif.ce"),
+  terminator = trm("none"), # hyperband terminates itself
+  search_space = search_space
+)
+```
+
+Now, we initialize a new instance of the `r ref("mlr3hyperband::mlr_tuners_hyperband")` class and start tuning with it.
+
+```{r optimization-048}
+library("mlr3hyperband")
+tuner = tnr("hyperband", eta = 3)
+
+# reduce logging output
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+tuner$optimize(instance)
+```
+
+To receive the results of each sampled configuration, we simply run the following snippet.
+
+```{r optimization-049}
+as.data.table(instance$archive)[, c(
+  "subsample.frac",
+  "classif.rpart.cp",
+  "classif.rpart.minsplit",
+  "classif.ce"
+), with = FALSE]
+```
+
+You can access the best found configuration through the instance object.
+
+```{r optimization-050}
+instance$result
+instance$result_learner_param_vals
+instance$result_y
+```
+
+In the traditional way, Hyperband uses uniform sampling to receive a configuration sample at the start of each bracket.
+But it is also possible to define a custom `r ref("Sampler")` for each hyperparameter.
+
+```{r optimization-051}
+search_space = ps(
+  nrounds = p_int(lower = 1, upper = 16, tags = "budget"),
+  eta = p_dbl(lower = 0, upper = 1),
+  booster = p_fct(levels = c("gbtree", "gblinear", "dart"))
+)
+
+instance = TuningInstanceSingleCrit$new(
+  task = tsk("iris"),
+  learner = lrn("classif.xgboost"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.ce"),
+  terminator = trm("none"), # hyperband terminates itself
+  search_space = search_space
+)
+
+# beta distribution with alpha = 2 and beta = 5
+# categorical distribution with custom probabilities
+sampler = SamplerJointIndep$new(list(
+  Sampler1DRfun$new(search_space$params$eta, function(n) rbeta(n, 2, 5)),
+  Sampler1DCateg$new(search_space$params$booster, prob = c(0.2, 0.3, 0.5))
+))
+```
+
+Then, the defined sampler has to be given as an argument during instance creation.
+Afterwards, the usual tuning can proceed.
+
+```{r optimization-052}
+tuner = tnr("hyperband", eta = 2, sampler = sampler)
+set.seed(123)
+tuner$optimize(instance)
+
+instance$result
+```
+
+Furthermore, we extended the original algorithm, to make it also possible to use `r mlr_pkg("mlr3hyperband")` for multi-objective optimization.
+To do this, simply specify more measures in the `r ref("TuningInstanceMultiCrit")` and run the rest as usual.
+
+```{r optimization-053}
+instance = TuningInstanceMultiCrit$new(
+  task = tsk("pima"),
+  learner = lrn("classif.xgboost"),
+  resampling = rsmp("holdout"),
+  measures = msrs(c("classif.tpr", "classif.fpr")),
+  terminator = trm("none"), # hyperband terminates itself
+  search_space = search_space
+)
+
+tuner = tnr("hyperband", eta = 4)
+tuner$optimize(instance)
+```
+
+Now the result is not a single best configuration but an estimated Pareto front.
+All red points are not dominated by another parameter configuration regarding their *fpr* and *tpr* performance measures.
+
+```{r optimization-054}
+instance$result
+plot(classif.tpr ~ classif.fpr, instance$archive$data)
+points(classif.tpr ~ classif.fpr, instance$result, col = "red")
+```
