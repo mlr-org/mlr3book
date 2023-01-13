@@ -110,7 +110,7 @@ However, there are still some scenarios where it is better to reduce the number 
   These are comparably slower than the high-performance "Firestorm" cores and not well suited for heavy computations.
 * You have linked R to a threaded [BLAS](https://de.wikipedia.org/wiki/Basic_Linear_Algebra_Subprograms) implementation like [OpenBLAS](https://www.openblas.net/), and your learners make heavy use of linear algebra.
 
-You can manually set the number of CPUs to overrule the heuristic via option `"mc.cores"`:
+    You can manually set the number of CPUs to overrule the heuristic via option `"mc.cores"`:
 
 ```{r technical-003, eval = FALSE}
 options(mc.cores = 4)
@@ -756,18 +756,19 @@ Accessing the data internally triggers a query and data is fetched to be stored 
 
 ## Parameter Sets {#sec-paradox}
 
-The `r ref_pkg("paradox")` package implements a language for systematically representing and handling parameter spaces.
-One important usecase within the `r ref_pkg("mlr3verse")` is to define the space of valid parameter settings for a learner (and other objects).
-Second, they are used to define a search space for tuning.
+The `r ref_pkg("paradox")` package implements a language for systematically representing parameter spaces that is used throughout the `r ref_pkg("mlr3verse")`.
+The first important use case is to define the space of valid parameter settings for learners and other objects.
+Second, they are used to define search spaces for the optimization of hyperparameters.
 
 While we have already learnt how to set parameters in @sec-training and to define tuning spaces in @sec-tuning-instance, this chapter will provide a more in-depth understanding of the involved concepts.
 The three central classes of the `r ref_pkg("paradox")` package are the:
 
 * `r ref("Param")` representing a single parameter
-* `r ref("ParamSet")` being a container object that combines multiple `r ref("Param")`s into a set.^[This is an oversimplification, as the `ParamSet` itself can also hold information beyond what is stored in the individual parameters.]
+* `r ref("ParamSet")` being a container object that combines multiple `r ref("Param")`s^[This is an oversimplification, as the `ParamSet` itself can also hold information beyond what is stored in the individual parameters.]
 * `r ref("ParamSetCollection")` which allows to combine multiple `r ref("ParamSet")`s into a new `r ref("ParamSet")`.
 
-Beyond that there are two other important classes that are used as intermediate objects to provide a more user friendly interface.
+Furthermore, there are two other important classes that represent intermediate objects.
+These classes are used to provide a more user friendly interface to the classes above.
 They are the:
 
 * `r ref("Domain")`, which is an intermediate object that is converted to a `r ref("Param")` object.
@@ -775,59 +776,58 @@ They are the:
 
 The *first* part of this section covers on the definition of valid parameter settings for objects, while the *second* part focuses on the definition of tuning spaces.
 
-### Defining and Configuring a ParamSet
+### Defining and Configuring Objects {#sec-paradox-define-configure}
 
-
-#### Defining a ParamSet
 
 Within the `r ref_pkg("mlr3verse")`, `r ref("ParamSet")`s are ubiquitous.
-A very simple example is the repeated cross-validation, which has only two parameters `folds` and `repeats`.
+A relatively simple example are the parameters of the `r ref("PipeOpClassBalancing")`, which contains four parameters `ratio`, `reference`, `adjust`, and `shuffle`.
+Akin to function arguments, they allow to configure the behaviour of the `r ref("PipeOp")` during training. 
+Unlike function arguments, these parameters are explicitly annotated with the type of values that they accept.
+
+The printed output below shows that the `ratio` must be a double(-like) value greater than `0`, `reference` and `adjust` categoricals from a predefined set, and `shuffle` a logical flag.
+None of the parameters has a default, but they have their `$values` slot initialized, which can be seen in the rightmost column.^[More on the difference between default values and initial values can be found in @sec-paradox-configure .]
 
 ```{r}
-param_set = rsmp("repeated_cv")$param_set
+library("mlr3pipelines")
+param_set = po("classbalancing")$param_set
 param_set
 ```
 
-We can inspect the contained `r ref("Param")` objects by accessing the field `$params`, which returns a named list of objects of type `r ref("Param")`.
+We can inspect the individual parameters by accessing the field `$params`, which returns a named list of objects of type `r ref("Param")`.
+The printed information is similar to what we have already seen above, however it now also includes the available levels for the parameters `reference` and `adjust`.
 
 ```{r}
 param_set$params
 ```
 
-From the printed outputs, we can learn that both parameters must be integers, `folds` being at least $2$ and `repeats` at least $1$.
+<!-- The simplest parameter set is the empty parameter set, which can for example be found in the measure for the mean squared error. -->
+<!---->
+<!-- ```{r} -->
+<!-- #| echo: false -->
+<!-- #| output: false -->
+<!-- stopifnot(msr("regr.mse")$param_set$length == 0) -->
+<!-- ``` -->
+<!---->
+<!-- ```{r} -->
+<!-- msr("regr.mse")$param_set -->
+<!-- ``` -->
 
-The simplest parameter set is the empty parameter set, which can for example be found in the measure for the mean squared error.
 
-```{r}
-#| echo: false
-#| output: false
-stopifnot(msr("regr.mse")$param_set$length == 0)
-```
+#### Defining a ParamSet {#sec-technical-paradox-define}
 
-
-```{r}
-msr("regr.mse")$param_set
-```
-
-Such an empty parameter set -- albeit not yet very useful -- can be constructed using just the `ps()` call:
+We can define parameter set by calling the `r ref("ps")` function.
+The function takes named `r ref("Domain")` arguments that are converted into `r ref("Param")`s and creates a `r ref("ParamSet")` from them.
+An empty parameter set -- albeit not yet very useful -- can be created by calling `ps()` without any  argumets.
 
 ```{r}
 ps()
 ```
 
-`r ref("ps")` takes named `r ref("Domain")` arguments that are converted into `r ref("Param")`s and creates a `r ref("ParamSet")` from them.
+As a more interesting example, we can define a parameter set for a hypothetical statistical model that can either be fit by exactly solving a linear system (default), or by approximating the solution using a gradient method.
+In case the solution is approximated, a tolerance level can be specified to determine a termination criterion for the gradient method.
 
-As a next step, we can create an artifical parameter set with parameters `method` and `iters`, where the former can take the values `"m1"` (default) and `"m2"`, while the latter must be a positive integer that can only be set when `method` is equal to `"m1"`.
-
-```{r}
-param_set = ps(
-  method = p_fct(default = "m1", levels = c("m1", "m2")),
-  iters  = p_int(lower = 1, depends = method == "m1")
-)
-param_set
-```
-
-There are five domain constructors that produce a parameter when passed as arguments to `r ref("ps")` that can be used to represent different types of parameters.
+In order to define this parameter set, we have to pick the right parameter types.
+As of writing this book, there are five domain constructors that produce different parameters when passed as arguments to `ps()`.
 The most flexible one is `r ref("p_uty()")` which always has to be used when none of the others are fitting.
 
 | Constructor               | Description                          | Underlying Class    |
@@ -838,6 +838,7 @@ The most flexible one is `r ref("p_uty()")` which always has to be used when non
 | `r ref("p_lgl")`          | Logical / Boolean parameter          | `r ref("ParamLgl")` |
 | `r ref("p_uty")`          | Untyped parameter                    | `r ref("ParamUty")` |
 
+: Domain Constructors {#tbl-paradox-define}
 
 The most important arguments for these domain constructors allow to specify:
 
@@ -845,83 +846,113 @@ The most important arguments for these domain constructors allow to specify:
 1. dependencies between parameters via the argument `depends`.
    It is an expression that must involve other parameters and be of the form `<param> == <scalar>`, `<param> %in% <vector>`, or multiple of these chained by `&&`.
 1. the `default` value that allows to record the behaviour if no value is set
-1. parameter transformations (e.g. `trafo`)
-1. `tags` which allow to organize parameters.^[An important example are the parameters of a learner, which tagged with `"train"` and `"predict"` to annotate whether they influence the training or the prediction phase.]
+1. parameter transformations via a `trafo`
+1. `tags` which allow to organize parameters.^[An important example are the parameters of a learner, which are tagged with `"train"` and `"predict"` to annotate whether they influence the training or the prediction phase.]
 
-The univariate information stored in the `r ref("Domain")` objects are converted into `r ref("Param")`s, which can be accesses through the slot `$params`.
+For each of the domain objects, a `r ref("Param")` is created which can be accesses through the slot `$params`.
+
+Four our hypothetical method, we can create the parameter set as follows.
+
+```{r}
+param_set = ps(
+  approx = p_lgl(default = TRUE),
+  tol    = p_dbl(default = 10e-5, lower = 0, depends = approx == TRUE)
+)
+param_set
+```
 
 ```{r}
 param_set$params
 ```
 
-However, we also specified higher-dimensional constraints via the parameter `dependencies`.
-This information -- because it affects two parameters simultaneously -- is recorded in the slot `$deps` instead.
-
+However, we not only specified univariate constraints, but also dependencies between the parameters via the `depends` argument.
+This information -- because it affects two parameters simultaneously -- is recorded in the field `$deps`.
 ```{r}
 param_set$deps
 ```
 
-The rows in the `data.table` can be read as follows: "Whether the parameter `<id>` can can be set, depends on the parameter `<on>` satisfying the condition `<cond>`.
-$hen constructing a `r ref("ParamSet")` from `r ref("Domain")` objects in the `ps()` call, constraints of the form `==` are converted to objects of class `r ref("CondEqual")`, while `%in%` is converted to `r ref("CondAnyOf")`.
+The rows in the table above can be read as follows: "Whether the parameter `<id>` can be set, depends on the parameter `<on>` satisfying the condition `<cond>`.
+When constructing a `r ref("ParamSet")` from `r ref("Domain")` objects in the `ps()` call, constraints of the form `==` are converted to objects of class `r ref("CondEqual")`, while `%in%` is converted to `r ref("CondAnyOf")`.
 
-#### Setting Parameter Values
 
-Once a parameter set is defined, we can set its state, i.e. the slot `$values` that is being used when the configured object is executed.
-When setting new values, the parameters are checked for compliance with the defined limits.
+#### Setting Parameter Values {#sec-paradox-configure}
+
+Once a parameter set is defined, we can set its state, i.e. the field `$values`.
+The values in this slot are used when object that is configured in the parameter set is called.
+
+There are four different ways to change the values of an existing parameter set:
+
+| Method                                                      | Description                                        |
+| :---------------------------------------------------------  | :-------------------------------------------------- |
+| `param_set$values$<par> = <value>`                          | changes only a single value                         |
+| `param_set$values = list(<par1> = <value1>, ...)`           | sets the provided values and unsets all other values |
+| `param_set$set_values(<par1> = <value1>, ...)`              | changes only the provided values                    |
+
+: Setting Parameter Values {#tbl-paradox-configure}
+
+
+When using either of these functions, the resulting parameter set is checked for compliance within the defined restrictions.
 
 ```{r}
 #| error: true
-param_set$values$method = "m3"
-param_set$values$method = "m2"
+# Parameter approx must be logical
+param_set$set_values(approx = "no")
+param_set$set_values(approx = FALSE)
+
+# Parameter tol can only be set when approx is TRUE
+param_set$set_values(tol = 1e-7)
+param_set$set_values(approx = TRUE, tol = 1e-7)
 ```
+
+When working with `r mlr3` objects, it can be important to be aware of the difference between **initial parameter values** and **default values**.
+
+To show their difference we inspect the parameter set of the classification and partition tree, with a focus on the  `cp` and `xval` parameters.
 
 ```{r}
-#| error: true
-param_set$values$iters = 10
-param_set$values = list(method = "m1", iters = 10)
+learner = lrn("regr.rpart")
+learner$param_set
 ```
 
-When working with `r mlr3` objects, it can be important to be aware of the difference between *initial parameter values* and *default values*.
-To showcast their difference, we use a classification partition tree and focus on its parameters `cp` and `xval`
+The parameter `cp` has a default of 0.01 and `xval` of 10.
+However, the parameter `xval` is initialized to 0, which means that the slot `$values` has the following value
 
 ```{r}
-param_subset = lrn("regr.rpart")$param_set$subset(c("cp", "xval"))
-param_subset
+learner$param_set$values
 ```
 
-The parameter `cp` has a default of `0.01` and `xval` of `10`.
-However, the parameter `xval` is initialized to `0`.
+Here the default value indicates what value is used when nothing is specified.
+In this case, the `r ref("rpart::rpart")` function that is called under the hood when training `r ref("LearnerClassifRpart")` uses the value 0.01 for `cp` if no value is provided and 10 for `xval`.
 
-This might be slightly confusing initially, but the explanation of this is as follows: The default value indicates what parameter is used when no value of the parameter set is set.
-In this case, the `r ref("rpart::rpart")` function that is called by `r ref("LearnerClassifRpart")` uses the value `0.01` for `cp` if no value is provided and `10` for `xval`.
-
-For this specific learner, we initialize the value of `xval` to `0`, which means that when using this learner without changing any parameters, it will not run with the default parameters.
+For this specific learner, the value of `xval` is initialized to 0, which means that when using this learner without changing anything, it won't run with the default values (yes this is slightly confusing!).
 Note that such changes are always documented in the learner's documentation.
 
 If we want to go with the default behaviour o `r ref("rpart::rpart")`, we would have to set the parameter `xval` to either `10` or `NULL`.
 
-This also has practical consequences, i.e. note the difference between the two parameter sets below.
+While the methods in table 
+As a final note, it has to be mentioned, that not all values that are set during construction of objects via their sugar function (`lrn()`, `po()`, ...) are parameters. 
+These sugar functions also allow to set fields and construction arguments, such as the predict type or the id of an object.
 
+:::{.callout-caution}
+This also has important practical consequences regarding how to set parameters.
+Consider the difference between the following parameter sets.
 ```{r}
-rpart1 = lrn("regr.rpart", cp = 0.3)
-rpart1$param_set$values
-rpart1$param_set$values
+rpart1 = lrn("regr.rpart")
+rpart1$param_set$set_values(cp = 0.3) # or rpart1$param_set$values$cp = 0.3
+rpart1$param_set
+
 rpart2 = lrn("regr.rpart")
 rpart2$param_set$values = list(cp = 0.3)
 rpart2$param_set$values
 ```
-
-:::{.callout-tip}
-In general it is a good idea to directly set parameter values when constructing a learner in the `lrn(...)` call.
-This avoids accidentally un-setting initial values.
-An alternative way to achieve this is the `$set_values()` method of the `ParamSet` that was already covered in (TODO).
 :::
+
+
 
 
 #### Combining Parameter Sets
 
-Finally, we want to mention how it is possible to merge different `ParamSet`s.
-In the `mlr3verse` this is encountered when working with `r ref("Graph")` objects from `r ref_pkg("mlr3pipelines")`.
+In this section, we will learn how it is possible to combine multiple parameter sets.
+In the `r mlr3verse` this is encountered when working with `r ref("Graph")` objects from the `r ref_pkg("mlr3pipelines")` package.
 
 Consider the following two `r ref("PipeOp")`s and their resulting `r ref("Graph")`.
 
@@ -933,7 +964,7 @@ po_rpart = po("learner", lrn("regr.rpart"))
 graph = po_pca %>>% po_rpart
 ```
 
-The resulting `graph` creates a `r ref("ParamSetCollection")` from the two parameter sets of the pipeops and this paramset is created by the following call:
+The resulting `graph` creates a `r ref("ParamSetCollection")` from the two parameter sets of the pipeops.
 Note that a `r ref("ParamSetCollection")` inherits from the class `r ref("ParamSet")` so it can be treated just the same.
 
 ```{r}
@@ -945,7 +976,7 @@ param_set_collection = ParamSetCollection$new(list(
 class(param_set_collection)
 ```
 
-It is to be noted that the parameter ids have a new suffix, which was inferred from their `$set_id`.
+In order to avoid id conflicts, the newly created parameters a new prefix, which was inferred from their `$set_id`.
 
 ```{r}
 param_set_collection$ids()
@@ -957,18 +988,20 @@ po_rpart$param_set$set_id
 While it is possible that a parameter sets has no set id, it always has to be ensured that all parameters have unique ids.
 
 
-### Defining a Tuning Spaces {#sec-tuning-space}
+### Defining Tuning Spaces {#sec-paradox-tune}
 
-#### Creating a Tuning Space from Scratch
+In this section we will cover how to define search spaces that can be used when optimizing black box functions with `r bbotk`. 
+A special instance of this problem is the optimization of hyperparameters of ML algorithms through e.g. the `r mlr3tuning` package.
 
-This section will put an emphasis of those features of `r ref("paradox")` that are relevant for defining the search space of an optimization algorithm.
-Aspects that are relevant for tuning, which were not relevant in the previous section are the property of `$is_bounded`, the `r ref("TuneToken")` and parameter transformations aka the `$trafo`.
-
-As a guiding example, we will configure the tuning space for a `r ref("LearnerRegrSVM", text = "svm")` from the `r ref_pkg("mlr3learners")` package.
+Aspects that are relevant for tuning, which were not relevant in the previous section are the property `$is_bounded`, the `r ref("TuneToken")`, and parameter transformations aka the `$trafo`.
 For a background on hyperparameter optimization within the `r ref_pkg("mlr3verse")` we refer to @sec-model-tuning.
 
-If we want to tune a svm, we have to configure the search space that we want to explore.
-One important aspect here is that when tuning in mlr3, the search space has to be bounded:
+#### Creating a Tuning Space from Scratch {#sec-paradox-tune-scratch}
+
+
+As a guiding example, we will configure the tuning space for a `r ref("LearnerRegrSVM", text = "SVM")` from the `r ref_pkg("mlr3learners")` package.
+If we want to tune a SVM, we have to configure the search space that is explored by the tuner.
+For that the search space has to be bounded:
 
 1. `ParamFct` and `ParamLgl` are always bounded
 1. `ParamInt` and `ParamDbl` are bounded if `lower` and `upper` are finite
@@ -981,87 +1014,87 @@ ps(cost = p_dbl(lower = 0.1, upper = 1))$is_bounded
 ps(cost = p_uty())$is_bounded
 ```
 
-One way to configure a tuning space is to define a `r ref("ParamSet")` just like we did before.
+One way to configure a tuning space is to define a `r ref("ParamSet")` analogously to @sec-paradox-configure.
 
 ```{r optimization-028}
 search_space = ps(
   cost   = p_dbl(lower = 0.1, upper = 1),
   kernel = p_fct(levels = c("polynomial", "radial"))
 )
-print(search_space)
+search_space
 ```
 
-Optimizers such as `r ref("TunerGridSearch")` are able to generate proposed points (aka a `r ref("Design")`) from such a `ParamSet`.
-Generating a grid with resolution 5, will result in the following search space to be explored by the tuner. ^[Note that for factorial parameters, always all factors are used, independent of the resultion.]
+Optimizers such as `r ref("TunerGridSearch")` generate proposed points (aka a `r ref("Design")`) from a search space that is then systematically explored.
+Generating a grid with resolution 5, will result in the following search space. ^[Note that for factorial parameters all levels are used, independent of the resolution.]
 
 ```{r}
 #| echo: false
-#| label: fig-technical-paradox-vanilla
+#| label: fig-technical-paradox-tuning-vanilla
 #| fig-cap: Vanilla Design Grid for SVM Tuning. Resolution 5.
 library(ggplot2)
 
 dat1 = rbindlist(generate_design_grid(search_space, resolution = 5)$transpose(), fill = TRUE)
+theme_set(mlr3viz::theme_mlr3())
 
-theme_set(theme_bw())
 ggplot(dat1, aes(cost, kernel)) +
-    geom_point() +
-    labs(title = "Grid Based Tuning Space for SVM")
+    geom_point()
 ```
 
 We notice that the `cost` parameter is taken on a linear scale.
-We assume, however, that the difference of cost between `0.1` and `1` should have a similar effect as the difference between `1` and `10`.
+We assume, however, that the difference of cost between 0.1 and 1 should have a similar effect as the difference between 1 and 10.
 Therefore it makes more sense to tune it on a *logarithmic scale*.
 This is done by using a **transformation** (`trafo`).
 This is a function that is applied to a parameter after it has been sampled by the tuner.
-We can tune `cost` on a logarithmic scale by sampling on the linear scale `[-1, 1]` and computing `10^x` from that value.
+We can tune `cost` on a logarithmic scale by sampling on the linear scale $[-1, 1]$ and computing $10^x$ from that value.
 
 ```{r optimization-031}
 search_space = ps(
-  cost = p_dbl(log(0.1), log(1), trafo = function(x) exp(x)),
+  cost   = p_dbl(-1, 1, trafo = function(x) 10^x),
   kernel = p_fct(c("polynomial", "radial"))
 )
 ```
 
 ```{r}
+#| echo: false
+#| label: fig-technical-paradox-tuning-log
+#| fig-cap: Design Grid for SVM Tuning. Resolution 5 with logarithmic transformation for the cost parameter.
 dat2 = rbindlist(generate_design_grid(search_space, 5)$transpose())
 
-theme_set(theme_bw())
+theme_set(mlr3viz::theme_mlr3())
 ggplot(data = dat2, aes(cost, kernel)) +
-    geom_point() +
-    labs(title = "Grid Based Tuning Space for SVM with log transformation")
+    geom_point()
 ```
 
 :::{.callout-tip}
-Because the logscale tranformation is so common, the domain constructors `p_int()` and `p_dbl()` have a flag `logscale` that can be enabled to use a logarithmic parametrization.
+Because the logscale tranformation is so common, the domain constructors `p_int()` and `p_dbl()` have a flag `logscale` that can be set to use a logarithmic parametrization.
 :::
 
 It is even possible to attach another transformation to the `r ref("ParamSet")` as a whole that gets executed after individual parameter's transformations were performed.
 It is given through the `.extra_trafo` argument and should be a function with parameters `x` and `param_set` that takes a list of parameter values in `x` and returns a modified list.
 This transformation can access all parameter values of an evaluation and modify them with interactions.
 It is even possible to add or remove parameters.
-(The following is a bit of a silly example.)
+
+We believe that the parameter `cost` should be set to a higher value when the `kernel` is `"polynomial."` and therefore shift it to the right by a value of 4.
 
 ```{r optimization-032}
-#| echo: false
-#| label: fig-technical-paradox-trafo
-#| fig-cap: Design Grid for SVM Tuning with Logscale Transformation for Parameter `kernel`. Resolution 5.
 search_space = ps(
-  cost = p_dbl(log(0.1), log(1), trafo = function(x) exp(x)),
+  cost = p_dbl(-1, 1, trafo = function(x) 10^x),
   kernel = p_fct(c("polynomial", "radial")),
   .extra_trafo = function(x, param_set) {
     if (x$kernel == "polynomial") {
-      x$cost = x$cost + 0.5
+      x$cost = x$cost + 2
     }
     x
   }
 )
-dat3 = rbindlist(generate_design_grid(search_space, 5)$transpose())
 ```
 
 ```{r}
 #| echo: false
-theme_set(theme_bw())
-
+#| label: fig-technical-paradox-trafo
+#| fig-cap: Design Grid for SVM Tuning with Logscale Transformation for Parameter `cost`. Resolution is 5.
+dat3 = rbindlist(generate_design_grid(search_space, 5)$transpose())
+theme_set(mlr3viz::theme_mlr3())
 ggplot(data = dat3, aes(cost, kernel)) +
     geom_point()
 ```
@@ -1074,11 +1107,12 @@ These can not be defined in a search space `r ref("ParamSet")`, and they are oft
 When trying to tune over these hyperparameters, it is necessary to perform a Transformation that changes the type of a parameter.
 
 An example is the `class.weights` parameter of the [Support Vector Machine](https://machinelearningmastery.com/cost-sensitive-svm-for-imbalanced-classification/) (SVM), which takes a named vector of class weights with one entry for each target class.
-The trafo that would tune `class.weights` for the `r ref("mlr_tasks_spam")`, `'tsk("spam")` dataset could be:
+The trafo that would tune `class.weights` for the `r ref("mlr_tasks_spam", text = "span")` dataset could be:
 
 ```{r optimization-033}
 search_space = ps(
-  class.weights = p_dbl(0.1, 0.9, trafo = function(x) c(spam = x, nonspam = 1 - x))
+  class.weights = p_dbl(lower = 0.1, upper = 0.9, 
+    trafo = function(x) c(spam = x, nonspam = 1 - x)) 
 )
 ```
 
@@ -1086,7 +1120,7 @@ A common use-case is the necessity to specify a list of values that should all b
 It may be the case that a hyperparameter accepts function objects as values and a certain list of functions should be tried.
 Or it may be that a choice of special numeric values should be tried.
 For this, the `r ref("p_fct")` constructor's `level` argument may be a value that is not a `character` vector, but something else.
-If, for example, only the values `0.1`, `3`, and `10` should be tried for the `cost` parameter, even when doing random search, then the following search space would achieve that:
+If, for example, only the values 0.1, 3, and 10 should be tried for the `cost` parameter, even when doing random search, then the following search space would achieve that:
 
 ```{r optimization-034}
 search_space = ps(
@@ -1120,8 +1154,8 @@ Tuning algorithms that make use of ordering information of parameters, like gene
 For these algorithms, it may make more sense to define a `r ref("p_dbl")` or `r ref("p_int")` with a more fitting trafo.
 :::
 
-Although we have already covered *parameter dependencies* in the previous section, we will quickly cover their role when defining search spaces.
 
+Like in @sec-technical-paradox-define it is possible to specify dependencies between parameters.
 The [Support Vector Machine](https://machinelearningmastery.com/cost-sensitive-svm-for-imbalanced-classification/) (SVM), for example, has the `degree` parameter that is only valid when `kernel` is `"polynomial"`.
 As in the previous section, we can specify this constraint by using the `depends` argument of the domain constructor.
 
@@ -1135,9 +1169,9 @@ search_space = ps(
 )
 ```
 
-#### Creating Tuning ParamSets from other ParamSets {#sec-tune-token}
+#### Creating Tuning ParamSets from other ParamSets {#sec-paradox-tune-token}
 
-Having to define a tuning `r ref("ParamSet")` for a `r ref("Learner")` that already has parameter set information may seem unnecessarily tedious, and there is indeed a way to create tuning `r ref("ParamSet", "ParamSets")` from a `r ref("Learner")`'s `r ref("ParamSet")`, making use of as much information as already available.
+Having to define a tuning `r ref("ParamSet")` for a `r ref("Learner")` that already has parameter set information may seem unnecessarily tedious, and there is indeed a way to create tuning `r ref("ParamSet", "ParamSet")`s from a `r ref("Learner")`'s `r ref("ParamSet")`, making use of as much information as already available.
 
 This is done by setting values of a `r ref("Learner")`'s `r ref("ParamSet")` to so-called `r ref("TuneToken")`s, constructed with a `r ref("to_tune")` call.
 This can be done in the same way that other hyperparameters are set to specific values.
@@ -1146,27 +1180,22 @@ The resulting `r ref("ParamSet")` used for tuning can be retrieved using the `$s
 
 ```{r optimization-039}
 learner = lrn("classif.svm")
-learner$param_set$values$kernel = "polynomial" # for example
-learner$param_set$values$degree = to_tune(lower = 1, upper = 3)
-
-print(learner$param_set$search_space())
-
-rbindlist(generate_design_grid(
-  learner$param_set$search_space(), 3)$transpose()
+learner$param_set$set_values(
+  kernel = "polynomial", # for example
+  degree = to_tune(lower = 1, upper = 3)
 )
+
+learner$param_set$search_space()
 ```
 
 It is possible to omit `lower` here, because it can be inferred from the lower bound of the `degree` parameter itself.
 For other parameters, that are already bounded, it is possible to not give any bounds at all, because their ranges are already bounded.
 An example is the logical `shrinking` hyperparameter:
 ```{r optimization-040}
-learner$param_set$values$shrinking = to_tune()
+learner$param_set$set_values(shrinking = to_tune())
 
-print(learner$param_set$search_space())
+learner$param_set$search_space()
 
-rbindlist(generate_design_grid(
-  learner$param_set$search_space(), 3)$transpose()
-)
 ```
 
 `"to_tune"` can also be constructed with a `r ref("Domain")` object, i.e. something constructed with a `p_***` call.
@@ -1179,12 +1208,12 @@ When introducing the dependency, we need to use the `degree` value from *before*
 :::
 
 ```{r optimization-041}
-learner$param_set$values$cost = to_tune(c(val1 = 0.3, val2 = 0.7))
-learner$param_set$values$shrinking = to_tune(p_lgl(depends = cost == "val2"))
+learner$param_set$set_values(
+  cost = to_tune(c(val1 = 0.3, val2 = 0.7)), 
+  shrinking = to_tune(p_lgl(depends = cost == "val2"))
+)
 
-print(learner$param_set$search_space())
-
-rbindlist(generate_design_grid(learner$param_set$search_space(), 3)$transpose(), fill = TRUE)
+learner$param_set$search_space()
 ```
 
 The `"search_space()` picks up dependencies from the underlying `r ref("ParamSet")` automatically.
@@ -1196,9 +1225,7 @@ learner$param_set$values$cost = NULL
 learner$param_set$values$shrinking = NULL
 learner$param_set$values$kernel = to_tune(c("polynomial", "radial"))
 
-print(learner$param_set$search_space())
-
-rbindlist(generate_design_grid(learner$param_set$search_space(), 3)$transpose(), fill = TRUE)
+learner$param_set$search_space()
 ```
 
 It is even possible to define whole `r ref("ParamSet")`s that get tuned over for a single parameter.
@@ -1207,11 +1234,15 @@ This `r ref("ParamSet")` must, however, have an `.extra_trafo` that returns a li
 Suppose the `class.weights` hyperparameter should be tuned along two dimensions:
 
 ```{r optimization-043}
-learner$param_set$values$class.weights = to_tune(
-  ps(spam = p_dbl(0.1, 0.9), nonspam = p_dbl(0.1, 0.9),
-    .extra_trafo = function(x, param_set) list(c(spam = x$spam, nonspam = x$nonspam))
-))
-head(generate_design_grid(learner$param_set$search_space(), 3)$transpose(), 3)
+par = ps(
+  spam = p_dbl(0.1, 0.9), 
+  nonspam = p_dbl(0.1, 0.9), 
+  .extra_trafo = function(x, param_set) {
+    list(c(spam = x$spam, nonspam = x$nonspam))
+  }
+)
+learner$param_set$set_values(class.weights = to_tune(par))
+learner$param_set$search_space()
 ```
 
 
@@ -1254,7 +1285,6 @@ lgr::get_logger("mlr3")$set_threshold("warn")
 Also note that the optimization packages such as `r mlr3tuning`  `r mlr3fselect` use the logger of their base package `r ref_pkg("bbotk")`.
 To disable the output from `r mlr3`, but keep the output from `r mlr3tuning`, reduce the verbosity for the logger `r mlr3`
 and optionally change the logger `r ref_pkg("bbotk")` to the desired level.
-
 ```{r technical-072, eval=FALSE}
 lgr::get_logger("mlr3")$set_threshold("warn")
 lgr::get_logger("bbotk")$set_threshold("info")
