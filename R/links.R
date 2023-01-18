@@ -34,9 +34,14 @@ ref = function(topic, text = NULL, format = "markdown") {
   } else {
     update_db()
     matched = db$base[db$aliases[list(strip_parenthesis(topic)), c("Alias", "ID"), on = "Alias", nomatch = 0L], on = "ID", nomatch = NULL]
+
+    # remove mlr3verse matches - these are just reexports with no helpful information on the man page
+    matched = matched[get("Package") != "mlr3verse"]
+
     if (nrow(matched) == 0L) {
       stop(sprintf("Could not find help page for topic '%s'", topic))
     }
+
     if (nrow(matched) >= 2L) {
       lgr$warn("Ambiguous link to '%s': %s", topic, paste0(paste(matched$Package, matched$Name, sep = "::"), collapse = " | "))
       matched = head(matched, 1L)
