@@ -25,7 +25,11 @@ ref = function(topic, text = NULL, format = "markdown") {
   checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
-  text = trimws(text)
+  text = if (is.null(text)) {
+    topic
+  } else {
+    trimws(text)
+  }
 
   if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
