@@ -25,6 +25,7 @@ ref = function(topic, text = NULL, format = "markdown") {
   checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
+  text = trimws(text)
 
   if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
@@ -56,12 +57,6 @@ ref = function(topic, text = NULL, format = "markdown") {
     url = sprintf("https://%s.mlr-org.com/reference/%s.html", pkg, name)
   } else {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
-  }
-
-  text = if (is.null(text)) {
-    paste0(pkg, "::", topic)
-  } else {
-    trimws(text)
   }
 
   switch(format,
