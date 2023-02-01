@@ -4,7 +4,6 @@ all: install serve
 help :
 	@echo "install				: Install renv and restore virtual environment."
 	@echo "restore				: Restore virtual environment to state in lock file."
-	@echo "bookinstall			: Install mlr3book without dependencies to virtual environment."
 	@echo "serve				: Start a http server to serve the book."
 	@echo "serverefresh			: Clear cache and start a http server to serve the book."
 	@echo "pdf					: Render book as pdf."
