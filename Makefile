@@ -21,9 +21,6 @@ install:
 restore:
 	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 
-bookinstall:
-	Rscript -e 'renv::install(".", project = "book/")'
-
 serve:
 	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto preview book/
