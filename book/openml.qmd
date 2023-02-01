@@ -1,0 +1,244 @@
+---
+author:
+  - name: Sebastian Fischer
+    orcid: 0000-0002-9609-3197
+    email: sebastian.fischer@stat.uni-muenchen.de
+    affiliations:
+      - name: Ludwig-Maximilians-Universität München
+abstract:
+  To empirically evaluate machine learning algorithms, researchers also need easy access to datasets.
+  OpenML is a platform that aims to facilitate the sharing and dissemination of machine learning research data. 
+  By providing standardized metadata and unique identifiers, one can easily find relevant datasets and share them with others.
+  This chapter teaches the fundemanetals of OpenML, as well as how to use the interface package mlr3oml that integrates mlr3 and OpenML.
+---
+
+# OpenML {#openml}
+
+{{< include _setup.qmd >}}
+
+```{r}
+#| echo: false
+#| output: false
+set.seed(1)
+options(mlr3oml.cache = "openml/cachedir")
+
+lgr::get_logger("mlr3")$set_threshold(NULL)
+
+if (FALSE) {
+
+}
+
+# Because the OpenML server is occasionally down, we have to use the cached results.
+# While the mlr3oml package does support caching, some queries cannot be properly cached (such as listing queries), 
+# Because we want the rendering of the book to be stable, we cache them here nonetheless.
+# Because we assign it in the namespace, these functions are not only cached in the top-level, but also when 
+# they are called internally from other mlr3oml functions, which is what we want.
+
+fns_to_cache = c(
+  "list_oml_data",
+  "list_oml_tasks"
+)
+
+# mlr3misc::walk(fns_to_cache, function(fn) mlr3book::assign_cached(fn, "mlr3oml", "opemml"))
+```
+
+
+<!--  -->
+
+mlr3 is a versatile machine learning framework that caters to the needs of both methodological researchers focused on benchmarking, as well as applied data scientists seeking to solve real-world problems.
+Practitioners and researchers in the field have different objectives when it comes to managing and selecting their machine learning tasks and datasets.
+Whereas the former are interested in solving concrete problems on specific datasets, the latter want to develop algorithms that perform well on a wide variety of tasks.
+While applied data scientists might also find this chapter helpful, this chapter is primarily focused on researchers who conduct benchmark experiments.
+
+When performing benchmark experiments, it is crucial to
+
+1. have convenient access to a comprehensive collection of datasets 
+1. have the ability to filter datasets to easily get the kind of datasets required 
+1. be able to easily share the datasets to allow others to compare their  methods on the same datasets
+
+OpenML is a platform that aims to facilitate the sharing and dissemination of machine learning research data. 
+Its goal is to make it easier for researchers to find the data and algorithms they need to perform their experiments and to compare the results of their work with others. 
+Its design was guided by the FAIR principles, which stands for **F**indable, **A**ccessible, **I**nteroperable and **R**eusable.
+The goal of these principles is to make scientific data and results more easily discoverable and usable by others, promoting transparency, reproducibility, and collaboration in scientific research.
+
+This means that OpenML is a repository for storing, organizing, and retrieving datasets, algorithms, and experimental results in a standardized way.
+Entities have unique identifiers and standardized (meta-data) that can be accessed through a REST API, as well as access through a web interface: [https://openml.org](https://openml.org).
+The dataset with id 31 can for example be found at [https://www.openml.org/d/31](https://www.openml.org/d/31).
+
+Like mlr3, OpenML is free and open source.
+In this chapter, we will teach the basic building blocks of OpenML and how to use it via the interface package mlr3oml.
+It has to be noted, that the `r ref_pkg("mlr3oml")` package currently only supports downloading of objects.
+Uploading objects to OpenML can be achieved e.g. through the website.
+
+## OpenML Ontology {#openml-ontology}
+
+The most important entities on OpenML are the *Dataset*, *Task*, *Flow* and *Run*: 
+
+* Dataset: A dataset with metadata 
+* Task: A machine learning task, i.e. a concrete problem specification on a dataset.
+* Flow: Machine Learning Algorithm or Pipeline
+* Run: The application of a flow, with certain hyperparameters on a task
+
+Their relationship is sketched in the graphic below
+
+```{mermaid}
+%%| label: fig-openml-ontology
+%%| fig-cap: Illustration of the OpenML ontology. A dataset represents a dataset with metadata. A task is a problem specification on a dataset. A flow represents a machine learning algorithm and a Run is the result of the application of a flow on a task.
+%%| alt-text: Flowchart representing biased tuning. The diagram shows input 'Search Space' passed into 'Algorithm' which then has a black arrow to 'Train',then a black arrow to 'Test', then a black arrow to 'Optimal configuration'. This has a red arrow back to 'Algorithm' then to 'Train' then to 'Test' then to 'Performance'. The diagram clearly shows the reuse of the same training and testing data.
+%%{init: { 'flowchart': {'rankSpacing': 75}}}%%
+classDiagram
+
+
+class Dataset {
+  + Data
+  + Description
+  + License
+  + ...
+}
+
+class Task {
+  + Data ID
+  + Task Type
+  + Metadata
+  + ...
+}
+
+class Flow {
+  + Versions
+  + Hyperparameters
+  + ...
+}
+
+class Run {
+  + Flow ID
+  + Task ID
+  + Predictions
+  + Performance Measures
+  + ...
+}
+
+Dataset --> Task
+Task --> Run
+Flow --> Run
+```
+
+In addition to that, there is the *Collection*, which is a container object. A *Task collection* contains task IDs, whereas a *Run Collection* contains run IDs.
+
+In OpenML, tasks are defined by specifying the target variable, evaluation measures, and relevant meta-data, and they can be thought of as being similar to mlr3 tasks with an instantiated resampling. 
+Flows in OpenML represent a machine learning algorithm, including its implementation and hyperparameters, and they can be compared to mlr3 learners. OpenML data can be seen as similar to mlr3 backends. 
+An OpenML run is the execution of a flow on a specific task and dataset, including the resulting predictions, performance measures, and meta-data, and it can be thought of as being equivalent to a mlr3 ResampleResult. 
+OpenML task collections are lists of tasks and can be compared to a list of mlr3 Tasks, while OpenML run collections represent a set of runs and can be compared to a mlr3 Benchmark Result.
+
+<!-- The table below summarizes these conversion. -->
+
+<!-- ```{r} -->
+<!-- | OpenML                    | Converter                          | mlr3                        | -->
+<!-- | :-----------------------: | :----------------------------------: | :--------------------------------: | -->
+<!-- | `r ref("mlr3oml::OMLData")` | `as_data_backend`                   | Real valued parameter ("double")     | When `upper` and `lower` are given | -->
+<!-- | `r ref("mlr3oml::OMLTask")` |                 | Integer parameter                    | When `upper` and `lower` are given | -->
+<!-- | `r ref("mlr3oml::OMLFlow")` |  -->
+<!-- | `r ref("mlr3oml::OMLRun")`            |    | Logical / Boolean parameter          | Always                             | -->
+<!-- | `r ref("mlr3oml::OMLCollection")`            |      | Untyped parameter                    | Never                              |  -->
+
+
+## Dataset {#openml-dataset}
+
+If we know, which dataset we want - i.e. we know its unique identifier - we can load it into R using the function `odt()`, which returns an object of class `r ref("mlr3oml::OMLData")`.
+A difference to a typical `data.frame` in R is that this object comes with metadata that is accessible through its fields. 
+This includes for example a license or data qualities, which are properties of the dataset, which includes for example the class entropy.
+
+```{r}
+library("mlr3oml")
+getwd()
+print(1)
+
+odata = odt(43L)
+odata
+odata$license
+odata$qualities["ClassEntropy", value]
+```
+
+The actual dataset can be accessed through the field `$data`.
+
+```{r}
+odata$data[1:2, ]
+```
+
+
+
+The corresponding `mlr3` object to the OpenML Dataset is the `r ref("DataBackend")` and we can do so by calling `r ref("as_data_backend")`.
+
+```{r}
+backend = as_data_backend(odata)
+backend
+```
+
+
+
+In many situations however, one does not start out with an ID, but one wants to e.g. find certain datasets for an experiment.
+Because datasets on OpenML have such strict metadata, it allows for querying the existing datasets for certain properties.
+The `r ref("mlr3oml::list_oml_data")` allows to execute such queries.
+
+We might for example only be interested in datasets with less than 4 features with 100 - 1000 observations.
+To keep the output readable, we only show the first 5 results from that query.
+
+```{r}
+odatasets = list_oml_data(
+  limit = 5, 
+  number_features = c(0, 4), 
+  number_classes = 2L, 
+  number_instances = c(100, 1000)
+)
+
+odatasets[, .(data_id, NumberOfFeatures, NumberOfInstances)]
+```
+
+## Task {#openml-task}
+
+An OpenML Task is the definition of a machine learning problem on a dataset and they are represented using the `r ref("mlr3oml::OMLTask")` class.
+For a given id, we can load the task using the `r ref("mlr3oml::otsk")` sugar function.
+The code below loads a classification task on the credit-g dataset.
+OpenML tasks are built upon datasets, so we can access the id of the corresponding dataset.
+
+Like mlr3, OpenML allows for different task types, which includes for example regression, classification or clustering.
+A difference between OpenML and mlr3 tasks is that the former also includes a data-split, which is an instantiated resampling in mlr3 terms.
+
+```{r}
+otask = otsk(31)
+otask
+```
+
+For that reason a `r ref("mlr3oml::OMLTask")` object can be converted to either a task or a resampling by calling the respective converter.
+
+```{r}
+resampling = as_resampling(otask)
+task = as_task(otask)
+```
+
+As a short-form, it is also possible to create theses objects by using the `"oml"` task or resampling.
+
+
+```{r}
+resampling = rsmp("oml", task_id = 31)
+task = tsk("oml", task_id = 31)
+```
+
+## Flow {#openml-flow}
+
+OpenML not only allows to share datasets and tasks, but also the results of machine learning experiments.
+To enable this, OpenML allows to upload tasks, which are comparable to mlr3 learners.
+In mlr3oml, flows are represented using the `r ref("OMLFlow")` class.
+
+## Run {#openml-run}
+
+An OpenML Run is the application of a flow, with a certain parameter specification to a task.
+Runs are represented using the `r ref("OMLRun")` class.
+
+```{r}
+```
+
+
+## Technical Details {#}
+
+
+
