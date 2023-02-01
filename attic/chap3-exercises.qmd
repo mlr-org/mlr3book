@@ -11,6 +11,9 @@ Workshopping exercises & solutions here until they can be moved into place
 library(mlr3verse)
 ```
 
+
+## `zoo` CV + LOO (weird example accidentally)
+
 1. You want to evaluate a decision tree classification learner (`classif.rpart`) on the `zoo` task, but you're unsure which resampling strategy is appropriate.
 One of your colleagues recommends to use 5-fold cross-validation while another colleague swears by leave-one-out cross-validation ("LOO").
 Your goal is to maximize classification accuracy.
@@ -51,10 +54,6 @@ rr2$score(measure)[, .(resampling_id, iteration, classif.acc)]
 ```
 
 
-## Vague ideas
-
-- Case where one CV fold errors / needs further investigation?
-- Can't think of smaller projects that don't cut into the optimization chapter (e.g. nested resampling, tuning :/)
 
 ## Manual Resampling Pitfalls
 
@@ -131,4 +130,198 @@ table(task$data(cols = task$target_names, rows = resampling_holdout$train_set(1)
 ```
 
 
-## <Better Benchmarking Exercise?>
+
+## Variance of Holdout and Subsampling
+
+> Note: Idea is to show variance of holdout and subsampling depending on `ratio` to illustrate where the default values for these strategies come from.
+i2ml has an example likes this, but on simulated data and more involved code to collect results, so for the book I thought it would be better to
+a) use a ready-made task (rather than a task generator, or `mlbench` directly)
+b) keep the code "simple enough" such that users don't need to do much more than wrapping their existing mlr3 API knowledge in a loop.
+c) keep the code fast enough such that ideally the book can render it without wasting too much time, otherwise include solutions code as `eval: false` and either don't provide a result figure or include a pre-rendered png/pdf?
+
+I'm not sure if the current approaches below are good enough in those regards.
+
+### Using holdout and subsampling
+
+3.1 - Evaluate the `"classif.rpart"` learner on the `"sonar"` task using 
+ a) the `"subsampling"` resampling strategy for multiple values of `ratio` (e.g. `0.1` through `0.9` in steps of `0.05`) and `repeats = 30`
+ b) the `"holdout"` resampling strategy using the same values for `"ratio"`.
+Aggregate the resampling results using the classification accuracy measure and collect the results in a table.
+Visualize the results with boxplots of the accuracy on the y-axis, the `ratio` on the x-axis and different colors for the resampling strategy.
+What do you notice about the variability of the results? 
+
+
+N.B. Lower number of iterations/repeats to not explode book build time
+
+```{r}
+library(mlr3verse)
+library(ggplot2)
+library(data.table)
+task = tsk("sonar")
+learner = lrn("classif.rpart")
+replications = 10
+subsampling_repeats = 10
+
+grid = expand.grid(
+  i = seq_len(replications),
+  ratio = seq(0.05, 0.9, 0.05)
+)
+
+head(grid)
+
+res_holdout = mapply(function(i, ratio) {
+  acc = resample(
+    task = task,
+    learner = learner,
+    resampling = rsmp("holdout", ratio = ratio)
+  )$score(msr("classif.acc"))
+  
+  acc$ratio = ratio
+  acc
+}, i = grid$i, ratio = grid$ratio, SIMPLIFY = FALSE)
+
+res_holdout = rbindlist(res_holdout)
+length(res_holdout)
+head(res_holdout)
+
+res_subsample = mapply(function(i, ratio) {
+  acc = try(resample(
+    task = task,
+    learner = learner,
+    resampling = rsmp("subsampling", repeats = subsampling_repeats, ratio = ratio)
+  )$score(msr("classif.acc")))
+  
+  acc$ratio = ratio
+  acc
+}, i = grid$i, ratio = grid$ratio, SIMPLIFY = FALSE)
+
+res_subsample = rbindlist(res_subsample)
+length(res_subsample)
+head(res_subsample)
+
+res = rbindlist(list(res_holdout, res_subsample))
+
+ggplot(res, aes(x = factor(ratio), y = classif.acc, fill = resampling_id, color = resampling_id)) +
+  geom_boxplot(alpha = 2/3) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  scale_fill_brewer(palette = "Dark2", aesthetics = c("color", "fill")) +
+  labs(
+    title = "Variance of Resampling Methods",
+    subtitle = sprintf("Compared over %i iterations. Subsampling with %i repeats each.", replications, subsampling_repeats),
+    y = "Classification Accuracy", x = "Sampling Ratio",
+    color = "", fill = ""
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+
+### Subsampling only
+
+3.2 - Evaluate the `"classif.rpart"` learner on the `"sonar"` task using the `"subsampling"` resampling strategy for multiple values of `ratio` (e.g. `0.1` through `0.9` in steps of `0.05`) and `repeats` (e.g. `c(5, 30, 60, 100)`).
+Score each resampling iteration using the classification accuracy measure and collect the results in a table.
+Visualize the results with boxplots of the accuracy on the y-axis, the `ratio` on the x-axis and different colors for the subsampling repetitions (`repeats`).
+What do you notice about the variability of the results? 
+
+```{r}
+library(mlr3verse)
+library(ggplot2)
+library(data.table)
+task = tsk("sonar")
+learner = lrn("classif.rpart")
+
+grid = expand.grid(
+  repeats = c(5, 30, 60, 100),
+  ratio = seq(0.10, 0.9, 0.1)
+)
+
+head(grid)
+
+res_subsample_only = mapply(function(repeats, ratio) {
+  acc = try(resample(
+    task = task,
+    learner = learner,
+    resampling = rsmp("subsampling", repeats = repeats, ratio = ratio)
+  )$score(msr("classif.acc")))
+  
+  acc$ratio = ratio
+  acc$repeats = repeats
+  acc
+  
+}, repeats = grid$repeats, ratio = grid$ratio, SIMPLIFY = FALSE)
+
+res_subsample_only = rbindlist(res_subsample_only)
+head(res_subsample_only)
+
+ggplot(res_subsample_only, aes(x = factor(ratio), y = classif.acc, fill = factor(repeats), color = factor(repeats))) +
+  geom_boxplot(alpha = 2/3) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  scale_fill_brewer(palette = "Dark2", aesthetics = c("color", "fill")) +
+  labs(
+    title = "Subsampling Variance",
+    y = "Classification Accuracy", x = "Sampling Ratio",
+    color = "Subsampling Repetitions", fill = "Subsampling Repetitions"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+### From i2ml (slow but thorough)
+
+```{r, eval = FALSE}
+set.seed(123L)
+
+n_reps = 50L
+ss_iters = 50L
+split_rates = seq(0.05, 0.95, by = 0.05)
+n_1 = 100000L
+n_2 = 500L
+data = data.table::as.data.table(mlbench::mlbench.spirals(n_1, sd = 0.1))
+
+# EXPERIMENT -------------------------------------------------------------------
+
+learner = mlr3::lrn("classif.rpart")
+task = mlr3::TaskClassif$new("spirals", backend = data, target = "classes")
+
+resampling = mlr3::rsmp(
+   "subsampling", 
+   ratio = n_2 / n_1, 
+   repeats = ss_iters * 10L) 
+
+resampling_result = mlr3::resample(
+   task, 
+   learner, 
+   resampling, 
+   store_models = FALSE)
+
+true_performance = resampling_result$aggregate(mlr3::msr("classif.ce"))
+
+results = array(
+   NA, 
+   dim = c(length(split_rates), ss_iters, n_reps),
+   dimnames = list(split_rates, seq_len(ss_iters), seq_len(n_reps)))
+
+for (i in seq_len(n_reps)) {
+   
+   task_subset = task$clone()$filter(sample(n_1, n_2))
+   
+   for (j in seq_along(split_rates)) {
+      
+      this_split = split_rates[j]
+      mlr3misc::messagef("rep = %i;  splitrate = %g", i, this_split)
+      
+      resampling_result_subset = mlr3::resample(
+         task_subset, 
+         learner, 
+         mlr3::rsmp(
+            "subsampling", 
+            ratio = this_split, 
+            repeats = ss_iters))
+      
+      results[j, , i] = resampling_result_subset$score()$classif.ce
+      
+   }
+}
+```
+
