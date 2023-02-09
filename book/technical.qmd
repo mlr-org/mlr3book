@@ -30,22 +30,45 @@ This includes the following topics:
 ## Parallelization {#sec-parallelization}
 
 Parallelization refers to running multiple jobs in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
-This process allows for significant savings in computing power.
+This process allows for significant savings in computing time.
 
 In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, [threads](https://en.wikipedia.org/wiki/Thread_(computing)) or [forks](https://en.wikipedia.org/wiki/Fork_(system_call)) are ways to utilize all cores.
 If you have multiple machines, they need a way to communicate and exchange information, e.g. via protocols like network sockets or the [Message Passing Interface (MPI)](https://en.wikipedia.org/wiki/Message_Passing_Interface).
+Larger computational sites rely on a scheduler to orchestrate the computation for multiple users.
 We don't want to delve too deep into such details here, but want to introduce some terminology:
 
-* We call the parallelization platform together with its implementation for R the **parallelization backend**.
-  As many parallelization backends have a different API, we are using the `r ref_pkg("future")` package as an additional abstraction layer.
-  `r mlr3` just interfaces `r ref_pkg("future")` while the user can control how the code is executed.
-* The R session or process which orchestrates the computational work is called **main**, and it starts computational **jobs**.
-* The R sessions, processes, forks or machines which receive the jobs, do the calculation and then send back the result are called **workers**.
+* We call the parallelization platform together with its implementation for R the `r define("parallelization backend")`.
+  As many parallelization backends have a different API, we are using the `r ref_pkg("future")` package as an abstraction layer for many parallelization backends.
+  `r mlr3` just interfaces `r ref_pkg("future")` while the user can control how the code is executed by configuring a backend.
+* The R session or process which orchestrates the computational work is called `r define("main")`, and it starts computational `r define("jobs")`.
+* The R sessions, processes, forks or machines which receive the jobs, do the calculation and then send back the result are called `r define("workers")`.
 
-We distinguish between [*implicit parallelism*](#sec-implicit) and [*explicit parallelism*](#sec-explicit).
-For the former, no special directives are required to enable the parallelization, everything works fully automatically.
-For the latter, parallelization has to be manually configured.
-On the one hand, this gives you full control over the execution, but on the other hand, this poses a greater obstacle for non-experts.
+An important step in parallel programming involves the identification of sections of the program flow which are time-consuming (otherwise parallelization would not make sense) and also can run in parallel to a different section.
+The key characteristic is that these sections do not build sequentially on each other, i.e. results of the other section are not needed to start one section.
+Fortunately, these sections are comparably easy to spot for machine learning experiments:
+
+1. The learning algorithm (or other computationally intensive parts of a machine learning pipeline (@sec-pipelines)) *may* contain independent sections which can run in parallel, e.g.
+    * A single decision tree iterates over all features to find the best split point, for each feature independently.
+    * A random forest usually fits hundreds of trees independently.
+    * Many feature filters work in a univariate fashion, i.e. calculate a numeric score for each feature independently.
+2. A resampling consists of independent repetitions of train-test-splits.
+3. A benchmark consists of multiple independent resamplings.
+4. Tuning is repeated benchmarking (although embedded in a sequential procedure which determines the hyperparameter configurations to try next).
+    Additionally, some tuners propose multiple configurations to evaluate independently in each step, which provides a second level for parallelization.
+
+When computational problems are so easy to parallelize like the examples listed in (1)-(4), they are often referred to as `r define("embarrassingly parallel")`.
+If you can write it down with a map-like function like `lapply()`, you are facing an embarrassingly parallel problem.
+Such problems are straightforward to parallelize with R, e.g., with the `r ref_pkg("furrr")` package providing map-like functions executed in parallel via the `r ref_pkg("future")` framework.
+
+However, note that it does not make practical sense to actually execute in parallel every operation that can be parallelized.
+Starting and terminating workers as well as possible communication between workers comes at a price in the form of additionally required runtime which is called `r define("parallelization overhead")`.
+The overhead must be related to the runtime of the sequential execution.
+If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity and can even slow down the execution.
+
+<!-- We distinguish between [*implicit parallelism*](#sec-implicit) and [*explicit parallelism*](#sec-explicit). -->
+<!-- For the former, no special directives are required to enable the parallelization, everything works fully automatically. -->
+<!-- For the latter, parallelization has to be manually configured. -->
+<!-- On the one hand, this gives you full control over the execution, but on the other hand, this poses a greater obstacle for non-experts. -->
 
 :::{.callout-note}
 We don't cover parallelization on GPUs here.
@@ -70,12 +93,6 @@ After all threads have finished, the results are collected and merged before ter
 I.e., for our example of the decision tree, (1) the $p$ best cut points per feature are collected and then (2) aggregated to the single best cut point across all features by just iterating over the $p$ results sequentially.
 
 
-:::{.callout-warning}
-It does not make practical sense to actually execute in parallel every operation that can be parallelized.
-Starting and terminating workers (here: threads) as well as possible communication between workers comes at a price in the form of additionally required runtime which is called (parallelization) overhead.
-The overhead must be related to the runtime of the sequential execution.
-If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity and slows down the execution.
-:::
 
 Unfortunately, threading conflicts with certain parallel backends used during explicit parallelization, causing the system to be overutilized in the best case and causing hangs or segfaults in the worst case.
 For this reason, we introduced the convention that implicit parallelization is turned off per default.
