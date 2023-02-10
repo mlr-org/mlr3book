@@ -152,14 +152,9 @@ plot_probregr(p, 3, "point", "random") +
 The `$distr` column in our `r ref("PredictionRegr")` contains objects inheriting from `r ref("distr6::Distribution")`, which allows querying of all standard probability distribution methods and properties, as we have seen in the code above.
 This example shows that although none of our predictions were perfect -- the truth was not exactly in line with the peak of the predicted distributions -- in each case the truth was at least within an area of reasonable confidence.
 In future versions of `r mlr3proba` we will extend functionality further by adding models that can make probabilistic predictions (e.g., with Bayesian methods), more losses (e.g., Brier score), and a dedicated predict type for interval predictions.
+We now turn to the next task implemented in `r mlr3proba`, which follows closely from probabilistic regression.
 
 ## Survival Analysis {#sec-survival}
-
-```{r special-001, include = FALSE}
-library(mlr3proba)
-library(mlr3extralearners)
-library(mlr3viz)
-```
 
 Survival analysis is concerned with the prediction or estimation of time-to-event distributions, for example the time until a marathon runner finishes a race.
 The predictive problem is unique in that models are trained and tested on data that may include 'censoring'.
@@ -180,7 +175,7 @@ Readers familiar with survival analysis will recognise that the description abov
 Currently, this is the only form of censoring available in the `r mlr3` universe hence restricting our discussion to that setting.
 For a good introduction to survival analysis see @Collett2014 or for machine learning in survival analysis specifically see @MLSA.
 
-For the remainder of this section we will look at how `r mlr3proba` [@mlr3proba] extends the building blocks of `r mlr3` for survival analysis.
+For the remainder of this section we will look at how `r mlr3proba` [@mlr3proba] extends the building blocks of `r mlr3` for survival analysis. We will begin by looking at objects used to construct machine learning tasks for survival analysis, then we will turn to the learners we have implemented to solve these tasks, before looking at measures for evaluating survival analysis predictions, and then finally we will consider how to transform prediction types.
 
 ```{r, echo=FALSE}
 #| fig-alt:
@@ -211,9 +206,9 @@ ggplot(data.frame(x = c(1, 2, 5, 7, 10), y = 1:5), aes(x = x, y = y)) +
   theme_minimal() + theme(panel.grid.minor = element_blank())
 ```
 
-### Survival Learners, Tasks, Measures, and Predictions {#sec-survival-changes}
+### TaskSurv
 
-As we saw above, survival algorithms require two targets for training, this means the new `r ref("TaskSurv")` object  expects two targets.
+As we saw in the introduction to this section, survival algorithms require two targets for training, this means the new `r ref("TaskSurv")` object  expects two targets.
 The simplest way to create a survival task is to use `r ref("as_task_surv")`, as seen in the following code chunk.
 
 ```{r special-002}
@@ -229,113 +224,235 @@ print(task)
 
 The inputs to `r ref("as_task_surv")` follow `r ref("survival::Surv")`, so in theory there is support for left and interval censoring, as well as for competing risks, however no learners have been implemented at the time of writing that allow for these methods.
 
-In construction, `r ref("TaskSurv")` objects coerce the target columns into a survival object. We have also included a specific `autoplot` for these objects to quickly create Kaplan-Meier plots to visualise the outcome.
+In construction, `r ref("TaskSurv")` objects coerce the target columns into a survival object.
+We have also included a specific `autoplot` for these objects to quickly create Kaplan-Meier plots to visualise the outcome.
 
 ```{r, warning=FALSE, message=FALSE}
 head(task$truth())
 autoplot(task)
 ```
 
-#### Predict Types - crank, lp, and distr
+We have also included a few pre-loaded tasks in `r mlr3proba` that can be used in experiments
 
-Every `r ref("PredictionSurv")` object can predict one or more of:
-
-* `lp` - Linear predictor calculated as the fitted coefficients multiplied by the test data.
-* `distr` - Predicted survival distribution, either discrete or continuous.
-  Implemented in `r ref_pkg("distr6")`.
-* `crank` - Continuous risk ranking.
-* `response` - Predicted survival time.
-
-`lp` and `crank` can be used with measures of discrimination such as the concordance index.
-Whilst `lp` is a specific mathematical prediction, `crank` is any continuous ranking that identifies who is more or less likely to experience the event.
-So far the only implemented learner that only returns a continuous ranking is `surv.svm`.
-If a `r ref("PredictionSurv")` returns an `lp` then the `crank` is identical to this.
-Otherwise `crank` is calculated as the expectation of the predicted survival distribution.
-Note that for linear proportional hazards models, the ranking (but not necessarily the `crank` score itself) given by `lp` and the expectation of `distr`, is identical.
-
-The example below uses the `r ref("mlr_tasks_rats", text = "rats")` task shipped with `r mlr3proba`.
-
-```{r special-003}
-task = tsk("rats")
-learn = lrn("surv.coxph")
-
-train_set = sample(task$nrow, 0.8 * task$nrow)
-test_set = setdiff(seq_len(task$nrow), train_set)
-
-learn$train(task, row_ids = train_set)
-prediction = learn$predict(task, row_ids = test_set)
-
-print(prediction)
+```{r}
+as.data.table(mlr_tasks)[task_type == "surv"]
 ```
 
-### New features {#sec-survival-new}
+### LearnerSurv, PredictionSurv and predict types
 
-Finally we take a look at the `r ref("PipeOp")`s implemented in `r mlr3proba`, which are used for composition of predict types.
-For example, a predict linear predictor does not have a lot of meaning by itself, but it can be composed into a survival distribution.
-See `r mlr3pipelines` for full tutorials and details on `r ref("PipeOp")`s.
+The interface for `r ref("LearnerSurv")` and `r ref("PredictionSurv")` objects is identical to the regression and classification settings discussed in @sec-basics.
+Similarly to these settings, survival learners are constructed with `"lrn"`, a few of the available learners are listed below.
+
+```{r}
+mlr_learners$keys("^surv")
+```
+
+The primary difference in constructing a survival learner (and the resulting predictions) is the number of possible `predict_type` options that can be passed to `r ref("lrn")`.
+
+Similarly to deterministic regression (@sec-tasks), a survival model can make a single point prediction, and similarly to probabilistic regression (@sec-probregr), a survival model could also make a prediction of a probability distribution.
+`r mlr3proba` has a slightly different design interface to `r mlr3` as all possible types of prediction ('predict types') are returned for all survival models.
+The reason for this decision is that all these predict types can be transformed to one another and it is therefore computationally simpler to return all at once instead of rerunning models to change predict type.
+In survival analysis, the following predictions can be made:
+
+* `response` - Predicted survival time.
+* `distr` - Predicted survival distribution, either discrete or continuous.
+* `lp` - Linear predictor calculated as the fitted coefficients multiplied by the test data.
+* `crank` - Continuous risk ranking.
+
+We will go through each of these prediction types in more detail and with examples to make them less abstract.
+We will use the following setup for most of the examples.
+In this chunk we are partitioning the `r ref("survival::rats")` and training a `r define("Cox Proportional Hazards")` model on the training set and making predictions for the predict set.
+For this model, all predict types except `response` can be computed.
+
+```{r}
+t = tsk("rats")
+split = partition(t)
+p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
+p
+```
+
+#### `predict_type = "response"`
+
+Counterintuitively for many, the `response` prediction of predicted survival times is actually the least common predict type in survival analysis.
+The likely reason for this is due to the presence of censoring.
+We rarely observe the true survival time for many observations and therefore it is unlikely any survival model can confidently make predictions for survival times.
+This is illustrated in the code below.
+We train and predict from a survival support vector machine from `r ref_pkg("survivalsvm")`, we use `type = "regression"` to select the algorithm that optimises survival time predictions.
+We then compare the predictions from the model to the true data.
+As can be seen from the output, our predictions are all less than the true observed time, which means we know our model definitely underestimated the truth.
+However, because each of the true values are censored times, we have absolutely no way of knowing if these predictions are slightly bad or absolutely terrible, i.e., the true survival times could be $105, 92, 92$ or they could be $300, 1000, 200$.
+Hence, with no realistic way to evaluate these models, survival time predictions are rarely useful.
+It is also worth noting here that the nature of survival analysis means that it is rare to find high-quality datasets without a substantial amount of censoring.
+
+```{r}
+library(mlr3extralearners)
+# we use a different learner here as few survival models make a response prediction
+pred = lrn("surv.svm", type = "regression", gamma.mu = 1e-3)$
+  train(t, split$train)$predict(t, split$test)
+data.frame(pred = pred$response[1:3], truth = pred$truth[1:3])
+```
+
+#### `predict_type = "distr"`
+
+So unlike regression in which deterministic/point predictions are most common, in survival analysis the most common prediction type is actually distribution predictions.
+You will therefore find that the majority of survival models in `r mlr3proba` will make distribution predictions by default.
+As with probabilistic regression, we implement these predictions using the `r ref_pkg("alan-turing-institute/distr6")` interface, which allows visualisation and evaluation of survival curves.
+In the example below we train a Cox PH model on the `rats` dataset and then plot the survival function of the first three predictions and evaluation this function for all three predictions at $t = 40,70,120$.
+
+```{r}
+t = tsk("rats")
+split = partition(t)
+p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
+plot(p$distr[1:3], fun = "survival")
+p$distr[1:3]$survival(c(40, 70, 120))
+```
+
+#### `predict_type = "lp"`
+
+`lp`, often written as $\eta$ in academic writing, is computationally the simplest prediction and has a natural analogue in regression modelling.
+Readers familiar with linear regression will know that when fitting a simple linear regression model, $Y = X\beta$, we are actually estimating the values for $\beta$, and the estimated linear predictor is then $X\hat{\beta}$, where $\hat{\beta}$ are our estimated values.
+In simple survival models, the linear predictor is the same quantity (but estimated in a slighty more complicated way).
+The implementations in `r mlr3proba` are primarily machine-learning focused and few of these models have a simple linear form, which means that `lp` cannot be computed for most of these.
+
+#### `predict_type = "crank"`
+
+The final prediction type, `crank`, is the most common in survival analysis and also the most confusing.
+Academic texts will often refer to 'risk' predictions in survival analysis (hence why survival models are often known as 'risk prediction models'), without defining what 'risk' means.
+Often risk is defined as $exp(\eta)$ as this is a common quantity found in simple linear survival models.
+However, sometimes risk is defined as $exp(-\eta)$, and sometimes it can be an arbitrary quantity that does not have a meaningful interpretation.
+To prevent this confusion in `r mlr3proba`, we define the predict type `crank`, which stands for **c**ontinuous **rank**ing.
+This is best explained by example.
+Continuing from the previous example we output the first three crank predictions.
+The output tells us that the first rat is at the higher risk of death (larger values represent higher risk) and the second rat is at the lowest risk of death.
+The distance between predictions also tells us that the difference in risk between the first and second rat is smaller than the difference between the second and third.
+The key points in this interpretation are: 1) lower values represent lower risk; 2) the difference between values has meaning but should not be over-interpreted; and 3) the actual values are meaningless.
+The last point is the most important, comparing these values between samples is not meaningful.
+The reason why this predict type interesting, and so common, is because it allows identifying observations at lower/higher risk to each other, which is useful for resource allocation and prioritisation, and clinical trials (e.g., "are people in a treatment arm at lower risk of X than people in the control arm.").
+
+```{r}
+p$crank[1:3]
+```
+
+### MeasureSurv
+
+Survival models in `r mlr3proba` are evaluated with `r ref("MeasureSurv")` objects, which are constructed in the usual way with `"msr"`; measures currently implemented are listed below.
+
+```{r}
+mlr_measures$keys("^surv")
+```
+
+Survival measures will evaluate one of the four prediction types listed above.
+In general survival measures can be grouped into the following:
+
+1. Discrimination measures - Quantify if a model correctly identifies if one observation is at higher risk than another. Evaluates `crank` predictions.
+1. Calibration measures - Quantify if the average prediction is close to the truth (all definitions of calibration are unfortunately vague in a survival context). May evaluate `crank` or `distr` predictions.
+1. Scoring rules - Quantify if probabilistic predictions are close to true values. Evalutes `distr` predictions.
+
+```{r}
+head(as.data.table(mlr_measures)[task_type == "surv", c("key", "predict_type")])
+```
+
+There is a lot of debate in the literature around the 'best' survival measures to use to evaluate models, as a general rule we recommend `"surv.rcll"` to evaluate the quality of `distr` predictions, `"surv.cindex"` to evaluate a model's discrimination, and `"surv.dcal"` to evaluate a model's calibration.
+
+### Composition
+
+Throughout `r mlr3proba` documentation we refer to "native" and "composed" predictions.
+We define a 'native' prediction as the prediction made by a model without any post-processing, whereas a 'composed' prediction is one that is returned after post-processing.
+
+#### Internal composition
+
+In `r mlr3proba` we make use of composition internally to return a `"crank"` prediction for every learner.
+This is to ensure that we can meaningfully benchmark all models according to at least one critierion.
+The package uses the following rules to create `"crank"` predictions:
+
+1. If a model returns a 'risk' prediction then `crank = risk` (we may multiply this by $-1$ to ensure the 'low value low risk' interpretation).
+1. Else if a model returns a `response` prediction then we set `crank = -response`.
+1. Else if a model returns a `lp` prediction then we set `crank = lp` (or `crank = -lp` if needed).
+1. Else if a model returns a `distr` prediction then we set `crank` as the sum of the cumulative hazard function (see @Sonabend2022 for full discussion as to why we picked this method).
+
+#### Explicit composition and pipelines
+
+At the start of this section we mentioned that it is possible to transform prediction types between each other.
+In `r mlr3proba` this is possible with 'compositor' pipelines (@sec-pipelines).
+There are a number of pipelines implemented in the package but two in particular focus on predict type transformation:
+
+1. `r ref("pipeline_crankcompositor")` - Transforms a `"distr"` prediction to `"crank"`; and
+1. `r ref("pipeline_distrcompositor")` - Transforms a `"lp"` prediction to `"distr"`.
+
+In practice, the second pipeline is more common as we internally use a version of the first pipeline whenever we return predictions from survival models.
+You may want to use the first pipeline to overwrite the default method of transforming distributions to rankings.
+For now we will just look at the second pipeline.
+
+In the example below we load the `rats` dataset, remove factor columns, and then partition the data into training and testing.
+We construct the `distrcompositor` pipeline around a survival GLMnet learner which by default can only make predictions for `"lp"` and `"crank"`.
+In the pipeline we specify that we will estimate the baseline distribution with a `r define("Kaplan-Meier")` estimator (`estimator = "kaplan") and that we want to assume a proportional hazards form for our estimated distribution.
+We then train and predict in the usual way and in our output we can now see a `distr` prediction.
 
 ```{r special-004, eval = FALSE}
-library("mlr3pipelines")
-library("mlr3learners")
-# PipeOpDistrCompositor - Train one model with a baseline distribution,
-# (Kaplan-Meier or Nelson-Aalen), and another with a predicted linear predictor.
+library(mlr3verse)
+library(mlr3extralearners)
+
 task = tsk("rats")
-# remove the factor column for support with glmnet
 task$select(c("litter", "rx"))
-learner_lp = lrn("surv.glmnet")
-learner_distr = lrn("surv.kaplan")
-prediction_lp = learner_lp$train(task)$predict(task)
-prediction_distr = learner_distr$train(task)$predict(task)
-prediction_lp$distr
+split = partition(task)
 
-# Doesn't need training. Base = baseline distribution. ph = Proportional hazards.
+learner = lrn("surv.glmnet")
 
-pod = po("compose_distr", form = "ph", overwrite = FALSE)
-prediction = pod$predict(list(base = prediction_distr, pred = prediction_lp))$output
+# no distr output
+learner$train(task, split$train)$predict(task, split$test)
 
-# Now we have a predicted distr!
+pipe = as_learner(ppl(
+  "distrcompositor",
+  learner = learner,
+  estimator = "kaplan",
+  form = "ph"
+))
 
-prediction$distr
-
-# This can all be simplified by using the distrcompose pipeline
-
-glm.distr = ppl("distrcompositor", learner = lrn("surv.glmnet"),
-  estimator = "kaplan", form = "ph", overwrite = FALSE, graph_learner = TRUE)
-glm.distr$train(task)$predict(task)
+# now with distr
+pipe$train(task, split$train)$predict(task, split$test)
 ```
+
+Mathematically, we have done the following:
+
+1. Assume our estimated distribution will have the form $h(t) = h_0(t)exp(\eta)$ where $h$ is the hazard function and $h_0$ is the baseline hazard function.
+1. Estimate $\hat{\eta}$ prediction using GLMnet
+1. Estimate $\hat{h}_0(t)$ with the Kaplan-Meier estimator
+1. Put this all together as $h(t) = \hat{h}_0(t)exp(\hat{\eta})$
+
+For more details about prediction types and compositions we recommend @Kalbfleisch2011.
+
 
 ### Putting it all together {#sec-survival-all}
 
-Finally, we conduct a small benchmark study on the `r ref("mlr_tasks_rats", text = "rats")` task using some of the integrated survival learners:
+Finally, let's put all the above into practice in a small benchmark experiment.
+We first load the `r ref("grace")` dataset and subset to the first 500 rows.
+We then select the right-censored logloss measure to evaluate distribution predictions, setup the same pipeline we used in the previous experiment, and load a Cox PH and Kaplan-Meier estimator.
+We run our experiment with 3-fold cross-validation and aggregate the results.
 
-```{r special-005}
-library("mlr3learners")
+```{r special-005, warning=FALSE}
+library(mlr3verse)
+library(mlr3extralearners)
 
-task = tsk("rats")
+task = tsk("grace")$filter(1:500)
+measures = msrs(paste0("surv.", c("cindex", "dcalib", "rcll")))
 
-# some integrated learners
-learners = lrns(c("surv.coxph", "surv.kaplan", "surv.ranger"))
-print(learners)
+pipe = as_learner(ppl(
+  "distrcompositor",
+  learner = lrn("surv.glmnet"),
+  estimator = "kaplan",
+  form = "ph"
+))
+pipe$id = "Coxnet"
+learners = c(lrns(c("surv.coxph", "surv.kaplan")), pipe)
 
-# Harrell's C-Index for survival
-measure = msr("surv.cindex")
-print(measure)
-
-set.seed(1)
 bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
-bmr$aggregate(measure)
-autoplot(bmr, measure = measure)
+bmr$aggregate(measures)[,
+  c("learner_id", "surv.cindex", "surv.dcalib", "surv.rcll")]
 ```
 
-The experiment indicates that both the Cox PH and the random forest have better discrimination than the Kaplan-Meier baseline estimator, but that the machine learning random forest is not consistently better than the interpretable Cox PH.
+In this small experiment, Coxnet and Cox PH have the best discrimination, Cox PH has the best calibration, and Coxnet and Cox PH seem equally good at overall predictive accuracy.
 
 ## Density Estimation {#sec-density}
-
-```{r special-006, include = FALSE}
-library(mlr3proba)
-library(mlr3extralearners)
-library(mlr3viz)
-```
 
 Density estimation is the learning task to find the unknown distribution from which an i.i.d. data set is generated.
 We interpret this broadly, with this distribution not necessarily being continuous (so may possess a mass not density).
