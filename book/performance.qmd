@@ -29,9 +29,10 @@ abstract: |
 <!-- TODO: Check crossrefs, e.g. (#measures) lead so chapter "Special Tasks" -->
 
 <!-- why performance estimation, what is a performance measure -->
-A deployed supervised machine learning model should generalize well to new, unseen data.
-Estimating this `r index("generalization performance")` is crucial for many aspects of machine learning application and research --- whether we want to fairly compare a novel algorithm with established methods or find the best algorithm among many options for a particular task through tuning (which will be discussed in depth in Chapter @sec-optimization) --- we always rely on this performance estimate.
-To properly assess the `r index("generalization performance")` of a model, we must first decide on a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
+In supervised machine learning, a model which is deployed in practice is expected to generalize well to new, unseen data.
+Accurate estimation of this so-called `r index("generalization performance")` is crucial for many aspects of machine learning application and research --- whether we want to fairly compare a novel algorithm with established ones or to find the best algorithm for a particular task after tuning --- we always rely on this performance estimate.
+Hence, performance estimation is a fundamental concept used for model selection, model comparison, and hyperparameter tuning (which will be discussed in depth in Chapter @sec-optimization) in supervised machine learning.
+To properly assess the generalization performance of a model, we must first decide on a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
 <!-- The measure computes a numeric score indicating, e.g., how well the model predictions match the ground truth. -->
 <!-- However, it may also reflect other qualities such as the time for training a model. -->
 <!-- motivate the need for splitting the data -->
@@ -56,11 +57,16 @@ On the other hand, we also want as much test data as possible to reliably estima
 However, both goals are not possible if we have only access to a limited amount of data.
 
 <!-- explain resampling -->
-To address this issue, [`r index("resampling")` strategies](#sec-resampling) repeatedly split all available data into multiple training and test sets and average the performance over multiple resampling iterations (see @fig-ml-abstraction for an illustration).
-A higher number of resampling iterations can reduce the variance and result in a more reliable performance estimate. <!-- Removed reference to exercise since we discussed that this aspect is too important to leave to an exercise, maybe this should be a gallery post or even link to I2ML? -->
-Resampling allows using more data points for testing while keeping the training sets as large as possible.
-They usually use all available data to assess the performance and thereby avoid the performance estimate from being skewed by a particular split which is a known issue of the holdout method.
-However, since resampling strategies create multiple intermediate models trained on different parts of the available data, they evaluate the performance of the learning algorithm that induced the final model, rather than the performance of the final model itself.
+To address this issue, [`r index("resampling")` strategies](#sec-resampling) repeatedly split all available data into multiple training and test sets, with one repetition corresponding to what is called a resampling iteration in `r mlr3`.
+An intermediate model is then trained on each training set and the remaining test set is used to measure the performance in each resampling iteration.
+The generalization performance is finally estimated by the averaged performance over multiple resampling iterations (see @fig-ml-abstraction for an illustration).
+<!-- Removed reference to exercise since we discussed that this aspect is too important to leave to an exercise, maybe this should be a gallery post or even link to I2ML? -->
+Resampling methods allow using more data points for testing, while keeping the training sets as large as possible. 
+Specifically, repeating the data splitting process allows using all available data points to assess the performance, as each data point can be ensured to be part of the test set in at least one resampling iteration.
+A higher number of resampling iterations can reduce the variance and result in a more reliable performance estimate.
+It also reduces the risk of the performance estimate being strongly affected by an unlucky split that does not reflect the original data distribution well, which is a known issue of the holdout method.
+However, since resampling strategies create multiple intermediate models trained on different parts of the available data and average their performance, they evaluate the performance of the learning algorithm that induced these models, rather than the performance of the final model which is deployed in practice.
+It is therefore important to train the intermediate models on nearly all data points from the same distribution so that the intermediate models and the final model are similar.
 If we only have access to a limited amount of data, the best we can do is to use the performance of the learning algorithm as a proxy for the performance of the final model.
 In @sec-resampling, we will learn how to estimate the generalization performance of a `r ref("Learner")` using the `r mlr3` package.
 <!-- For example, the $k$-fold cross-validation method randomly partitions the data into $k$ subsets, called folds (see @fig-cv-illustration). -->
@@ -86,13 +92,13 @@ knitr::include_graphics("Figures/ml_abstraction.svg")
 
 In the previous chapter, we have applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
 As a quick start into resampling and benchmarking with the `r mlr3` package, we show a short example of how to do this with the `r ref("resample()")` and `r ref("benchmark()")` convenience functions.
-Specifically, we show how to estimate the generalization performance of a learner on a given task by the holdout method using `r ref("resample()")` and how to use`r ref("benchmark()")` to compare two learners on a task.
+Specifically, we show how to estimate the generalization performance of a learner on a given task by the holdout method using `r ref("resample()")` and how to use `r ref("benchmark()")` to compare two learners on a task.
 
 We first define the corresponding `r ref("Task")` and `r ref("Learner")` objects used throughout this chapter as follows:
 
 ```{r performance-002}
 task = tsk("penguins")
-learner = lrn("classif.rpart")
+learner = lrn("classif.rpart", predict_type = "prob")
 ```
 
 <!-- #### Further Reading -->
@@ -126,8 +132,9 @@ Existing resampling strategies differ in how they partition the available data i
 For example, the $k$-fold `r index("cross-validation")` method randomly partitions the data into $k$ subsets, called folds (see @fig-cv-illustration).
 Then $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as test data exactly once in each of the $k$ iterations.
 The $k$ performance estimates resulting from each fold are then averaged to obtain a more reliable performance estimate.
+This makes cross-validation a popular strategy, as each observation is guaranteed to be used in one of the test sets throughout the procedure, making efficient use of the available data for performance estimation.
+<!-- TODO: See BB comment, pro-cons of CV -->
 Several variations of cross-validation exist, including repeated $k$-fold cross-validation where the entire process illustrated in @fig-cv-illustration is repeated multiple times, and leave-one-out cross-validation where the test set in each fold consists of exactly one observation.
-This makes cross-validation a popular strategy, as each observation is guaranteed to be used for training and prediction throughout the procedure, making efficient use of the available data.
 
 Other well-known resampling strategies include `r index("subsampling")` and `r index("bootstrapping")`.
 Subsampling --- also known as repeated holdout --- repeats the holdout method and creates multiple train-test splits, taking into account the ratio of observations to be included in the training sets.
@@ -136,6 +143,7 @@ Some observations in the training sets may appear more than once, while the othe
 The choice of the resampling strategy usually depends on the specific task at hand and the goals of the performance assessment.
 <!-- Japkowicz and Shah (2011) make a distinction between resampling strategies that use observations from the test set only once and resampling strategies that use observations from the test set multiple times. -->
 Properties and pitfalls of different resampling techniques have been widely studied and discussed in the literature, see e.g., @bengio2003no, @molinaro2005prediction, @kim2009estimating, @bischl2012resampling.
+<!-- TODO: See BB comment, summarize paper content a bit, maybe in separate section? -->
 
 <!-- Source: https://docs.google.com/presentation/d/1BJXJ365C9TWelojV93IeQJAtEiD3uZMFSfkhzgYH-n8/edit?usp=sharing -->
 ```{r performance-005, echo=FALSE}
@@ -222,7 +230,7 @@ Here, it is crucial to use the same train-test splits to obtain comparable resul
 That is, we need to ensure that all learners to be compared use the same training data to build a model and that they use the same test data to evaluate the model performance.
 
 ::: {.callout-tip}
-In Section @sec-benchmarking you will learn about the `ref ("benchmark()")` function, which automatically instantiates `r ref("Resampling")` objects on all tasks to ensure a fair comparison
+In Section @sec-benchmarking, you will learn about the `ref ("benchmark()")` function, which automatically instantiates `r ref("Resampling")` objects on all tasks to ensure a fair comparison.
 :::
 
 <!-- Cut in favor of infobox, possibly reintegrate?
@@ -235,29 +243,32 @@ This can be achieved using the same instantiated `r ref("Resampling")` object fo
 <!-- For this, we call the `r ref("resample()")` function which returns a `r ref("ResampleResult")` object. -->
 
 Calling the function `r ref("resample()")` on a task, learner, and constructed resampling object returns a `r ref("ResampleResult")` object which contains all information needed to estimate the generalization performance.
-Specifically, the function will internally use the learner to train a model for each training set determined by the resampling strategy and store the model predictions of each test set:
+Specifically, the function will internally use the learner to train a model for each training set determined by the resampling strategy and store the model predictions of each test set.
+We can apply the `print` or `as.data.table` function to a `r ref("ResampleResult")` object to obtain some basic information:
 <!-- By default, these models are discarded after the prediction step to reduce memory consumption of the resulting `r ref("ResampleResult")` object and because we usually only need the stored predictions to calculate the performance measure. -->
 <!-- However, we can configure the `r ref("resample()")` function to keep the fitted models (e.g. if we want to use or inspect the intermediate models later) by setting the `store_models` argument of the `r ref("resample()")` function to `TRUE`: -->
 
 ```{r performance-011}
-resampling = rsmp("cv", folds = 5)
+resampling = rsmp("cv", folds = 4)
 rr = resample(task, learner, resampling)
 print(rr)
+as.data.table(rr)
 ```
 
-Here, we used 5-fold cross-validation as resampling strategy.
+Here, we used 4-fold cross-validation as resampling strategy.
 The resulting `r ref("ResampleResult")` object (stored as `rr`) provides various methods to access the stored information.
 The two most relevant methods for performance assessment are `$score()` and `$aggregate()`.
 
-The `$score()` method uses `r ref("Measure")` objects to calculate the performance measure of each resampling iteration separately, meaning that `$score()` always results in one value per resampling iteration.
+In Section @sec-eval, we learned that `r ref("Prediction")` objects contain both model predictions and ground truth values, which are used to calculate the performance measure using the `$score()` method.
+Similarly, we can use the `$score()` method of a `r ref("ResampleResult")` object to calculate the performance measure for each resampling iteration separately.
+This means that the `$score()` method produces one value per resampling iteration that reflects the performance estimate of the intermediate model trained in the corresponding iteration.
 <!-- Specifically, it extracts the model predictions of each resampling iteration and calculates the performance measure in each resampling iteration separately. -->
-By default, it uses the model predictions and the corresponding ground truth values stored in the test set of the corresponding resampling iteration to calculate the performance measure.
+By default, `$score()` uses the test set in each resampling iteration to calculate the performance measure.
 
 ::: {.callout-tip}
 We are not limited to scoring predictions on the test set --- if we set the argument `predict_sets = "train"` within the `$score()` method, we calculate the performance measure of each resampling iteration based on the training set instead of the test set.
 :::
 
-If we do not explicitly pass a `r ref("Measure")` object to the `$score()` method, the classification error (`classif.ce`) and the mean squared error (`regr.mse`) are used as defaults for classification and regression tasks respectively.
 In the code example below, we explicitly use the classification accuracy (`classif.acc`) as performance measure and pass it to the `$score()` method to obtain the estimated performance of each resampling iteration separately:
 
 ```{r performance-012}
@@ -265,12 +276,15 @@ acc = rr$score(msr("classif.acc"))
 acc[, .(iteration, classif.acc)]
 ```
 
+::: {.callout-tip}
+If we do not explicitly pass a `r ref("Measure")` object to the `$score()` method, the classification error (`classif.ce`) and the mean squared error (`regr.mse`) are used as defaults for classification and regression tasks respectively.
+:::
+
 Similarly, we can pass `r ref("Measure")` objects to the `$aggregate()` method to calculate an aggregated score across all resampling iterations.
 The type of aggregation is usually determined by the `r ref("Measure")` object (see also the fields `$average` and `$aggregator` the in help page of `r ref("Measure")` for more details).
-There are two approaches to aggregating score across resampling iterations: The first is referred to as the `r index("macro average")`, which calculates the measure in each resampling iteration first, and then averages these scores.
+There are two approaches for aggregating scores across resampling iterations: The first is referred to as the `r index("macro average")`, which first calculates the measure in each resampling iteration separately, and then averages these scores across all iterations.
 The second approach is the `r index("micro average")`, which pools all predictions across resampling iterations into one `r ref("Prediction")` object and computes the measure on this directly.
 The classification accuracy `msr("classif.acc")` uses the macro-average by default, but the micro-average can be computed as well by specifying the `average` argument:
-
 
 ```{r performance-013}
 #| eval: true
@@ -278,16 +292,30 @@ rr$aggregate(msr("classif.acc"))
 rr$aggregate(msr("classif.acc", average = "micro"))
 ```
 
+::: {.callout-tip}
+For performance measures that simply take the (unweighted) average of point-wise loss values of single observations such as the classification accuracy that calculates the proportion of correctly classified observations, macro-averaging and micro-averaging will only differ if the test sets in each resampling iteration have different sizes.
+For example, in the code example above macro-averaging and micro-averaging yield the same classification accuracy as the `r ref("mlr_tasks_penguins", text = "penguins")` task consists of 344 observations and we used 4-fold cross-validation yielding 4 test sets with 86 observations each. 
+If we would use 5-fold cross-validation instead, macro-averaging and micro-averaging can lead to a (slightly) different performance estimate as the test sets can not have the exact same size:
+
+```{r}
+rr5 = resample(task, learner, rsmp("cv", folds = 5))
+rr5$aggregate(msr("classif.acc"))
+rr5$aggregate(msr("classif.acc", average = "micro"))
+```
+
+For other performance measures that are not defined on observation level but rather on a set of observations such as the area under the ROC curve `msr("classif.auc")`, macro-averaging and micro-averaging will usually always lead to different values.
+:::
+
 <!-- By default, the classification accuracy uses the macro average, i.e., the performance measure is calculated in each resampling iteration separately and then averaged to obtain the macro-averaged performance estimate. -->
 <!-- i.e., the `$average` field of a performance measure specifies whether micro or macro averaging is used and the `$aggregator` specifies the function used to aggregate the individual performance values that are calculated in each resampling iteration. -->
-The aggregated score refers to the generalization performance of our selected learner on the given task estimated by the resampling strategy defined in the `r ref("Resampling")` object.
-It can be useful to also look at the individual performance values of each resampling iteration (as returned by the `$score()` method) to see if one (or more) of the iterations lead to very different performance results.
+The aggregated score (as returned by `$aggregate()`) refers to the generalization performance of our selected learner on the given task estimated by the resampling strategy defined in the `r ref("Resampling")` object.
+While we are usually interested in this aggregated score, it can be useful to look at the individual performance values of each resampling iteration (as returned by the `$score()` method) as well, e.g., to see if one (or more) of the iterations lead to very different performance results.
 Figure @fig-score-aggregate-resampling visualizes the relationship between `$score()` and `$aggregate()` for a small example based on the `"penguins"` task.
 
 ```{r}
 #| echo: false
 #| label: fig-score-aggregate-resampling
-#| fig-cap: "An example of the difference between `$score()` and `$aggregate)`: The former aggregates predictions to a single score within each resampling iteration, and the former aggregates scores across all resampling folds"
+#| fig-cap: "An example of the difference between `$score()` and `$aggregate()`: The former aggregates predictions to a single score within each resampling iteration, and the former aggregates scores across all resampling folds"
 #| fig-align: "center"
 #| fig-alt: "A funnel-shaped diagram. Left: Each resampling iteration contains multiple rows of predictions, with 3 iterations total. Middle: $score() reduces those to one performance score per resampling iteration, which leaves 3 scores. Right: $aggregate() reduces predictions across all resampling iterations to a single performance score."
 knitr::include_graphics("Figures/predict-score-aggregate-resampling.drawio.svg")
@@ -306,6 +334,7 @@ rrdt = as.data.table(rr)
 names(rrdt)
 rrdt[, .(task, learner, resampling)]
 ```
+
 We see the `r ref("ResampleResult")` contains the the task, learner and resampling strategy that we passed to `r ref("resample()")` earlier, stored in list-columns.  
 In addition, we also have an integer column `iteration` to keep track of our predictions, which in turn are stored in the last column as `r ref("Prediction")` objects we are already familiar with, and which are needed to calculate performance measures.
 
