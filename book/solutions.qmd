@@ -4,7 +4,105 @@
 
 ## Solutions to @sec-basics
 
+1. Use the built in `sonar` task and the `classif.rpart` learner along with the partition function to train a model.
+
+```{r}
+set.seed(124)
+task = tsk("sonar")
+learner = lrn("classif.rpart", predict_type = "prob")
+measure = msr("classif.ce")
+splits = partition(task, ratio=0.8)
+
+learner$train(task, splits$train)
+```
+
+Once the model is trained, generate the predictions on the test set, define the performance measure (`classif.ce`), and score the predictions.
+
+```{r}
+preds = learner$predict(task, splits$test)
+
+measure = msr("classif.ce")
+preds$score(measure)
+```
+
+2. Generate a confusion matrix from the built in function.
+
+```{r}
+preds$confusion
+```
+
+```{r, echo=FALSE}
+confusion = as.data.frame(preds$confusion)
+
+TP = confusion$Freq[1]
+FP = confusion$Freq[2]
+TN = confusion$Freq[4]
+FN = confusion$Freq[3]
+```
+
+Since the rows represent predictions (response) and the columns represent the ground truth values, the TP, FP, TN, and FN rates are as follows:
+
+- True Positive (TP) = `r TP`
+
+- False Positive (FP) = `r FP`
+
+- True Negative (TN) = `r TN`
+
+- False Positive (FN) = `r FN`
+
+3. Since in this case we want the model to predict the negative class more often, we will raise the threshold (note the `predict_type` for the learner must be `prob` for this to work).
+
+```{r}
+# raise threshold from 0.5 default to 0.6
+preds$set_threshold(0.6)
+
+preds$confusion
+```
+One reason we might want the false positive rate to be lower than the false negative rate is if we felt it was worse for a positive prediction to be incorrect (meaning the true label was the negative label) than it was for a negative prediction to be incorrect (meaning the true label was the positive label). 
+
 ## Solutions to @sec-performance
+
+
+1. Use the `spam` task and 5-fold cross-validation to benchmark Random Forest (`classif.ranger`), Logistic Regression (`classif.log_reg`), and XGBoost (`classif.xgboost`) with regards to AUC.
+Which learner appears to do best? How confident are you in your conclusion?
+How would you improve upon this?
+
+```{r}
+grid = benchmark_grid(
+  tasks = tsk("spam"),
+  learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"), predict_type = "prob"),
+  resamplings = rsmp("cv", folds = 5)
+)
+
+bmr = benchmark(grid)
+
+mlr3viz::autoplot(bmr, measure = msr("classif.auc"))
+```
+
+This is only a small example for a benchmark workflow, but without tuning (see @sec-optimization), the results are naturally not suitable to make any broader statements about the superiority of either learner for this task.
+
+
+2. A colleague claims to have achieved a 93.1% classification accuracy using the `classif.rpart` learner on the `penguins_simple` task.
+You want to reproduce their results and ask them about their resampling strategy.
+They said they used 3-fold cross-validation, and they assigned rows using the task's `row_id` modulo 3 to generate three evenly sized folds.
+Reproduce their results using the custom CV strategy.
+
+```{r}
+task = tsk("penguins_simple")
+
+resampling_customcv = rsmp("custom_cv")
+
+resampling_customcv$instantiate(task = task, f = factor(task$row_ids %% 3))
+
+rr = resample(
+  task = task,
+  learner = lrn("classif.rpart"),
+  resampling = resampling_customcv
+)
+
+rr$aggregate(msr("classif.acc"))
+```
+
 
 ## Solutions to @sec-optimization
 
@@ -69,5 +167,112 @@ rr$aggregate()
 ## Solutions to @sec-technical
 
 ## Solutions to @sec-interpretation
+
+1. Prepare a `mlr3` regression task for `fifa` data. Select only variables describing the age and skills of footballers. Train any predictive model for this task, e.g. `regr.ranger`.
+
+```{r interpretation-100, warning=FALSE, message=FALSE}
+library("DALEX")
+library("ggplot2")
+data("fifa", package = "DALEX")
+old_theme = set_theme_dalex("ema") 
+
+library("mlr3")
+library("mlr3learners")
+set.seed(1)
+
+fifa20 <- fifa[,5:42]
+task_fifa = as_task_regr(fifa20, target = "value_eur", id = "fifa20")
+
+learner = lrn("regr.ranger")
+learner$train(task_fifa)
+learner$model
+```
+
+2. Use the permutation importance method to calculate variable importance ranking. Which variable is the most important? Is it surprising?
+
+**With `iml`**
+
+```{r interpretation-201, warning=FALSE, message=FALSE}
+library(iml)
+model = Predictor$new(learner, 
+                data = fifa20, 
+                y = fifa$value_eur)
+
+effect = FeatureImp$new(model, 
+                loss = "rmse")
+effect$plot()
+```
+
+**With `DALEX`**
+
+```{r interpretation-202, warning=FALSE, message=FALSE}
+library("DALEX")
+ranger_exp = DALEX::explain(learner,
+  data = fifa20,
+  y = fifa$value_eur,
+  label = "Fifa 2020",
+  verbose = FALSE)
+
+ranger_effect = model_parts(ranger_exp, B = 5)
+head(ranger_effect)
+plot(ranger_effect) 
+```
+
+3. Use the Partial Dependence profile to draw the global behavior of the model for this variable. Is it aligned with your expectations?
+
+**With `iml`**
+
+```{r interpretation-301, warning=FALSE, message=FALSE}
+num_features = c("movement_reactions", "skill_ball_control", "age")
+
+effect = FeatureEffects$new(model)
+plot(effect, features = num_features)
+```
+
+**With `DALEX`**
+
+```{r interpretation-302, warning=FALSE, message=FALSE}
+num_features = c("movement_reactions", "skill_ball_control", "age")
+
+ranger_profiles = model_profile(ranger_exp, variables = num_features)
+plot(ranger_profiles) 
+```
+
+4 Choose one of the football players. You can choose some well-known striker (e.g. Robert Lewandowski) or a well-known goalkeeper (e.g. Manuel Neuer). The following tasks are worth repeating for several different choices. 
+
+```{r interpretation-350, warning=FALSE, message=FALSE}
+player_1 <- fifa["R. Lewandowski", 5:42]
+```
+
+5. For the selected footballer, calculate and plot the Shapley values. Which variable is locally the most important and has the strongest influence on the valuation of the footballer?
+
+**With `iml`**
+
+```{r interpretation-401, warning=FALSE, message=FALSE}
+shapley = Shapley$new(model, x.interest = player_1)
+plot(shapley)
+```
+
+**With `DALEX`**
+
+```{r interpretation-402, warning=FALSE, message=FALSE}
+ranger_shap = predict_parts(ranger_exp, 
+             new_observation = player_1, 
+             type = "shap", B = 1)
+plot(ranger_shap, show_boxplots = FALSE) 
+```
+
+6. For the selected footballer, calculate the Ceteris Paribus / Individual Conditional Expectation profiles to draw the local behavior of the model for this variable. Is it different from the global behavior?
+
+**With `DALEX`**
+
+```{r interpretation-502, warning=FALSE, message=FALSE}
+num_features = c("movement_reactions", "skill_ball_control", "age")
+
+ranger_ceteris = predict_profile(ranger_exp, player_1)
+plot(ranger_ceteris, variables = num_features) + 
+  ggtitle("Ceteris paribus for R. Lewandowski", " ") 
+```
+
 
 ## Solutions to @sec-extending
