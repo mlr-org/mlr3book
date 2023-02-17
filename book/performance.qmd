@@ -342,42 +342,27 @@ knitr::include_graphics("Figures/predict-score-aggregate-resampling.drawio.svg")
 
 <!-- {{< include _optional.qmd >}} -->
 
-In this section, we briefly show how to inspect some important fields and methods of a `r ref("ResampleResult")` object.
-To understand these better, we first take a glimpse at what is actually contained in the object by converting it to a `r ref("data.table")` and showing its columns in two steps:
+In this section, we show how to inspect some important fields and methods of a `r ref("ResampleResult")` object.
+We first take a glimpse at what is actually contained in the object by converting it to a `r ref("data.table")`:
 
 ```{r}
 rrdt = as.data.table(rr)
-names(rrdt)
-rrdt[, .(task, learner, resampling)]
+rrdt
 ```
 
-We see the `r ref("ResampleResult")` contains the the task, learner and resampling strategy that we passed to `r ref("resample()")` earlier, stored in list-columns.  
-In addition, we also have an integer column `iteration` to keep track of our predictions, which in turn are stored in the last column as `r ref("Prediction")` objects we are already familiar with, and which are needed to calculate performance measures.
-
-```{r}
-rrdt[, .(iteration, prediction)]
-```
-
-If we need to investigate a individual resampling iteration, we can do so by accessing the respective elements associated with it, or by using the appropriate methods from the original `r ref("ResampleResult")` without converting it to a `r ref("data.table")` first.
-
-<!-- The `$resampling` field of a `r ref("ResampleResult")` object provides access to the corresponding `r ref("Resampling")` object which contains information on the train-test splits of the employed resampling strategy.  -->
-<!-- For example, we can extract the row indices used for training and testing in each resampling iteration using the `$resampling$train_set(i)` and `$resampling$test_set(i)` methods, where `i` refers to the `i`-th resampling iteration: -->
-
-<!-- ```{r performance-010} -->
-<!-- str(rr$resampling$train_set(1)) -->
-<!-- str(rr$resampling$test_set(1)) -->
-<!-- ``` -->
-
-The list of `r ref("Prediction")` objects of each resampling iteration can be extracted by the `$predictions()` method:
+We can see that the task, learner and resampling strategy which we previously passed to the `r ref("resample()")` function is stored in list columns of the `r ref("data.table")`. 
+In addition, we also have an integer column `iteration` that refers to the resampling iteration and another list column that contains the corresponding `r ref("Prediction")` objects of each iteration.
+<!-- we are already familiar with, and which are needed to calculate performance measures. -->
+We can access the respective `prediction` column or directly use the `$predictions()` method of the `r ref("ResampleResult")` object (without converting it to a `r ref("data.table")` first) to obtain a list of `r ref("Prediction")` objects of each resampling iteration:
 
 ```{r performance-014}
 #| eval: true
-pred = rr$predictions()
-str(pred)
+rrdt$prediction
+all.equal(rrdt$prediction, rr$predictions())
 ```
 
-This allows to analyze the predictions of individual intermediate models or to manually compute a macro-averaged performance estimate.
-Instead, we can use the `$prediction()` method to extract a single `r ref("Prediction")` object that combines the predictions of each intermediate model.
+This allows to analyze the predictions of individual intermediate models from each resampling iteration and, e.g., to manually compute a macro-averaged performance estimate.
+Instead, we can use the `$prediction()` method to extract a single `r ref("Prediction")` object that combines the predictions of each intermediate model arcoss all resampling iterations.
 The combined prediction object can be used to manually compute a micro-averaged performance estimate, for example:
 
 ```{r performance-015}
@@ -389,7 +374,6 @@ pred$score(msr("classif.acc"))
 
 By default, the intermediate models produced at each resampling iteration are discarded after the prediction step to reduce memory consumption of the `r ref("ResampleResult")` object and because only the predictions are required to calculate the performance measure.
 However, it can sometimes be useful to inspect, compare, or extract information from these intermediate models.
-
 To do so, we can configure the `r ref("resample()")` function to keep the fitted intermediate models by setting the `store_models` argument to `TRUE`.
 Each model trained in a specific resampling iteration is then stored in the resulting `r ref("ResampleResult")` object and can be accessed via `$learners[[i]]$model`, where `i` refers to the `i`-th resampling iteration:
 
@@ -397,6 +381,14 @@ Each model trained in a specific resampling iteration is then stored in the resu
 rr = resample(task, learner, resampling, store_models = TRUE)
 rr$learners[[1]]$model
 ```
+
+Here, we see the model output of a decision tree fitted by the `r ref_pkg("rpart")` package. 
+As models fitted by `r ref_pkg("rpart")` provide information on how important features are, we can inspect if the importance varies across the resampling iterations:
+
+```{r}
+lapply(rr$learners, function(x) x$model$variable.importance)
+```
+
 
 <!-- - Filter the result and keep only results of certain resampling iterations, e.g., use `$filter(c(1, 3))` to discard the results of the second resampling iteration. -->
 
@@ -447,15 +439,25 @@ custom_cv
 {{< include _complex.qmd >}}
 
 In `r mlr3`, we can assign a special role to a feature contained in the data by configuring the corresponding `$col_roles` field of a `r ref("Task")`.
-The two relevant column roles that will affect behavior of a resampling strategy are `"group"` or `"stratum"`, whose meaning is explained in detail below.
+The two relevant column roles that will affect behavior of a resampling strategy are `"group"` or `"stratum"`.
 
 In some cases, it is desirable to keep observations together when the data is split into corresponding training and test sets, especially when a set of observations naturally belong to a group e.g., when the data contains repeated measurements of individuals.
 When observations belong to groups, we want to ensure that all observations of the same group belong to either the training set or the test set. 
-In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave one object out" cross-validation strategy, where it is not one measurement that is left out, but all measurements associated with one particular individual, institution, or broader object of measurement.
+In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave-one-object-out" cross-validation strategy, where not only a single observation is left out, but all observations associated with a certain group (see @fig-group for an illustration).
+
+<!-- where it is not one measurement that is left out, but all measurements associated with one particular individual, institution, or broader object of measurement. -->
+
+```{r, echo=FALSE}
+#| label: fig-group
+#| fig-cap: "Illustration of the train-test splits of a leave-one-object-out cross-validation with 3 groups of observations (highlighted by different colors)."
+#| fig-align: "center"
+#| fig-alt: "Illustration of the train-test splits of a leave-one-object-out cross-validation with 3 groups of observations (highlighted by different colors)."
+knitr::include_graphics("Figures/loobject.svg")
+```
 
 In `r mlr3`, the column role `"group"` allows to specify the column in the data that defines the group structure of the observations (see also the help page of `r ref("Resampling")` for more information on the column role `"group"`).
 The column role can be specified by assigning a feature to the `$col_roles$group` field which will then determine the group structure.
-The following code uses 3-fold cross-validation and the feature `year` of the `r ref("mlr_tasks_penguins", text = "penguins")` task to determine the grouping.
+The following code performs leave-one-object-out cross-validation using the feature `year` of the `r ref("mlr_tasks_penguins", text = "penguins")` task to determine the grouping.
 Since the feature `year` contains only three distinct values (i.e., `2007`, `2008`, and `2009`), the corresponding test sets consist of observations from only one year:
 
 <!-- In `r mlr3`, we can assign a special column role to a feature contained in the data either during task construction or afterwards by specifying the feature that defines the group in the `$col_roles$group` field.  -->
@@ -466,7 +468,7 @@ Since the feature `year` contains only three distinct values (i.e., `2007`, `200
 ```{r performance-020}
 task_grp = tsk("penguins")
 task_grp$col_roles$group = "year"
-r = rsmp("cv", folds = 3)
+r = rsmp("loo")
 r$instantiate(task_grp)
 
 table(task_grp$data(cols = "year"))
@@ -481,10 +483,25 @@ table(task_grp$data(rows = r$test_set(3), cols = "year"))
 <!-- Dedicated spatiotemporal resampling methods are available in `r mlr3spatiotempcv` which implicitly take into account the spatiotemporal structure, see the [spatiotemporal resampling](special.html#spatiotemp-cv) section for more details. -->
 <!-- ::: -->
 
+:::{.callout-tip}
+If there are many groups, say 100 groups, we can limit the number of resampling iterations using k-fold cross-validation (or any other resampling strategy with a previously definable number of resampling iterations) instead of performing leave-one-object-out cross-validation. 
+In this case, each group is considered as a single observation, so that the division into training and test sets is done as determined by the resampling strategy
+:::
+
 Another column role available in `r mlr3` is `"stratum"`, which implements stratified sampling.
 Stratified sampling ensures that one or more discrete features within the training and test sets will have a similar distribution as in the original task containing all observations.
 This is especially useful when a discrete feature is highly imbalanced and we want to make sure that the distribution of that feature is similar in each resampling iteration.
-Imbalanced classification tasks are a standard example for when stratification is useful, where stratification by the target variable ensures that each intermediate model is fit on data that is representative of the actual task, whereas in extreme cases it could be possible that target levels are severely under- or over represented in individual resampling iterations, skewing our estimates of the generalization performance.
+Stratification is commonly used for imbalanced classification tasks where the classes of the target feature are imbalanced (see @fig-stratification for an illustration).
+Stratification by the target feature ensures that each intermediate model is fit on training data where the class distribution of the target is representative of the actual task. 
+Otherwise it could happen that target classes are severely under- or over represented in individual resampling iterations, skewing the estimation of the generalization performance.
+
+```{r, echo=FALSE}
+#| label: fig-stratification
+#| fig-cap: "Illustration of a 3-fold cross-validation with stratification for an imbalanced binary classification task with a majority class that is about twice as large as the minority class. In each resampling iteration, the class distribution from the available data is preserved (which is not necessarily the case for cross-validation without stratification)."
+#| fig-align: "center"
+#| fig-alt: "Illustration of a 3-fold cross-validation with stratification for an imbalanced binary classification task with a majority class that is about twice as large as the minority class. In each resampling iteration, the class distribution from the available data is preserved (which is not necessarily the case for cross-validation without stratification)."
+knitr::include_graphics("Figures/stratification.svg")
+```
 
 <!-- Stratified sampling ensures that the training and test sets will have similar distribution regarding one or more discrete features as in the original task containing all observations. -->
 The `$col_roles$stratum` field of a `r ref("Task")` can be set to one or multiple features (including the target in case of classification tasks).
@@ -495,7 +512,7 @@ For example, the target column `species` of the `r ref("mlr_tasks_penguins", tex
 prop.table(table(task$data(cols = "species")))
 ```
 
-Without specifying a `"stratum"` column role, the `species` column will have quite different class distributions across the corresponding test sets of a 3-fold cross-validation strategy:
+Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the corresponding test sets of a 3-fold cross-validation strategy:
 
 ```{r performance-022}
 r = rsmp("cv", folds = 3)
