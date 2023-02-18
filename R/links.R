@@ -161,15 +161,16 @@ toproper = function(str) {
 #' @param index Text to show in index
 #' @param margin Text to show in margin
 #' @export
-define = function(main, margin = toproper(main)) {
-  sprintf("\\index{%s}%s[%s]{.aside}", toproper(main), main, margin)
+define = function(main, margin = toproper(main), index = toproper(main)) {
+  sprintf("\\index{%s}%s[%s]{.aside}", index, main, margin)
 }
 
 #' @title Add term to index
 #' @param main Text to show in book
+#' @param entry Index entry if different from `main
 #' @export
-index = function(main) {
-  sprintf("\\index{%s}%s", toproper(main), main)
+index = function(main, entry = toproper(main)) {
+  sprintf("\\index{%s}%s", entry, main)
 }
 
 #' @title Create markdown and print-friendly link
