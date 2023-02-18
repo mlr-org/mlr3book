@@ -167,10 +167,10 @@ define = function(main, margin = toproper(main), index = toproper(main)) {
 
 #' @title Add term to index
 #' @param main Text to show in book
-#' @param entry Index entry if different from `main
+#' @param index Index entry if different from `main
 #' @export
-index = function(main, entry = toproper(main)) {
-  sprintf("\\index{%s}%s", entry, main)
+index = function(main, index = toproper(main)) {
+  sprintf("\\index{%s}%s", index, main)
 }
 
 #' @title Create markdown and print-friendly link
