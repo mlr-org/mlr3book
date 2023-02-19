@@ -796,16 +796,83 @@ bmr$aggregate(measures)[, c(4, 7, 8)]
 
 The experiment shows that using c-means algorithm with three centers produces a better within sum of squares score than any other learner considered. However, the featureless learner performs the best when considering silhouette measure which takes into the account both cluster cohesion and separation.
 
-## Spatiotemporal Analysis {#sec-spatiotemporal}
+## Spatial Analysis {#sec-spatiotemporal}
 
 ```{r special-010, include = FALSE}
 library(mlr3spatiotempcv)
 ```
 
-Data observations may entail reference information about spatial or temporal characteristics.
-Spatial information is stored as coordinates, usually named "x" and "y" or "lat"/"lon".
-Treating spatiotemporal data using non-spatial data methods can lead to over-optimistic performance estimates.
-Hence, methods specifically designed to account for the special nature of spatiotemporal data are needed.
+The final task we will discuss in this book is `r define("spatial analysis")`.
+Spatial analysis can be a subset of any other machine learning task (e.g., regression or classification) but is defined by the presence of spatial information in a dataset, usually stored as coordinates that are often named "x" and "y" or "lat" and "lon".
+Spatial data has additional complexity due to `r define("autocorrelation")` which violates one of the fundamental assumptions in machine learning - all observations in the dataset are independent [@hastie2001].
+
+To illustrate autocorrelation, let us start with a classic example of regression, predicting the height of a person.
+Imagine we could sample the entire world's population and we pick out three people at random: Rose, Lily, and Juniper.
+Given no other information, the best prediction we could make is to predict that each of them is 169cm (roughly average human height).
+Now as a spatial example, imagine we are predicting the number of cases of a disease in three countries: Singapore, Jamaica, Lebanon.
+Given no other information, naively we might think the best prediction is around 14 degrees Celsius.
+However, we *know* that
+
+
+
+### Autocorrelation {#autocorrelation}
+
+The nature of spatial data means that observations are naturally grouped together according to distance in space.
+For example, say a disease has broken out in Australia and an epidemiologist is trying to predict the number of cases worldwide.
+Say the epidemiologist has no data other than latitude, longitude, and number of cases at the start of the outbreak in Australia.
+If there was no spatial autocorrelation in the data then they might predict something like we see in Fig XXX (top).
+However this is of course not true to real-life where diseases will spread outwards from the point of origin (Fig XXX (bottom)), meaning that there is information contained with the spatial coordinates.
+In simpler terms then, spatial autocorrelation is the degree of correlation between two values of the same variable.
+In our example we can visualise the autocorrelation as the number of cases decreases as distance in space increases.
+
+```{r, warning=FALSE}
+world_coordinates <- map_data("world")
+world_coordinates$cases <- pmax(0, rnorm(99338, 0, 375))
+p = ggplot() +
+  scale_fill_gradient2(low = "yellow", mid = "orange", high = "red") +
+  theme_minimal() +
+  theme(legend.position = "n")
+
+p1 = p + geom_map(
+    data = world_coordinates, map = world_coordinates,
+    aes(long, lat, map_id = region, fill = cases)
+  )
+world_coordinates$cases <- -(abs(world_coordinates$lat + 20) + abs(world_coordinates$lon - 120))
+world_coordinates$cases <- (world_coordinates$cases + abs(min(world_coordinates$cases)))
+
+p2 = p + geom_map(
+    data = world_coordinates, map = world_coordinates,
+    aes(long, lat, map_id = region, fill = cases)
+  )
+
+p1 / p2
+```
+
+
+If this assumption is violated, the reliability of the resulting performance estimates, for example retrieved via cross-validation, is decreased.
+The magnitude of this decrease is linked to the magnitude of STAC in the dataset, which cannot be determined easily.
+
+One approach to account for the existence of STAC is to use dedicated resampling methods.
+`r mlr3spatiotempcv` provides access to the most frequently used spatiotemporal resampling methods.
+The following example showcases how a spatial dataset can be used to retrieve a bias-reduced performance estimate of a learner.
+
+The following examples use the `r ref("mlr_tasks_ecuador", text = "ecuador")` dataset created by [Jannes Muenchow](https://scholar.google.com/citations?user=Slq94Y4AAAAJ&hl=de&authuser=1&oi=ao).
+It contains information on the occurrence of landslides (binary) in the Andes of Southern Ecuador.
+The landslides were mapped from aerial photos taken in 2000.
+The dataset is well suited to serve as an example because it it relatively small and of course due to the spatial nature of the observations.
+Please refer to @muenchow2012 for a detailed description of the dataset.
+
+To account for the spatial autocorrelation probably present in the landslide data, we will make use one of the most used spatial partitioning methods, a cluster-based k-means grouping [@brenning2012], (`r ref("mlr_resamplings_spcv_coords", text = "spcv_coords")` in `r mlr3spatiotempcv`).
+This method performs a clustering in 2D space which contrasts with the commonly used random partitioning for non-spatial data.
+The grouping has the effect that train and test data are more separated in space as they would be by conducting a random partitioning, thereby reducing the effect of STAC.
+
+By contrast, when using the classical random partitioning approach with spatial data, train and test observations would be located side-by-side across the full study area (a visual example is provided further below).
+This leads to a high similarity between train and test sets, resulting in "better" but biased performance estimates in every fold of a CV compared to the spatial CV approach.
+However, these low error rates are mainly caused due to the STAC in the observations and the lack of appropriate partitioning methods and not by the power of the fitted model.
+
+
+
+
 
 In the `r mlr3` framework, the following packages relate to this field:
 
@@ -857,36 +924,7 @@ print(task)
 
 All `*ST` tasks can be treated as their super class equivalents `TaskClassif` or `TaskRegr` in subsequent {mlr3} modeling steps.
 
-### Autocorrelation {#autocorrelation}
 
-Data which includes spatial or temporal information requires special treatment in machine learning (similar to [survival](#survival), [ordinal](#ordinal) and other task types listed in the [special tasks](#special-tasks) chapter).
-In contrast to non-spatial/non-temporal data, observations inherit a natural grouping, either in space or time or in both space and time [@legendre1993].
-This grouping causes observations to be autocorrelated, either in space (spatial autocorrelation (SAC)), time (temporal autocorrelation (TAC)) or both space and time (spatiotemporal autocorrelation (STAC)).
-For simplicity, the acronym STAC is used as a generic term in the following chapter for all the different characteristics introduced above.
-
-*What effects does STAC have in statistical/machine learning?*
-
-The overarching problem is that STAC violates the assumption that the observations in the train and test datasets are independent [@hastie2001].
-If this assumption is violated, the reliability of the resulting performance estimates, for example retrieved via cross-validation, is decreased.
-The magnitude of this decrease is linked to the magnitude of STAC in the dataset, which cannot be determined easily.
-
-One approach to account for the existence of STAC is to use dedicated resampling methods.
-`r mlr3spatiotempcv` provides access to the most frequently used spatiotemporal resampling methods.
-The following example showcases how a spatial dataset can be used to retrieve a bias-reduced performance estimate of a learner.
-
-The following examples use the `r ref("mlr_tasks_ecuador", text = "ecuador")` dataset created by [Jannes Muenchow](https://scholar.google.com/citations?user=Slq94Y4AAAAJ&hl=de&authuser=1&oi=ao).
-It contains information on the occurrence of landslides (binary) in the Andes of Southern Ecuador.
-The landslides were mapped from aerial photos taken in 2000.
-The dataset is well suited to serve as an example because it it relatively small and of course due to the spatial nature of the observations.
-Please refer to @muenchow2012 for a detailed description of the dataset.
-
-To account for the spatial autocorrelation probably present in the landslide data, we will make use one of the most used spatial partitioning methods, a cluster-based k-means grouping [@brenning2012], (`r ref("mlr_resamplings_spcv_coords", text = "spcv_coords")` in `r mlr3spatiotempcv`).
-This method performs a clustering in 2D space which contrasts with the commonly used random partitioning for non-spatial data.
-The grouping has the effect that train and test data are more separated in space as they would be by conducting a random partitioning, thereby reducing the effect of STAC.
-
-By contrast, when using the classical random partitioning approach with spatial data, train and test observations would be located side-by-side across the full study area (a visual example is provided further below).
-This leads to a high similarity between train and test sets, resulting in "better" but biased performance estimates in every fold of a CV compared to the spatial CV approach.
-However, these low error rates are mainly caused due to the STAC in the observations and the lack of appropriate partitioning methods and not by the power of the fitted model.
 
 ### Spatiotemporal Cross-Validation and Partitioning {#spatiotemp-cv}
 
@@ -924,7 +962,6 @@ In practice you usually might want to tune the hyperparameters of the learner in
 ```{r special-014}
 library("mlr3")
 library("mlr3spatiotempcv")
-set.seed(42)
 
 # be less verbose
 lgr::get_logger("bbotk")$set_threshold("warn")
@@ -1058,7 +1095,6 @@ We don't recommend doing this in actual studies - unless you prominently communi
 
 ```{r special-019, eval = FALSE}
 data = cookfarm_mlr3
-set.seed(42)
 data$Date = sample(rep(c(
   "2020-01-01", "2020-02-01", "2020-03-01", "2020-04-01",
   "2020-05-01"), times = 1, each = 35768))
