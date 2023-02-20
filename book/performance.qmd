@@ -441,8 +441,10 @@ custom_cv
 In `r mlr3`, we can assign a special role to a feature contained in the data by configuring the corresponding `$col_roles` field of a `r ref("Task")`.
 The two relevant column roles that will affect behavior of a resampling strategy are `"group"` or `"stratum"`.
 
-In some cases, it is desirable to keep observations together when the data is split into corresponding training and test sets, especially when a set of observations naturally belong to a group e.g., when the data contains repeated measurements of individuals.
-When observations belong to groups, we want to ensure that all observations of the same group belong to either the training set or the test set. 
+In some cases, it is desirable to keep observations together when the data is split into corresponding training and test sets, especially when a set of observations naturally belong to a group, e.g., when the data contains repeated measurements of individuals (longitudinal studies) or when dealing with spatial or temporal data.
+When observations belong to groups, we want to ensure that all observations of the same group belong to either the training set or the test set to prevent any potential leakage of information between training and testing sets. 
+For example, in a longitudinal study, measurements of a person are usually taken at multiple time points. 
+Grouping ensures that the model is tested on data from each person that it has not seen during training, while maintaining the integrity of the person's measurements across different time points.
 In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave-one-object-out" cross-validation strategy, where not only a single observation is left out, but all observations associated with a certain group (see @fig-group for an illustration).
 
 <!-- where it is not one measurement that is left out, but all measurements associated with one particular individual, institution, or broader object of measurement. -->
@@ -512,7 +514,7 @@ For example, the target column `species` of the `r ref("mlr_tasks_penguins", tex
 prop.table(table(task$data(cols = "species")))
 ```
 
-Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the corresponding test sets of a 3-fold cross-validation strategy:
+Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the training and test sets of a 3-fold cross-validation strategy:
 
 ```{r performance-022}
 r = rsmp("cv", folds = 3)
@@ -522,6 +524,11 @@ prop.table(table(task$data(rows = r$test_set(2), cols = "species")))
 prop.table(table(task$data(rows = r$test_set(3), cols = "species")))
 ```
 
+In the worst case, and especially for highly imbalanced classes, the minority class might be entirely left out of the training set in one or more resampling iterations.
+Consequently, the intermediate models within these resampling iterations will never predict the minority class, resulting in a misleading performance estimate for any resampling strategy without stratification.
+Relying on such a misleading performance estimate can have severe consequences for a deployed model, as it will perform poorly on the minority class in real-world scenarios. 
+For example, misclassification of the minority class can have serious consequences in certain applications such as in medical diagnosis or fraud detection, where failing to identify the minority class may result in serious harm or financial losses. 
+Therefore, it is important to be aware of the potential consequences of imbalanced class distributions in resampling and use stratification to mitigate highly unreliable performance estimates.
 The code below uses `species` as `"stratum"` column role to illustrate that the distribution of `species` in each test set will closely match the original distribution:
 
 ```{r performance-023}
@@ -868,7 +875,20 @@ knitr::include_graphics("Figures/confusion_matrix.svg")
 There are a multitude of different measures that can be derived from a confusion matrix, and unfortunately many of them have different names in different fields for historical reasons.
 For a good overview, `r link("https://en.wikipedia.org/wiki/Confusion_matrix", "this Wikipedia article features a comprehensive table")`, including many common aliases for each measure.
 
-When it comes to classification performance, it is generally difficult to achieve a high TPR and low FPR simultaneously.
+If a binary classifier predicts probabilities instead of discrete classes, we could arbitrarily set a threshold to cut-off the probabilities and assign them to the positive and negative class.
+When it comes to classification performance, it is generally difficult to achieve a high TPR and low FPR simultaneously because there is often a trade-off between the two rates.
+Increasing the threshold for identifying the positive cases, leads to a higher number of negative predictions and fewer positive predictions.
+As a consequence, the FPR is usually better (lower), but at the cost of a worse (lower) TPR.
+For example, in the special case where the threshold is set too high and no instance is predicted as positive, the confusion matrix shows zero true positives (no instances that are actually positive and correctly classified as positive) and zero false positives (no instances that are actually negative but incorrectly classified as positive).
+Therefore, the FPR and TPR are also zero since there are zero false positives and zero true positives.
+<!-- However, the TPR is also zero since there are no true positives, which means that the model fails to identify any positive cases, even if there are positive cases in the dataset.  -->
+<!-- Consider a binary classifier that predicts whether an email is spam (positive class) or not (negative class). -->
+<!-- Increasing the threshold for identifying positive cases means that the model will require more evidence (i.e., a higher predicted probability) before classifying an email as spam.  -->
+<!-- This can result in fewer emails being classified as spam (fewer positive predictions) and more emails being classified as not spam (more negative predictions). -->
+<!-- This can increase the model's specificity (the proportion of true negatives among all negative predictions) which leads to a better (lower) FPR. -->
+<!-- However, it may also reduce the model's sensitivity and TPR (i.e., the proportion of true positives among all positive predictions). -->
+Conversely, lowering the threshold for identifying positive cases can increase (improve) TPR, but at the cost of a worse (higher) FPR.
+
 ROC analysis aims at evaluating the performance of classifiers by visualizing the trade-off between the true positive rate (TPR) and the false positive rate (FPR) which can be obtained from a confusion matrix.
 The best classifier lies on the top-left corner where the TPR is 1 and the FPR is 0.
 Classifiers on the diagonal predict class labels randomly (possibly with different class proportions).
@@ -878,8 +898,7 @@ In practice, we should never obtain a classifier clearly below the diagonal.
 Swapping the predicted classes of a classifier would results in points in the ROC space being mirrored at the diagonal baseline.
 A point in the ROC space below the diagonal might indicate that the positive and negative class labels have been switched by the classifier.
 
-If a binary classifier predicts probabilities instead of discrete classes, we could arbitrarily set a threshold to cut-off the probabilities and assign them to the positive and negative class.
-Different thresholds may lead to different confusion matrices.
+Using different thresholds to cut-off predicted probabilities and assign them to the positive and negative class may lead to different confusion matrices.
 In this case, we can characterize the behavior of a binary classifier for different thresholds by plotting the TPR and FPR values --- this is the ROC curve (see @fig-roc for an illustration).
 A natural performance measure that can be derived from the ROC curve is the area under the curve (AUC).
 The higher the AUC value, the better the performance, whereas a random classifier would result in an AUC of 0.5.
