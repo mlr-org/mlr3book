@@ -61,9 +61,35 @@ Some examples of what can be implemented with `r mlr3pipelines` are:
 * Ensemble methods and aggregation of predictions.
 * Simultaneous model selection and hyperparameter tuning of both learners and preprocessing operators, by using `r mlr3tuning`.
 
-A very simple sequential Graph that does various preprocessing operations before fitting a learner is displayed in @fig-pipelines-examples (a). @fig-pipelines-examples (b) shows a more elaborate pipeline that does alternative path branching.
+During model training, the PipeOps in a Graph operate on a given dataset and transform it.
+PipeOps that come later in a Graph get the already transformed data as input.
+The Graph can therefore be thought of as a network representing function composition.
+However, besides transforming data, PipeOps also generate a *state*, similar to how Learners train model parameters.
+This state is used to inform the PipeOp's operation during prediction.
 
-In the following, we will show `r mlr3pipelines` by example:
+As a simple example, consider scaling features to have unit variance `po("scale", center = FALSE)` @fig-pipelines-state.
+During training, it calculates and divides by the standard deviation of each feature.
+For prediction, it would be wrong to divide by the standard deviation of the *prediction* dataset; instead the same scaling factors as during training should be used.
+The PipeOp therefore stores the scaling factors of each feature in its state, to be used during prediction.
+Each PipeOp stores its own state independently of other PipeOps.
+A very simple sequential Graph that does various preprocessing operations before fitting a learner is displayed in @fig-pipelines-examples (a).
+@fig-pipelines-examples (b) shows a more elaborate pipeline that does alternative path branching.
+
+```{r fig.align='center', eval = TRUE}
+#| label: fig-pipelines-state
+#| fig-cap: "`$train()` of the \"Scaling\" PipeOp both transfors data (rectangles) as well as creates a state: the scaling factors, necessary to transform data during prediction."
+#| fig-alt: "Traning data is transformed by a Scaling PipeOp, which also sets the state inside the PipeOp."
+#| out.width: "70%"
+#| echo: false
+knitr::include_graphics("images/state_graphic.svg")
+```
+
+When evaluating the performance of an ML process consisting e.g. of preprocessing, followed by model fitting, it is strongly advised to always put the entire preprocessing operation *inside* the resampling loop, as is done here -- `r mlr3pipelines` encourages this more accurate approach.
+Making a PCA on the entirety of a dataset, followed by resampling a learner on it, would effectively leak information from the training set to the test set, leading to biased results.
+
+## `r mlr3pipelines` by Example {#sec-pipelines-intro}
+
+In the following, we give a short `r mlr3pipelines` exampl to give you a quick idea what it is capable of.
 The dataflow programming concept implemented by `r mlr3pipelines` is very intuitive, and seeing a few code snippets will already give you a clear idea of how to use it.
 In the later chapters we will then explain each of the concepts used in more detail.
 
@@ -102,70 +128,46 @@ gr = graph %>>%
 gr$plot(html = FALSE)
 ```
 
-## `r mlr3pipelines` by Example {#sec-pipelines-intro}
+To use `mlr3pipelines`, it suffices to load the package.
+PipeOps can then easily be created using the `r ref("po", "po()")` constructor function.
+Just like learners, they have hyperparameters that can be set during construction as well as by using the `$param_set$values` field, as was shown in @sec-training.
+More about PipeOps and how they are created and configured is described in @sec-pipelines-pipeops.
 
-### Creating and Configuring `PipeOp`s
-
-To use `mlr3pipelines`, it suffices to load the package:
 ```{r pipeop-quickstart-library}
 library("mlr3pipelines")
-```
 
-PipeOps can easily be created using the `r ref("po", "po()")` constructor function.
-Just like learners, they have hyperparameters that can be set during construction as well as by using the `$param_set$values` field, as was shown in @sec-training.
-The *ID* of a PipeOp can be set during construction as well; this may be necessary to avoid name clashes later on, because when PipeOps are combined in a Graph, they need to have differing IDs.
-
-```{r pipeop-quickstart-construction-1}
 pca = po("pca", scale. = TRUE)
-pca
-pca2 = po("pca", id = "pca2")
-pca2$param_set$values$center = FALSE
-pca2
 ```
 
-A `r ref("Learner")` can be turned into a `r ref("PipeOp")` using `r ref("as_pipeop", "as_pipeop()")`.
-This is, however, often not necessary since this happens automatically in most places where a PipeOp is expected.
-```{r pipeop-quickstart-construction-2}
-lp = as_pipeop(lrn("classif.rpart"))
-lp
-```
-
-The resulting PipeOp is a `r ref("PipeOpLearner")`. More about PipeOps and how they are created and configured is described in @sec-pipelines-pipeops.
-
-### Creating `Graph`s
-
+PipeOps can be combined to form Graphs.
 The easiest way to combine PipeOps is to use the `r ref("concat_graphs", "%>>%")`-operator.
-It combines its left hand side with its right hand side sequentially, so that the right hand side gets the result from its left hand side as input.
-The `$plot()` method can be used to show what the created Graph looks like:
+To get a Graph that trains a model, combine PipeOps with `r ref("Learner")`.
+The `$plot()` method can be used to show what the created Graph looks like.
+@sec-pipelines-graphs gives a more in-depth introduction into how simple Graphs are constructed; the simple sequential pipeline shown here is described in more detail in @sec-pipelines-sequential.
 
 ```{r pipeop-quickstart-graphs-1}
-gr = pca %>>% lp
-gr$plot(html = FALSE)
+gr = pca %>>% lrn("classif.rpart")  # equivalent
+
+gr$plot()
 ```
 
-@sec-pipelines-graphs gives a more in-depth introduction into how simple Graphs are constructed.
-
-### Using `Graph`s as `Learners`s
-
-Graphs in which the last operation is a `r ref("PipeOpLearner")` can be turned into a Learner (a `r ref("GraphLearner")`, to be precise) that performs the operations represented by the `Graph` in order by using `r ref("as_learner", "as_learner()")`.
+Graphs in which the last operation is a `r ref("PipeOpLearner")` can be turned into a Learner that performs the operations represented by the `Graph` in order by using `r ref("as_learner", "as_learner()")`.
 Notice how the decision variables in the model are not the columns of the original dataset, but instead the principal components extracted by the `"pca"`-PipeOp.
-The Learner can be `resample()`d, `benchmark()`ed and `tune()`d just as any other `r ref("Learner")`.
-
 
 ```{r pipeop-quickstart-graphlearner-1}
 gl = as_learner(gr)
-gl
+
 gl$train(tsk("iris"))
 gl$model$classif.rpart$model
+```
+
+The Learner can be `resample()`d, `benchmark()`ed and `tune()`d just as any other `r ref("Learner")`.
+```{r pipeop-quickstart-graphlearner-2}
 rr = resample(tsk("iris"), gl, rsmp("cv"))
 rr$aggregate()
 ```
 
-When evaluating the performance of a machine learning process consisting e.g. of preprocessing, followed by model fitting, it is strongly advised to always put the entire preprocessing operation *inside* the resampling loop, as is done here -- `r mlr3pipelines` encourages this more accurate approach.
-Making a PCA on the entire dataset (i.e. `tsk("iris")`) instead, followed by resampling the `"classif.rpart"` learner on it, would effectively leak information from the training set to the test set, leading to biased results.
-
-See @sec-pipelines-sequential about how to effectively use Graphs as `r ref("Learner")`.
-
+<!--
 ### Non-Sequential `Graph`s
 
 One distinguishing feature of `r mlr3pipelines` is that it can represent Graphs with parallel paths, for example alternative preprocessing operations that then get combined together in a "`cbind`"-operation. To arrange Graphs in parallel, the `r ref("gunion", "gunion()")`-function can be used. The `%>>%` operator tries to automatically connect all outputs of its left hand side to all inputs of its right hand side. The following fits a model on both the centered and the non-centered principal components of the `iris` dataset. The features get combined using the `"featureunion"` PipeOp and then given to the `"classif.rpart"` learner.
@@ -191,7 +193,7 @@ See @sec-pipelines-nonsequential for more on non-sequential Graphs.
 
 ### Tuning `GraphLearner`s
 
-`r mlr3pipelines` is well suited for tuning entire machine learning pipelines.
+`r mlr3pipelines` is well suited for tuning entire ML pipelines.
 For one because performance evaluations are more accurate, see above, but also because the constructed Graph objects have a combined hyperparameter space that can be tuned together.
 Notice how the hyperparameters of both the `"pca"` PipeOp as well as the `"classif.rpart"` learner are present.
 They are prefixed by each object's ID to avoid possible name clashes.
@@ -214,7 +216,7 @@ tr$result
 
 ### Common `Graph` Patterns
 
-There are various patterns that frequently occur when building machine learning pipelines that consist of more than just a single PipeOp operation. The `r ref("ppl", "ppl()")` function provides a variety of patterns which are presented in @sec-pipelines-ppl.
+There are various patterns that frequently occur when building ML pipelines that consist of more than just a single PipeOp operation. The `r ref("ppl", "ppl()")` function provides a variety of patterns which are presented in @sec-pipelines-ppl.
 
 The following is an example of *stacking*, using the `"classif.ranger"` and `"classif.multinom"` model predictions as features for a `"classif.rpart"` model:
 ```{r pipeop-quickstart-ppl-1}
@@ -223,18 +225,27 @@ gr3 = ppl("stacking", lrns(c("classif.ranger", "classif.multinom")), lrn("classi
 gr3$plot(html = FALSE)
 ```
 
+-->
+
 ## `PipeOp`: Pipeline Operators {#sec-pipelines-pipeops}
 
 The most basic unit of functionality within `r mlr3pipelines` is the `r ref("PipeOp")`, short for "pipeline operator", which represents a transformative operation on input (for example a training dataset) leading to output.
 Like a learner, it has a `$train()` and a `$predict()` function, but unlike a learner, these can both return result data.
 The training phase will typically generate a certain model of the data that is saved as internal state.
 The prediction phase will then operate on the prediction data depending on the trained model.
-
+Therefore, just like a Learner, a PipeOp has "parameters" (i.e. the state) that are trained, but also "hyperparameters" that can be set by the users.
 An example of this behavior is the *principal component analysis* operation ("`r ref("PipeOpPCA")`"):
 ```{r pipeop-intro-1}
 pca = po("pca")
 pca
 ```
+When printed, we can see various things about this PipeOp:
+The first line tells us the ID of the PipeOp ("pca") and that it is not trained yet, i.e. it has no `$state`.
+The second line would tell us about hyperparameter values.
+This is an empty list here, as we are using the default settings of `po("pca")`.
+The remaining lines give information about input and output types of this PipeOp.
+The PCA PipeOp takes one input (named "`input`") of type "`Task`", both during training and prediction (hence "`[Task,Task]`).
+It produces one output (named "`output`"), also of type "`Task`" during both phases.
 
 Training is done using the `$train()`-method.
 Unlike the learner's `$train()` method, we can imagine the PipeOp's `$train()` to have multiple inputs, as well as multiple outputs.
@@ -269,15 +280,6 @@ The internal state that is trained in the `$train()` call is saved in the `$stat
 pca$state
 ```
 
-```{r fig.align='center', eval = TRUE}
-#| label: fig-pipelines-state
-#| fig-cap: "`$train()` of the \"Scaling\" PipeOp both transfors data (rectangles) as well as creates a state: the scaling factors, necessary to transform data during prediction."
-#| fig-alt: "Traning data is transformed by a Scaling PipeOp, which also sets the state inside the PipeOp."
-#| out.width: "70%"
-#| echo: false
-knitr::include_graphics("images/state_graphic.svg")
-```
-
 ### Creating `PipeOp`s
 
 Each PipeOp is an instance of an `R6` class, many of which are provided by the `r mlr3pipelines` package itself.
@@ -290,24 +292,25 @@ When retrieving PipeOps from the `r ref("mlr_pipeops")` dictionary, it is also p
 po("pca", rank. = 3, id = "pca2")
 ```
 
+Notice how the printed output for this PipeOp differs from the one shown for `po("pca")` above:
+It has a different ID, and the fact that the `rank.` setting differs from the default is also shown.
+
 Some `PipeOp`s, in fact, require construction arguments, for example when they are operators that wrap another `mlr3`-object.
-```{r 05-pipelines-pipeops-005, eval = FALSE}
-learner = po("learner")
-
-# Error in as_learner(learner) : argument "learner" is missing, with no default
-```
-
 ```{r 05-pipelines-pipeops-006}
 learner = po("learner", learner = lrn("classif.rpart"))
 ```
 
-Calling `po()` by itself prints all available `PipeOp`s, and `as.data.table(po())` will give a more detailed list with more meta-data.
+Calling `po()` by itself prints all available `PipeOp`s.
+You can use `as.data.table(po())` to get a more detailed list with more meta-data.
+```{r 06-pipelines-pipeops-006-1}
+po()
+```
 
 ## `Graph`: Networks of `PipeOp`s {#sec-pipelines-graphs}
 
 ### Basics: Sequential `Graph`s
 
-`PipeOp`s are used to represent individual computational steps in machine learning pipelines.
+`PipeOp`s are used to represent individual computational steps in ML pipelines.
 These pipelines themselves are defined by `r ref("Graph")` objects.
 A Graph is a collection of PipeOps with "edges" that mandate that data should be flowing along them.
 
@@ -319,12 +322,15 @@ The following example creates a Graph that first adds a `Petal.Area` feature to 
 p_area = po("mutate", mutation = list(Petal.Area = ~Petal.Width * Petal.Length))
 p_scale = po("scale")
 gr = p_area %>>% p_scale
+print(gr)
 ```
 
+The printer gives information about the layout of the Graph:
+For each PipOp (column "ID"), it shows information about its state, as well as a list of its successors ("sccssors", i.e. which PipeOps are connected to its output and come directly after it) and its predecessors ("prdcssors", which PipeOps are connected to its input).
+For this simple Graph, we can see that the output of the `mutate` PipeOp is given to the `scale` PipeOp.
 While the printer of a Graph gives some information about the layout of a `Graph`, the most intuitive way of visualizing it is using the `$plot()` function.
 
 ```{r 05-pipelines-in-depth-017}
-print(gr)
 gr$plot(html = FALSE)
 ```
 
@@ -354,7 +360,8 @@ gr$add_edge("mutate", "scale")  # address by PipeOp-ID
 ```
 
 :::{.callout-warning}
-Although it is also possible to modify individual PipeOps and edges in a Graph through the `$pipeops` and `$edges` fields, this is not recommended, because no error checking is performed and it may put the Graph in an unsupported state.
+Although it is also possible to modify individual PipeOps and edges in a Graph through the `$pipeops` and `$edges` fields, this is not recommended, because no error checking is performed and it may put the Graph in an invalid state.
+Only do this if you know what you are doing.
 :::
 
 ### Using a `Graph`
@@ -402,8 +409,8 @@ knitr::include_graphics("images/pipe_action.svg")
 While a `r ref("Learner")` is not a `r ref("PipeOp")` by itself, it can easily be converted into one using `r ref("as_pipeop", "as_pipeop()")`, or alternatively `po("learner")`, which creates a `r ref("PipeOpLearner")`-wrapper-class.
 ```{r 05-pipelines-modeling-0}
 l_rpart = lrn("classif.rpart")
+p_rpart = as_pipeop(l_rpart)
 p_rpart = po("learner", l_rpart)  # same result
-p_rpart
 ```
 
 However, this is rarely necessary, since the `%>>%`-operator automatically converts Learners to PipeOps. The following code creates a Graph that adds a `Petal.Area` feature, followed by fitting a `"classif.rpart"` decision tree model.
@@ -453,13 +460,12 @@ Here the trained `"classif.rpart"` classification tree is interesting.
 However, it is wrapped inside a `PipeOpLearner`: The trained `Learner` has to be extracted before inspection.
 ```{r 05-pipelines-modeling-debugging-2}
 trained_p_rpart = glrn$graph_model$pipeops$classif.rpart
-trained_p_rpart
 trained_l_rpart = trained_p_rpart$learner_model
 trained_l_rpart
 trained_l_rpart$model
 ```
 
-### Pipeline Hyperparameters
+### Pipeline Hyperparameters {#sec-pipelines-hyperparameters}
 
 Just like `r ref("Learner")`s, PipeOps have *hyperparameters* provided by the `r mlr3book::ref_pkg("paradox")` package.
 They can be accessed through the `$param_set` field and provide information about the parameters that can be changed.
@@ -473,7 +479,6 @@ Like for `Learner` objects, the `$param_set$values` field can be accessed to cha
 
 ```{r 05-pipelines-in-depth-033}
 p_pca$param_set$values$center = FALSE
-p_pca$param_set$values
 # Alternatively:
 p_pca = po("pca", center = FALSE)
 p_pca$param_set$values
@@ -542,7 +547,7 @@ Do not change the ID of a PipeOp that is already in a Graph through `graph$pipeo
 The Graph will have undefined behavior in this case.
 :::
 
-## Non-Sequential Graphs {#sec-pipelines-nonsequential}
+## `*` Non-Sequential Graphs {#sec-pipelines-nonsequential}
 
 So far, we have shown how simple sequential Graphs can be built from preprocessing PipeOps and encapsulated learners.
 We will now show more involved pipelines that can perform more complex operations.
@@ -663,7 +668,7 @@ result = gr$train(tsk("iris"))
 result[[1]]$data()
 ```
 
-### Bagging {#sec-pipelines-bagging}
+### Example: Bagging {#sec-pipelines-bagging}
 
 The basic idea of Bagging, introduced by [@Breiman1996], is to create multiple predictors and then aggregate those to a single, more powerful predictor:
 
@@ -723,7 +728,7 @@ bmr = benchmark(grid)
 bmr$aggregate()
 ```
 
-### `PipeOpLearnerCV` and Stacking {#sec-pipelines-stack}
+### Example: `PipeOpLearnerCV` and Stacking {#sec-pipelines-stack}
 
 Stacking [@Wolpert1992] is another technique that can improve model performance.
 The basic idea behind stacking is to use of predictions from one model as features for a subsequent model to possibly improve performance.
@@ -783,48 +788,94 @@ On a higher level, we can then combine those predictions in order to form a very
 
 ## Tuning Graphs {#sec-pipelines-tuning}
 
-### Tuning Combined Spaces
+Having as many options for preprocessing as `r mlr3pipelines` provides has many benefits, but it also comes with a drawback:
+It considerably enlarges the space of possible hyperparameter configurations.
+Not only do preprocessing operations bring their own hyperparameter settings, but whether to do preprocessing, and which preprocessing operation to perform, now also needs to be decided.
+Tuning ML models with `r mlr3pipelines` comes in three levels of difficulty:
 
-Here we define a `r ref("ParamSet")` for the `"rpart"` learner and the `"variance"` filter which should be optimized during the tuning process.
+1. Tuning the hyperparameters of a Learner or a PipeOp individually when it is part of a Graph.
+2. Tuning the hyperparameters of both Learner and its preprocessing operations together.
+3. Tuning not only the hyperparameters, but also the option of whether and which preprocessing to perform.
+
+The first level is not much different from tuning individual Learners, as described in @sec-optimization.
+The only thing to watch out for here is that a Learner's hyperparameter names are prefixed with its ID, as shown in @sec-pipelines-hyperparameters.
+The second level is demonstrated in the following @sec-pipelines-combined.
+It follows the @sec-pipelines-branch, showing one way of implementing the third level.
+Another way of achieving 3. is to use `PipeOpProxy`, demonstrated in the (optional) @sec-pipelines-proxy.
+
+We will be using the "Sonar" dataset.
+It contains many features -- sonar response levels in different frequency bands -- that are likely correlated but also likely not very meaningful by themselves.
+In this setting, doing a principal component analysis using `po("pca")`, and selecting the highest variance components using the `rank.` hyperparameter, is a good option.
+In the following, we will show how to choose this hyperparameter, and how `po("pca")` measures up against other preprocessing methods.
+
+### Tuning Combined Spaces {#sec-pipelines-combined}
+
+We use SVM Learner that we already tuned in @sec-optimization and combine it with `po("pca")`.
+Because we found that the SVM is very sensitive to the right choice of its `gamma` hyperparameter, we will tune it together with the `rank.` hyperparameter of `po("pca")`.
+
+First we need to define the Graph that we tune.
+We have the option of setting each component's hyperparameter being tuned to `to_tune()` as is done in @sec-optimization, but here we demonstrate how to define the search space `r ref("ParamSet")` directly.
 
 ```{r 05-pipelines-modeling-008}
+library("mlr3learners")
+glrn = po("pca") %>>%
+  lrn("classif.svm", cost = 2.5e4, kernel = "radial", type = "C-classification")
+glrn = as_learner(glrn)
+
 library("paradox")
-ps = ps(
-  classif.rpart.cp = p_dbl(lower = 0, upper = 0.05),
-  pca.center = p_lgl()
+search_space = ps(
+  pca.rank. = p_int(lower = 2, upper = 60, logscale = TRUE),
+  classif.svm.gamma = p_dbl(lower = 1e-6, upper = 1e0, logscale = TRUE)
 )
 ```
 
-After having defined the `r ref("Tuner")`, a random search with 10 iterations is created.
-For the inner resampling, we are simply using holdout (single split into train/test) to keep the runtimes reasonable.
+We tune this using the `r ref("tune")` function on a 5x5 grid, stepping through both the number of selected principal components (`pca.rank.`) and the SVM's `gamma` hyperparameter on a log-scale.
 
 ```{r 05-pipelines-modeling-009}
 library("mlr3tuning")
-instance = TuningInstanceSingleCrit$new(
-  task = tsk("iris"),
+set.seed(0)
+instance = tune(
+  method = tnr("grid_search", resolution = 5),
+  task = tsk("sonar"),
   learner = glrn,
-  resampling = rsmp("holdout"),
+  resampling = rsmp("cv", folds = 3),
   measure = msr("classif.ce"),
-  search_space = ps,
-  terminator = trm("none")
+  search_space = search_space
 )
+
+instance$result
 ```
 
-```{r 05-pipelines-modeling-010}
-tuner = tnr("grid_search")
-tuner$optimize(instance)
+Note that the hyperparameter values are the log of the actual values.
+On the normal scale, the optimum is at:
+```{r 05-pipelines-modeling-009-2}
+cbind(data.table::as.data.table(instance$result_x_domain), classif.ce = instance$result_y)
 ```
 
-The tuning result can be found in the respective `result` field.
+The observed performance values are shown in @fig-pipelines-opttrace-1.
+It becomes clear that, for different values of `rank.`, different `gamma` values can be optimal, so tuning both hyperparameters together is prudent.
 
-```{r 05-pipelines-modeling-011}
-instance$result_learner_param_vals
-instance$result_y
+```{r fig.align='center', eval = TRUE}
+#| label: fig-pipelines-opttrace-1
+#| fig-cap: "Observed performance values when optimizing both `rank.` of `po(\"pca\")` and `gamma` of `lrn(\"svm\")` at the same time.
+#|   The x-axis shows `gamma` values (log scale). Each facet (i.e. individual plot) shows the behavior for a different `rank.` value, displayed at the top."
+#| fig-alt: "Plot showing performance values of pca, followed by SVM."
+#| echo: false
+library("ggplot2")
+ggplot(instance$archive$data[, c(data.table::rbindlist(x_domain), list(classif.ce = classif.ce))], aes(x = classif.svm.gamma, y = classif.ce)) +
+  geom_line() +
+  facet_grid(cols = vars(pca.rank.)) +
+  scale_x_log10() +
+  theme_bw() +
+  labs(title = "Performance of po(\"pca\") %>>% lrn(\"classif.svm\")")
 ```
 
 ### Tuning Alternative Paths with `PipeOpBranch` {#sec-pipelines-branch}
 
-The `r ref("PipeOpBranch")` and `r ref("PipeOpUnbranch")` POs make it possible to specify multiple alternative paths.
+While we see that tuning the `po("pca")` has benefits, we have not yet seen whether using PCA at all is beneficial.
+It is possible that using the tuned PCA simply does the least damage, or that a much simpler operation would perform equally well or better.
+
+Here we can use the `r ref("PipeOpBranch")` and `r ref("PipeOpUnbranch")` POs, which make it possible to specify multiple alternative paths.
 Data only flows along one of these paths, which can be controlled by a hyperparameter, as is shown in @fig-pipelines-alternatives (a).
 This concept makes it possible to tune alternative preprocessing methods or alternative learner models.
 
@@ -833,16 +884,20 @@ If names are given, the "branch-choosing" hyperparameter becomes more readable.
 In the following, we set three options:
 
 1. Doing nothing ("nop")
-1. Applying a PCA
-1. Scaling the data
+2. Applying a PCA
+3. Centering and Scaling the data, using `po("scale")`
 
 It is important to "unbranch" again after "branching", so that the outputs are merged into one result objects.
 
+For this demo, we will use the `rank.` value that was the optimum in the last optimization.
+
 ```{r 05-pipelines-non-sequential-003, eval = TRUE}
+rank_opt = instance$result_x_domain$pca.rank.
+
 graph = po("branch", c("nop", "pca", "scale")) %>>%
   gunion(list(
-    po("nop", id = "null1"),
-    po("pca"),
+    po("nop"),
+    po("pca", rank. = rank_opt),
     po("scale")
   )) %>>% po("unbranch", c("nop", "pca", "scale"))
 ```
@@ -857,56 +912,83 @@ The output of this graph depends on the setting of the `branch.selection` hyperp
 
 ```{r 05-pipelines-branch-01}
 graph$param_set$values$branch.selection = "pca"  # use the "PCA" path
-graph$train(tsk("iris"))[[1]]$head()
+graph$train(tsk("sonar"))[[1]]$head()
 graph$param_set$values$branch.selection = "nop"  # use the "No-Op" path
-graph$train(tsk("iris"))[[1]]$head()
+graph$train(tsk("sonar"))[[1]]$head()
 ```
 
 Tuning this hyperparameter can be used to determine which of the possible options works best in combination with a given learner.
-It can even be used to tune which, of several learners, is most appropriate for a given dataset.
-Consider the following example, where both the preprocessing (PCA or no preprocessing), as well as the model to use (multinomial linear model or shallow decision stump) is tuned over.
-The `Graph` we need is the following:
+Branching can even be used to tune which of several learners is most appropriate for a given dataset.
+We now extend this example so that both the preprocessing (PCA, scaling, or no preprocessing), as well as the model to use (SVM or decision tree) can be tuned.
+For this, we add another branching pathway to our Graph:
 
 ```{r 05-pipelines-branch-02}
-graph = po("branch", c("nop", "pca"), id = "branch1") %>>%
-    gunion(pos(c("nop", "pca"))) %>>%
-  po("unbranch", c("nop", "pca"), id = "unbranch1") %>>%
-  po("branch", c("classif.rpart", "classif.multinom"), id = "branch2") %>>%
+glrn = graph %>>%
+  po("branch", c("classif.rpart", "classif.svm"), id = "branch2") %>>%
     gunion(list(
-      lrn("classif.rpart", maxdepth = 2),
-      lrn("classif.multinom", trace = FALSE)
+      lrn("classif.rpart"),
+      lrn("classif.svm", cost = 2.5e4, kernel = "radial", type = "C-classification")
     )) %>>%
   po("unbranch", c("classif.rpart", "classif.multinom"), id = "unbranch2")
-graph$plot(html = FALSE)
+glrn = as_learner(glrn)
+glrn$graph$plot(html = FALSE)
 ```
 
 Note that it is necessary to give the two branching operations different IDs to avoid name clashes.
-We can now get the search space that tunes over all options of both branching operators and tune the graph.
+
+Finally, we would still like to tune over the `gamma` hyperparameter of the SVM, since it may again depend on the kind of preprocessing being done.
+However, this hyperparameter is only active when the "`classif.svm`" path is chosen.
+We therefore have to declare a dependency in the search space.
+The search space that tunes over all options of both branching operators as well as the SVM's `gamma` hyperparameter therefore looks like the following:
+
 
 ```{r 05-pipelines-branch-03}
-glrn = as_learner(graph)
-glrn$param_set$values$branch1.selection = to_tune()
-glrn$param_set$values$branch2.selection = to_tune()
-instance = TuningInstanceSingleCrit$new(
-  task = tsk("iris"),
-  learner = glrn,
-  resampling = rsmp("repeated_cv"),
-  measure = msr("classif.ce"),
-  terminator = trm("none")
+search_space = ps(
+  branch.selection = p_fct(c("nop", "pca", "scale")),
+  branch2.selection = p_fct(c("classif.rpart", "classif.svm")),
+  classif.svm.gamma = p_dbl(lower = 1e-6, upper = 1e0, logscale = TRUE,
+    depends = branch2.selection == "classif.svm")
 )
-tuner = tnr("grid_search")
 
 set.seed(0)
-tuner$optimize(instance)
-instance$result_learner_param_vals
-instance$result_y
+instance = tune(
+  method = tnr("grid_search", resolution = 5),
+  task = tsk("sonar"),
+  learner = glrn,
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.ce"),
+  search_space = search_space
+)
+
+cbind(as.data.table(instance$result_x_domain), classif.ce = instance$result_y)
+```
+
+Looking at the result in @fig-pipelines-opttrace-2, we see that the performance of the "nop" path and the "scale" path is the same.
+This is not surprising:
+By default, the SVM does scaling internally, so the `po("scale")` leads to identical results in this case.
+We also see that the tuned SVM performs better than the untuned decision tree, "classif.rpart".
+A more thorough investigation could try to tune the decision tree to check if its performance can be brought to the level of the SVM.
+
+```{r fig.align='center', eval = TRUE}
+#| label: fig-pipelines-opttrace-2
+#| fig-cap: "Observed performance values when optimizing both preprocessing (between \"pca\", \"scale\", and \"nop\", which is no preprocessing) and Learner (between SVM and the decision tree \"classif.rpart\") at the same time.
+#|   The x-axis shows preprocessing. Each facet (i.e. individual plot) shows the Learner being used, together with setting for \"gamma\", if applicable."
+#| fig-alt: "Plot showing performance values of pca, scale, or nop, followed by SVM or decision tree."
+#| echo: false
+
+ggplot(instance$archive$data[, learner := ifelse(is.na(classif.svm.gamma), "classif.rpart", sprintf("classif.svm\ngamma = %s", format(classif.svm.gamma, digits = 2, scientific = TRUE)))],
+  aes(x = branch.selection, y = classif.ce)) +
+  geom_point() +
+  facet_grid(cols = vars(learner)) +
+  theme_bw() +
+  labs(title = "Performance of Various Learners with Different Preprocessing")
 ```
 
 :::{.callout-info}
 Graphs with alternative path branching can also be created using `ppl()`, see @sec-pipelines-ppl
 :::
 
-### Tuning with `PipeOpProxy`
+### `*` Tuning with `PipeOpProxy` {#sec-pipelines-proxy}
 
 The `r ref("PipeOpProxy")` operator is a meta-operator that performs the operation that is stored in its `content` hyperparameter.
 This can either be another PipeOp, or an entire Graph.
@@ -940,41 +1022,57 @@ knitr::include_graphics("images/proxy.svg")
 To use `PipeOpProxy` instead of alternative path branching to perform the above optimization, one would first set up a Graph that contains `PipeOpProxy` operators as placeholders for the operations (preprocessing, learning) that should be tuned.
 Note the different IDs to avoid a name clash.
 
-```r
-graph = po("proxy", id = "preproc") %>>% po("proxy", id = "learner")
-glrn = as_learner(graph)
+```{r}
+glrn = po("proxy", id = "preproc") %>>% po("proxy", id = "learner")
+glrn = as_learner(glrn)
 ```
 
 The tuning space for the `content` hyperparameters can now be set to a discrete set of the possibilities that should be tried out.
-`r ref("to_tune", "paradox::to_tune()")` is called with a `r ref("p_fct", "paradox::p_fct()")` that lists the PipeOps that should be inserted.
+Using `r ref("p_fct", "paradox::p_fct()")` with a named list of PipeOps that should be inserted works here.
 Internally, `r paradox` is creating a transformation function here, see @sec-optimization-trafo for more details.
+For the Learner-part, it is necessary to use a more complicated trafo-function, since here the Learner to use depends on more than one search space component.
+This is defined here using `.extra_trafo`, which takes the values as generated by the search space as input `x`, and returns the value to be given to the Graph.
+The help page of `r ref("ps")` gives more details on this.
 Observe how this optimization, when performed with the same seed, has the same result as above.
 
-```r
-glrn$param_set$values$preproc.content = to_tune(p_fct(list(
-  nop = po("nop"),
-  pca = po("pca")
-)))
-glrn$param_set$values$learner.content = to_tune(p_fct(list(
-  classif.rpart = lrn("classif.rpart", maxdepth = 2),
-  classif.multinom = lrn("classif.multinom")
-)))
-
-instance = TuningInstanceSingleCrit$new(
-  task = tsk("iris"),
-  learner = glrn,
-  resampling = rsmp("repeated_cv"),
-  measure = msr("classif.ce"),
-  terminator = trm("none")
+```{r}
+search_space = ps(
+  preproc.content = p_fct(list(
+    nop = po("nop"),
+    pca = po("pca", rank. = rank_opt),
+    scale = po("scale")
+  )),
+  learner.content = p_fct(list(
+    classif.rpart = lrn("classif.rpart"),
+    classif.svm = lrn("classif.svm", cost = 2.5e4, kernel = "radial", type = "C-classification")
+  )),
+  classif.svm.gamma = p_dbl(lower = 1e-6, upper = 1e0, logscale = TRUE,
+    depends = learner.content == "classif.svm"),
+  .extra_trafo = function(x, param_set) {
+    if (!is.null(x$classif.svm.gamma)) {
+      x$learner.content$param_set$values$gamma = x$classif.svm.gamma
+      x$classif.svm.gamma = NULL
+    }
+    x
+  }
 )
-tuner = tnr("grid_search")
 
 set.seed(0)
-tuner$optimize(instance)
-instance$result_learner_param_vals
+instance = tune(
+  method = tnr("grid_search", resolution = 5),
+  task = tsk("sonar"),
+  learner = glrn,
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.ce"),
+  search_space = search_space
+)
+
+as.data.table(instance$result)[,
+  .(preproc.content, learner.content, classif.svm.gamma = exp(classif.svm.gamma), classif.ce)
+]
 ```
 
-## Common Patterns and `ppl()` {#sec-pipelines-ppl}
+## `*` Common Patterns and `ppl()` {#sec-pipelines-ppl}
 
 There are certain parts of Graphs that often occur in different contexts, but that could not reasonably be provided as single PipeOps by `mlr3pipelines`.
 Examples for this were presented in the previous section:
@@ -1136,13 +1234,13 @@ lrn$
 ```
 -->
 
-
+<!--
 ## Specific PipeOps
 
 ### Imputation: `PipeOpImpute`
 
 Often you will be using data sets that have missing values.
-There are many methods of dealing with this issue, from relatively simple imputation using either mean, median or histograms to way more involved methods including using machine learning algorithms in order to predict missing values.
+There are many methods of dealing with this issue, from relatively simple imputation using either mean, median or histograms to way more involved methods including using ML algorithms in order to predict missing values.
 These methods are called imputation.
 
 The following PipeOps, `r ref("PipeOpImpute")`:
@@ -1363,3 +1461,4 @@ knitr::include_graphics("images/po_multi_viz.png")
 
 ### How `%>>%` Works
 
+-->
