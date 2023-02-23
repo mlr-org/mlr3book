@@ -12,24 +12,17 @@ update_db = function() {
 #' Creates a markdown link to a function reference.
 #'
 #' @param topic Name of the topic to link against.
-#' @param text Text to use for the link. Defaults to the topic name.
 #' @param format Either markdown or HTML.
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = NULL, format = "markdown") {
+ref = function(topic, format = "markdown") {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
-  checkmate::assert_string(text, min.chars = 1L, null.ok = TRUE)
   checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
-  text = if (is.null(text)) {
-    topic
-  } else {
-    trimws(text)
-  }
 
   if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
@@ -64,8 +57,8 @@ ref = function(topic, text = NULL, format = "markdown") {
   }
 
   switch(format,
-    "markdown" = sprintf("[`%s`](%s)", text, url),
-    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
+    "markdown" = sprintf("[`%s`](%s)", topic, url),
+    "html" = sprintf("<a href=\"%s\">%s</a>", url, topic)
   )
 }
 
