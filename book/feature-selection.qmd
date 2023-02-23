@@ -7,12 +7,12 @@ author:
       - name: Leibniz Institute for Prevention Research and Epidemiology – BIPS, Bremen, Germany
       - name: University of Bremen, Germany
       - name: University of Copenhagen, Denmark
-abstract: 
+abstract:
   Feature selection is a key component of data analysis and is part of most machine learning applications.
-  This chapter introduces two concepts of feature selection and how to use them in mlr3. 
+  This chapter introduces two concepts of feature selection and how to use them in mlr3.
   Filter methods are preprocessing steps that are independent of the model to be fitted, whereas wrapper methods work by fitting models on feature subsets and evaluating their performance.
   We start with simple examples such as univariate filters and sequential forward selection but also cover more advanced topics such as optimizing multiple performance measures simultaneously.
-  To integrate feature selection into complex machine learning pipelines and the mlr3 ecosystem, we show how to combine feature selection with mlr3 pipelines and how to automate feature selection by wrapping it in mlr3 learners. 
+  To integrate feature selection into complex machine learning pipelines and the mlr3 ecosystem, we show how to combine feature selection with mlr3 pipelines and how to automate feature selection by wrapping it in mlr3 learners.
 ---
 
 # Feature Selection {#sec-feature-selection}
@@ -20,40 +20,38 @@ abstract:
 {{< include _setup.qmd >}}
 
 Feature selection, also known as variable or descriptor selection, is the process of finding a subset of features to use with a given task and learner.
-Using an optimal set of features can have several benefits:
+Using an *optimal set* of features can have several benefits:
 
-* improved performance, since we reduce overfitting on irrelevant features,
+* improved predictive performance, since we reduce overfitting on irrelevant features,
 * robust models that do not rely on noisy features,
 * simpler models that are easier to interpret,
-* faster model fitting, and
+* faster model fitting, e.g. for model updates,
+* faster prediction, and
 * no need to collect potentially expensive features.
 
+However, these objectives will not necessarily be optimized by the same *optimal set* of features and thus feature selection is inherently multi-objective.
+In this chapter, we mostly focus on feature selection as a means of improving predictive performance, but also briefly cover optimization of multiple criteria [#sec-multicrit-featsel].
+
 Reducing the amount of features can improve models across many scenarios, but it can be especially helpful in datasets that have a high number of features in comparison to the number of datapoints.
-Many learners perform implicit feature selection, e.g. via the choice of variables used for splitting in a decision tree.
+Many learners perform implicit, also called embedded, feature selection, e.g. via the choice of variables used for splitting in a decision tree.
 Most other feature selection methods are model agnostic, i.e. they can be used together with any learner.
 Of the many different approaches to identifying relevant features, we will focus on two general concepts, which are described in detail below: Filter and Wrapper methods [@guyon2003;@chandrashekar2014].
+
+For this chapter, the reader should know the basic concepts of mlr3 (@sec-basics), i.e. know about tasks (@sec-tasks) and learners (@sec-learners).
+Basics about performance evaluation (@sec-performance), i.e. resampling (@sec-resampling) and benchmarking (@sec-benchmarking) are helpful but not strictly necessary.
+
+## Filters {#sec-fs-filter}
 
 Filter methods are preprocessing steps that can be applied before training a model.
 A very simple filter approach could look like this:
 
-1. calculate the correlation coefficient $\rho$ between each feature and the target variable, and
+1. calculate the correlation coefficient $\rho$ between each feature and a numeric target variable, and
 2. select all features with $\rho > 0.2$ for further modelling steps.
 
 This approach is a *univariate* filter because it only considers the univariate relationship between each feature and the target variable.
 Further, it can only be applied to regression tasks with continuous features and the threshold of $\rho > 0.2$ is quite arbitrary.
 Thus, more advanced filter methods, e.g. *multivariate* filters based on feature importance, usually perform better [@bommert2020].
 In Filters (@sec-fs-filter), it is described how to calculate univariate, multivariate and feature importance filters, how to access implicitly selected features, how to integrate filters in a machine learning pipeline and how to optimize filter thresholds.
-
-Wrapper methods work by fitting models on selected feature subsets and evaluating their performance.
-This can be done in a sequential fashion, e.g. by iteratively adding features to the model in the so-called sequential forward selection, or in a parallel fashion, e.g. by evaluating random feature subsets in a random search.
-Below, in Wrapper Methods (@sec-fs-wrapper), the use of these simple approaches is described in a common framework along with more advanced methods such as Genetic Search.
-It is further shown how to select features by optimizing multiple performance measures and how to wrap a learner with feature selection to use it in pipelines or benchmarks.
-
-For this chapter, the reader should know the basic concepts of mlr3 (@sec-basics), i.e. know about tasks (@sec-tasks) and learners (@sec-learners).
-Basics about performance evaluation (@sec-performance), i.e. resampling (@sec-resampling) and benchmarking (@sec-benchmarking) are helpful but not strictly necessary.
-In this section, we mostly focus on feature selection as a means of improving model performance.
-
-## Filters {#sec-fs-filter}
 
 Filter algorithms select features by assigning numeric scores to each feature, e.g. correlation between feature and target variables, use these to rank the features and select a feature subset based on the ranking.
 Features that are assigned lower scores can then be omitted in subsequent modeling steps.
@@ -74,27 +72,32 @@ Feature importance filters rely on the learner to extract information on feature
 
 Many filter methods are implemented in `r mlr3filters`, for example:
 
-* Correlation (`r ref("FilterCorrelation")`)
-* Variance (`r ref("FilterVariance")`)
-* Information gain (`r ref("FilterInformationGain")`)
-* Minimal joint Mutual information maximization (`r ref("FilterJMIM")`)
-* Permutation score (`r ref("FilterPermutation")`)
-* Area under the ROC curve (`r ref("FilterAUC")`)
+* Correlation, calculating Pearson or Spearman correlation between numeric features and numeric targets (`r ref("FilterCorrelation")`)
+* Information gain, i.e. mutual information of the feature and the target or  reduction of uncertainty of the target due to a feature (`r ref("FilterInformationGain")`)
+* Minimal joint mutual information maximization, minimizing the joint information between selected features to avoid redundancy (`r ref("FilterJMIM")`)
+* Permutation score, which calculates permutation feature importance (see [@sec-interpretation]) with a given learner for each feature (`r ref("FilterPermutation")`)
+* Area under the ROC curve calculated for each feature separately (`r ref("FilterAUC")`)
 
-Most of the filter methods have some limitations, e.g. the correlation filter can only be calculated for regression tasks with numeric features. 
-There is a list of all implemented filter methods on the `r link("https://mlr3filters.mlr-org.com", "mlr3filters website")`, which also shows the supported task and features types.
+Most of the filter methods have some limitations, e.g. the correlation filter can only be calculated for regression tasks with numeric features.
+For a full list of all implemented filter methods we refer the reader to the `r link("https://mlr3filters.mlr-org.com", "mlr3filters website")`, which also shows the supported task and features types.
+A benchmark of filter methods was performed by @bommert2020, who recommend to not rely on a single filter method but try several ones if the available computational resources allow.
+If only a single filter method is to be used, the authors recommend to use a feature importance filter using random forest permutation importance (see [@sec-fs-var-imp-filters]), similar to the permutation method described above, but also the JMIM and AUC filters performed well in their comparison.
 
 ### Calculating Filter Values {#sec-fs-calc}
 
 The first step is to create a new R object using the class of the desired filter method.
 Similar to other instances in `r mlr3`, these are registered in a dictionary (`r ref("mlr_filters")`) with an associated shortcut function `r ref("flt()")`.
 Each object of class `Filter` has a `$calculate()` method which computes the filter values and ranks them in a descending order.
-For example, to calculate the mutual information of the feature and the target, i.e. information gain or the reduction of uncertainty of the target due to a feature [@bommert2020], we can use an information gain filter:
+For example, we can use the information gain filter described above:
 
 ```{r feature-selection-001}
 library("mlr3verse")
 filter = flt("information_gain")
+```
 
+Such a `Filter` object can now be used to calculate the filter on the penguins data and get the results:
+
+```{r feature-selection-002}
 task = tsk("penguins")
 filter$calculate(task)
 
@@ -104,7 +107,7 @@ as.data.table(filter)
 Some filters have hyperparameters, which can be changed similar to setting hyperparameters of a `r ref("Learner")` using `$param_set$values`.
 For example, to calculate `"spearman"` instead of `"pearson"` correlation with the correlation filter:
 
-```{r feature-selection-002}
+```{r feature-selection-003}
 filter_cor = flt("correlation")
 filter_cor$param_set$values = list(method = "spearman")
 filter_cor$param_set
@@ -114,19 +117,25 @@ filter_cor$param_set
 
 To use feature importance filters, we can use a learner with integrated feature importance methods.
 All learners with the property "importance" have this functionality.
-A list of all learners with this property is in the [Appendix](#fs-filter-embedded-list).
+A list of all learners with this property can be found with
+
+```{r feature-selection-004}
+as.data.table(mlr_learners)[sapply(properties, function(x) "importance" %in% x)]
+```
+
+or on the `r link("https://mlr-org.com/learners.html", "mlr3 website")`.
 
 For some learners, the desired filter method needs to be set during learner creation.
 For example, learner `r ref("mlr_learners_classif.ranger", text = "classif.ranger")` comes with multiple integrated methods, c.f. the help page of `r ref("ranger::ranger()")`.
 To use the feature importance method "impurity", select it during learner construction:
 
-```{r feature-selection-003}
+```{r feature-selection-005}
 lrn = lrn("classif.ranger", importance = "impurity")
 ```
 
 Now you can use the `r ref("mlr_filters_importance", text = "FilterImportance")` filter class:
 
-```{r feature-selection-004}
+```{r feature-selection-006}
 task = tsk("penguins")
 
 # Remove observations with missing data
@@ -140,11 +149,11 @@ as.data.table(filter)
 ### Embedded Methods {#sec-fs-embedded-methods}
 
 Many learners internally select a subset of the features which they find helpful for prediction, but ignore other features.
-For example, a decision tree might never select some features for splitting. 
+For example, a decision tree might never select some features for splitting.
 These subsets can be used for feature selection, which we call embedded methods because the feature selection is embedded in the learner.
 The selected features (and those not selected) can be queried if the learner has the `"selected_features"` property, as the following example demonstrates:
 
-```{r feature-selection-005}
+```{r feature-selection-007}
 task = tsk("penguins")
 learner = lrn("classif.rpart")
 
@@ -157,7 +166,7 @@ learner$selected_features()
 
 The features selected by the model can be extracted by a `Filter` object, where `$calculate()` corresponds to training the learner on the given task:
 
-```{r feature-selection-006}
+```{r feature-selection-008}
 filter = flt("selected_features", learner = learner)
 filter$calculate(task)
 as.data.table(filter)
@@ -170,7 +179,7 @@ Contrary to other filter methods, embedded methods just return value of 1 (selec
 After calculating a score for each feature, one has to select the features to be kept or those to be dropped from further modelling steps.
 For the `"selected_features"` filter described in embedded methods (@sec-fs-embedded-methods), this step is straight-forward since the methods assigns either a value of 1 for a feature to be kept or 0 for a feature to be dropped. With `task$select()` the features with a value of 1 can be selected:
 
-```{r feature-selection-007}
+```{r feature-selection-009}
 task = tsk("penguins")
 learner = lrn("classif.rpart")
 filter = flt("selected_features", learner = learner)
@@ -193,7 +202,7 @@ Where the first option is equivalent to dropping the bottom $p-k$ features.
 For both options, one has to decide on a threshold, which is often quite arbitrary.
 For example, to implement the first option with the information gain filter:
 
-```{r feature-selection-008}
+```{r feature-selection-010}
 task = tsk("penguins")
 filter = flt("information_gain")
 filter$calculate(task)
@@ -206,7 +215,7 @@ task$feature_names
 
 Or, the second option with $\tau = 0.5$:
 
-```{r feature-selection-009}
+```{r feature-selection-011}
 task = tsk("penguins")
 filter = flt("information_gain")
 filter$calculate(task)
@@ -219,7 +228,7 @@ task$feature_names
 
 Filters can be integrated into pipelines. While pipelines are described in detail in @sec-pipelines, here is a brief preview:
 
-```{r feature-selection-010}
+```{r feature-selection-012}
 library(mlr3pipelines)
 task = tsk("penguins")
 
@@ -235,14 +244,14 @@ learner$train(task)
 Pipelines can also be used to apply Hyperparameter Optimization (@sec-optimization) to the filter, i.e. tune the filter threshold to optimize the feature selection regarding prediction performance.
 We first combine a filter with a learner,
 
-```{r feature-selection-011}
+```{r feature-selection-013}
 graph = po("filter", filter = flt("information_gain")) %>>%
   po("learner", lrn("classif.rpart"))
 learner = as_learner(graph)
 ```
 
 and tune how many feature to include
-```{r feature-selection-012, message=FALSE, warning=FALSE}
+```{r feature-selection-014, message=FALSE, warning=FALSE}
 library("mlr3tuning")
 ps = ps(information_gain.filter.nfeat = p_int(lower = 1, upper = 7))
 instance = TuningInstanceSingleCrit$new(
@@ -257,8 +266,15 @@ tuner = tnr("grid_search")
 tuner$optimize(instance)
 ```
 
-With this, we can plot the tuning results:
-```{r feature-selection-013}
+The output above shows only the best result.
+To show the results of all tuning steps, retrieve them from the archive of the tuning instance:
+
+```{r feature-selection-015}
+as.data.table(instance$archive)
+```
+
+We can also plot the tuning results:
+```{r feature-selection-016}
 #| label: fig-tunefilter
 #| fig-cap: Model performance with different numbers of features, selected by an information gain filter.
 #| fig-alt: Plot showing model performance in filter-based feature selection, showing that adding a second and third feature to the model improves performance, while adding more feature achieves no further performance gain.
@@ -268,6 +284,11 @@ autoplot(instance)
 For more details, see Pipelines (@sec-pipelines) and Hyperparameter Optimization (@sec-optimization).
 
 ## Wrapper Methods {#sec-fs-wrapper}
+
+Wrapper methods work by fitting models on selected feature subsets and evaluating their performance.
+This can be done in a sequential fashion, e.g. by iteratively adding features to the model in the so-called sequential forward selection, or in a parallel fashion, e.g. by evaluating random feature subsets in a random search.
+Below, in Wrapper Methods (@sec-fs-wrapper), the use of these simple approaches is described in a common framework along with more advanced methods such as Genetic Search.
+It is further shown how to select features by optimizing multiple performance measures and how to wrap a learner with feature selection to use it in pipelines or benchmarks.
 
 Wrapper methods iteratively select features that optimize a performance measure.
 Instead of ranking features, a model is fit on a selected subset of features in each iteration and evaluated with respect to a selected performance measure.
@@ -281,11 +302,11 @@ In this chapter, we cover how to
 * configure it, to e.g. respect a runtime limit or for different objectives,
 * run it or fuse it with a `Learner` via an `AutoFSelector`.
 
-### Simple Forward Selection Example {#sec-fs-wrapper-example}
+### Simple Forward Selection Example
 
 We start with the simple example from above and do sequential forward selection with the penguins data:
 
-```{r feature-selection-014}
+```{r feature-selection-017}
 library("mlr3fselect")
 
 instance = fselect(
@@ -300,13 +321,13 @@ instance = fselect(
 To show all analyzed feature subsets and the corresponding performance, use `as.data.table(instance$archive)`.
 Here, we just show a subset of the features:
 
-```{r feature-selection-015}
+```{r feature-selection-018}
 as.data.table(instance$archive)[, .(bill_depth, bill_length, body_mass, classif.acc)]
 ```
 
 And to only show the best feature set:
 
-```{r feature-selection-016}
+```{r feature-selection-019}
 instance$result_feature_set
 ```
 
@@ -324,7 +345,7 @@ In the following two sections, these classes will be created manually, to learn 
 
 To create an `FSelectInstanceSingleCrit` object, we use the sugar function `r ref("fsi")`, which is short for `FSelectInstanceSingleCrit$new()` or `FSelectInstanceMultiCrit$new()`, depending on the selected measure(s):
 
-```{r feature-selection-017}
+```{r feature-selection-020}
 instance = fsi(
   task = tsk("penguins"),
   learner = lrn("classif.rpart"),
@@ -365,7 +386,7 @@ The following algorithms are currently implemented in `r mlr3fselect`:
 
 In this example, we will use a simple random search and retrieve it from the dictionary `r ref("mlr_fselectors")` with the `r ref("fs()")` sugar function, which is short for `FSelectorRandomSearch$new()`:
 
-```{r feature-selection-018}
+```{r feature-selection-021}
 fselector = fs("random_search")
 ```
 
@@ -373,7 +394,7 @@ fselector = fs("random_search")
 
 To start the feature selection, we pass the `FSelectInstanceSingleCrit` object to the `$optimize()` method of the initialized `FSelector` object:
 
-```{r feature-selection-019, output=FALSE}
+```{r feature-selection-022, output=FALSE}
 fselector$optimize(instance)
 ```
 
@@ -388,20 +409,20 @@ The algorithm proceeds as follows
 
 The best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance:
 
-```{r feature-selection-020}
+```{r feature-selection-023}
 instance$result_feature_set
 instance$result_y
 ```
 
 As in the forward selection example above, one can investigate all resamplings which were undertaken, as they are stored in the archive of the `FSelectInstanceSingleCrit` object and can be accessed by using `as.data.table()`:
 
-```{r feature-selection-021}
+```{r feature-selection-024}
 as.data.table(instance$archive)[, .(bill_depth, bill_length, body_mass, classif.acc)]
 ```
 
 Now the optimized feature subset can be used to subset the task and fit the model on all observations:
 
-```{r feature-selection-022, eval=FALSE}
+```{r feature-selection-025, eval=FALSE}
 task = tsk("penguins")
 learner = lrn("classif.rpart")
 
@@ -414,7 +435,7 @@ Note that predicting on observations present in the task used for feature select
 The model has seen these observations already during feature selection and therefore performance evaluation results would be over-optimistic.
 Instead, to get unbiased performance estimates for the current task, nested resampling (@sec-nested-resampling) is required.
 
-### Optimizing Multiple Performance Measures
+### Optimizing Multiple Performance Measures {cl}
 
 You might want to use multiple criteria to evaluate the performance of the feature subsets. For example, you might want to select the subset with the lowest classification error and lowest time to train the model. The full list of performance measures can be found `r link("https://mlr3.mlr-org.com/reference/mlr_measures.html", "here")`.
 
@@ -422,7 +443,7 @@ We will expand the previous example and perform feature selection on the penguin
 
 The feature selection process with multiple criteria is similar to that with a single criterion, except that we select two measures to be optimized:
 
-```{r feature-selection-023}
+```{r feature-selection-026}
 instance = fsi(
   task = tsk("penguins"),
   learner = lrn("classif.rpart"),
@@ -434,18 +455,18 @@ instance = fsi(
 The function `r ref("fsi")` creates an instance of `FSelectInstanceMultiCrit` if more than one measure is selected.
 We now create an `FSelector`, e.g. using random search, and call the `$optimize()` function of the `FSelector` with the `FSelectInstanceMultiCrit` object, to search for the subset of features with the best classification accuracy and time to train the model.
 
-```{r feature-selection-024, output=FALSE}
+```{r feature-selection-027, output=FALSE}
 fselector = fs("random_search")
 fselector$optimize(instance)
 ```
 
 As above, the best feature subset (`$result_feature_set`) and the corresponding measured performance (`$result_y`) can be accessed from the instance. However, in this simple case, if the fastest subset is not also the best performing subset, the result consists of two subsets: one with the lowest training time and one with the best classification accuracy.
 
-```{r feature-selection-025}
+```{r feature-selection-028}
 instance$result_feature_set
 ```
 
-```{r feature-selection-026}
+```{r feature-selection-029}
 instance$result_y
 ```
 
@@ -459,7 +480,7 @@ Analogously to the previous subsection, a new classification tree (`"classif.rpa
 This classification tree learner is then wrapped in a random search feature selector, which automatically starts a feature selection on the given task using an inner resampling (holdout), as soon as the wrapped learner is trained.
 Here, the function `r ref("auto_fselector")` creates an instance of `AutoFSelector`, i.e. it is short for `AutoFSelector$new()`.
 
-```{r feature-selection-027}
+```{r feature-selection-030}
 learner = lrn("classif.rpart")
 
 at = auto_fselector(
@@ -482,7 +503,7 @@ This is called nested resampling (@sec-nested-resampling) and yields unbiased pe
 In the call to `benchmark()`, we compare our wrapped learner `at` with a normal classification tree `lrn("classif.rpart")`.
 For that, we create a benchmark grid with the task, the learners and a 3-fold cross validation.
 
-```{r feature-selection-028}
+```{r feature-selection-031}
 grid = benchmark_grid(
   task = tsk("penguins"),
   learner = list(at, lrn("classif.rpart")),
@@ -494,7 +515,7 @@ bmr = benchmark(grid)
 
 Now, we compare those two learners regarding classification accuracy and training time:
 
-```{r feature-selection-029}
+```{r feature-selection-032}
 aggr = bmr$aggregate(msrs(c("classif.acc", "time_train")))
 as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
 ```
@@ -503,8 +524,8 @@ Because of the implicit feature selection in classification trees, we do not exp
 
 ## Conclusion
 
-In this chapter, we learned how to perform feature selection with mlr3. 
-We introduced filter and wrapper methods, combined feature selection with pipelines, learned how to automate the feature selection and covered the optimization of multiple performance measures. 
+In this chapter, we learned how to perform feature selection with mlr3.
+We introduced filter and wrapper methods, combined feature selection with pipelines, learned how to automate the feature selection and covered the optimization of multiple performance measures.
 @tbl-api-feature-selection gives an overview of the most important functions (S3) and classes (R6) used in this chapter.
 
 | S3 function | R6 Class | Summary |
@@ -521,7 +542,7 @@ We introduced filter and wrapper methods, combined feature selection with pipeli
 
 ### Resources{.unnumbered .unlisted}
 * A list of implemented filters in the `r mlr3filters` package is provided on the `r link("https://mlr3filters.mlr-org.com", "mlr3filters website")`.
-* A summary of wrapper-based feature selection with the `r mlr3fselect` package is provided in the `r link("https://cheatsheets.mlr-org.com/mlr3fselect.pdf", "mlr3fselect cheatsheet")`. 
+* A summary of wrapper-based feature selection with the `r mlr3fselect` package is provided in the `r link("https://cheatsheets.mlr-org.com/mlr3fselect.pdf", "mlr3fselect cheatsheet")`.
 * An overview of feature selection methods is provided by @chandrashekar2014.
 * A more formal and detailed introduction to filters and wrappers is given in @guyon2003.
 * @bommert2020 perform a benchmark of filter methods.
@@ -532,8 +553,8 @@ We introduced filter and wrapper methods, combined feature selection with pipeli
 
 1. Calculate a correlation filter on the `r ref("mlr_tasks_mtcars", text = "Motor Trend")` data set (`mtcars`).
 2. Use the filter from the first exercise to select the five best features in the `mtcars` data set.
-3. Apply a backward selection to the `r ref("mlr_tasks_penguins", text = "penguins")` data set with a classification tree learner `"classif.rpart"` and holdout resampling by the measure classification accuracy. Compare the results with those in @sec-fs-wrapper-example. Answer the following questions: 
+3. Apply a backward selection to the `r ref("mlr_tasks_penguins", text = "penguins")` data set with a classification tree learner `"classif.rpart"` and holdout resampling by the measure classification accuracy. Compare the results with those in @sec-fs-wrapper-example. Answer the following questions:
     a. Do the selected features differ?
-    b. Which feature selection method achieves a higher classification accuracy? 
+    b. Which feature selection method achieves a higher classification accuracy?
     c. Are the accuracy values in b) directly comparable? If not, what has to be changed to make them comparable?
 4. Automate the feature selection as in @sec-autofselect with the `r ref("mlr_tasks_sonar", text = "sonar")` data set and a logistic regression learner (`"classif.log_reg"`). Hint: Remember to call `library("mlr3learners")` for the logistic regression learner.
