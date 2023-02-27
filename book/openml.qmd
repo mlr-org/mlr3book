@@ -6,13 +6,15 @@ author:
     affiliations:
       - name: Ludwig-Maximilians-Universität München
 abstract:
-  In order to empirically evaluate machine learning algorithms, researchers not only need software tools, but also datasets.
-  OpenML ([http://www.openml.org/](http://www.openml.org/)) is an open platform that facilitates the sharing and dissemination of machine learning research data. 
+  When computational experiments are large the need to execute them on High-performance computing (HPC) clusters arises.
+  Furthermore, in order to empirically evaluate machine learning algorithms, researchers not only need software tools, but also datasets.
+  [OpenML](http://www.openml.org/) is an open platform that facilitates the sharing and dissemination of machine learning research data and addresse the first of these issues.
   It provides unique identifiers and standardized (meta-)data formats, which allow to easily find relevant datasets by querying for specific properties and to share them using their identifier.
-  This chapter teaches some of the basic building blocks of OpenML and how it can be used via the interface package mlr3oml that conveniently integrates mlr3 and OpenML through the platform's REST API.
+  The first part of this chapter teaches the OpenML basics and shows how it can be used via the interface package mlr3oml that conveniently integrates mlr3 and OpenML through its REST API.
+  We will then show how the execution of benchmark experiments on HPC clusters can be simplified using the R package [batchtools](https://github.com/mllg/batchtools), which provides a convenience layer for interoperating with different scheduling systems in a standardized way.
 ---
 
-# OpenML {#openml}
+# OpenML and Benchmarking {#sec-openml-benchmarking}
 
 {{< include _setup.qmd >}}
 
@@ -25,14 +27,106 @@ options(mlr3oml.cache = file.path(getwd(), "openml", "cache"))
 lgr::get_logger("mlr3oml")$set_threshold("off")
 ```
 
-`r ref_pkg("mlr3")` is a versatile machine learning framework that caters to the needs of both researchers focused on benchmarking, as well as applied data scientists seeking to solve real-world problems.
+TODO: Reorder this, first talk about the experiment structure and then batchtools. 
+Afterwards talk about the problem of how to get the tasks / reproducible resamplings.
+
+`r ref_pkg("mlr3")` is a versatile machine learning framework that caters to the needs of both applied data scientists seeking to solve real-world problems, as well as researchers focused on benchmarking.
 Practitioners and researchers in this field have different goals.
 While the former are interested in solving concrete problems on specific datasets, the latter want to develop algorithms that perform well on a wide range of tasks.
-Although applied data scientists may also find some parts of this chapter interesting, it is primarily intended for researchers who focus on the empirical evaluation of machine learning methods.
+The main focus in this chapter is the empirical evaluation of machine learning methods.
 
-The standard scenario for empirical ML research is to compare a set of algorithms $A_1, ..., A_m$ by evaluating their performance on a set of tasks $T_1, ..., T_n$. 
-So far in the book, we have mostly focused on the algorithms $A_i$ and the evaluation of the results, but not so much on how to easily find relevant tasks $T_i$.
-However, to be able to derive meaningful conclusions from benchmark experiments, a good choice of the tasks $T_i$ is tantamount. 
+A very common benchmarking scenario is to compare a set of algorithms $A_1, ..., A_n$ by evaluating their performance on a set of problems $P_1, ..., P_k$, using evaluation measure $M$.
+Oftentimes, the cross-product between the algorithms and experiments define the experiment design, and we will restrict ourselves to this scenario for simplicity.
+One experiment is then defined by a tuple $(A_i, P_j)$.
+Running the benchmark consists of executing each of these experiment and scoring the results using the measure $M$.
+This is depicted in the table below, where each row corresponds to one experiment.
+
+| Algorithm | Problem  | Measure    |
+|-----------|----------|------------|
+| $A_1$     | $P_1$    | $m_{1,1}$  |
+| $\vdots$  | $\vdots$ | $\vdots$   |
+| $A_1$     | $P_k$    | $m_{n, 1}$ |
+| $\vdots$  | $\vdots$ | $\vdots$   |
+| $A_n$     | $P_1$    | $m_{n, 1}$ |
+| $\vdots$  | $\vdots$ | $\vdots$   |
+| $A_n$     | $P_k$    | $m_{n, k}$ |
+
+: Illustration of a Benchmark Experiment. {#tbl-generic-benchmark}
+
+In the machine learning case, the algorithms $A_i$ are usually `r ref("Learner")`s and the problems are `r ref("Task")`-`r ref("Resampling")` combinations $P_j = (T_j, A_j)$.
+One experiment then consists of conducting a `r ref("Resampling")` using the tuple $(A_i, T_j, R_j)$ and evaluating the result using measure $M$, which is a `r ref("Measure")`.
+The result of such an experiment can be depicted in tabular format as shown below.
+Here $m_{i,j}$ is a scalar performance metric that arises from evaluating measure $M$ using the `r ref("ResampleResult")` that arises from the application of algorithm $A_i$ on task $T_j$ using resampling method $M_j$.
+
+| Algorithm | Problem      | Measure    |
+|-----------|--------------|------------|
+| $A_1$     | $(T_1, R_1)$ | $m_{1,1}$  |
+| $\vdots$  | $\vdots$     | $\vdots$   |
+| $A_1$     | $(T_k, R_k)$ | $m_{1, k}$ |
+| $\vdots$  | $\vdots$     | $\vdots$   |
+| $A_n$     | $(T_1, R_1)$ | $m_{1, k}$ |
+| $\vdots$  | $\vdots$     | $\vdots$   |
+| $A_n$     | $(T_k, R_k)$ | $m_{n, k}$ |
+
+: Illustration of a Machine-Learning Benchmark Experiment. {#tbl-ml-benchmark}
+
+The driving question to such an experiment is often how a algorithm $A_i$ compares with other algorithms $A_j$ where $i \neq j$.
+To answer these questions, statistical methods such as the Friedman test by @friedman1940comparison can be employed, which are available via the `r ref_pkg("mlr3benchmark")` extension.
+Note that in many cases, the algorithms $A_i$ or the problems $P_j$ might also be parameterized, which we will revisit later.
+
+What we have not focused on so far in the book, is 
+
+2. how to execute large-scale benchmark experiments on High-performance computing (HPC) clusters.
+1. how to easily find relevant tasks $T_i$ and
+
+For the first issue, we will show how the R package `r ref_pkg("batchtools")` and its mlr3 integration `r ref_pkg("mlr3batchmark")` can greatly simplify the efforts required to operate a scheduling system of a HPC cluster.
+The second point will be addressed with the help of the OpenML platform by @openml2013.
+
+**Executing Large-Scale Experiments**
+
+When dealing with large-scale benchmark experiments, the parallelization via future as shown e.g. in @sec-parallelization might not be enough and the need to run jobs on HPC clusters arises.
+While access to such clusters is nowadays standard, the effort required to harness the computational power of these systems is still substantial.
+The time spent to familiarize oneself with their ins and outs is a major hindrance to adoption. 
+But even after overcoming this hurdle, practitioners are burdened by spartanic tooling and little or no automation to support their typical computing workflow.
+
+The R package `r ref_pkg("batchtools")` provides a framework for conveniently executing large batches of computational experiments in parallel from within R.
+It provides functions for parallel execution, error handling, and result retrieval.
+It is designed to be highly flexible, making it suitable for a wide range of computational experiments, including machine learning, optimization, simulation, and more.
+The main features of the R package are:
+
+* Convenience: All relevant batch system operations (submitting, listing, killing) are either handled internally or abstracted via simple R functions
+* Portability: With a well-defined interface, the source is independent from the underlying batch system - prototype locally, deploy on any high performance cluster
+* Reproducibility: Every computational part has an associated seed stored in a data base which ensures reproducibility even when the underlying batch system changes
+* Abstraction: The code layers for algorithms, experiment definitions and execution are cleanly separated and allow to write readable and maintainable code to manage large scale computer experiments
+
+
+The package allows users to define and execute a set of experiments such as shown in table @tbl-ml-benchmark, and automatically manage the process of executing them on a cluster or local machine. 
+As a brief primer, we show how one could compare a classification tree with a random forest using the pima and iris dataset when using the `r ref_pkg("mlr3batchmark")` package.
+We only need to replace the typical `benchmark()`-call with `batchmark()` and afterwards submit the jobs.
+
+
+```{r}
+#| eval: false
+library(mlr3batchmark)
+library(batchtools)
+library(mlr3learners)
+
+design = benchmark_grid(
+  tsks(c("pima", "iris")),
+  lrns(c("classif.rpart", "classif.ranger")), 
+  rsmp("holdout")
+)
+
+batchmark(design)
+
+submitJobs()
+
+reduceBenchmarkResult()
+```
+
+**OpenML**
+
+In order to be able to derive meaningful conclusions from benchmark experiments, a good choice of the tasks $T_i$ is tantamount. 
 It is therefore helpful to
 
 1. have convenient access to a comprehensive collection of datasets and be able to filter datasets in this repository.
@@ -41,43 +135,47 @@ For example, we might be only interested in classification problems with many cl
 
 [OpenML](https://www.openml.org/) is a platform that facilitates the sharing and dissemination of machine learning research data and -- among many other things -- satisfies the two desiderata specified above.
 Like mlr3, OpenML is free and open source.
-Unlike mlr3, it is not tied to a programming language and is also useable from e.g. python or julia.
+Unlike mlr3, it is not tied to a programming language and is also useable from e.g. its Python interface by @feurer2021openml.
 Its goal is to make it easier for researchers to find the data they need to answer scientific questions and to compare the results of their work with others.
 Its design was guided by the [FAIR](https://www.go-fair.org/fair-principles/) principles, which stand for **F**indability, **A**ccessibility, **I**nteroperability and **R**eusability.
 The goal of these principles is to make scientific data and results more easily discoverable and reusable, promoting transparency, reproducibility, and collaboration in scientific research.
 
 More concretely, OpenML is a repository for storing, organizing, and retrieving datasets, algorithms, and experimental results in a standardized way.
 Entities have unique identifiers as well as standardized (meta-)data.
-Everything can be accessed through a REST API or via the web interface: <https://openml.org>.
-For example, the dataset with ID 31 -- the "credit-g" dataset -- can be accessed through the link <https://openml.org/d/31>.
-
+Everything is accessible through a REST API or via the web interface: <https://openml.org>.
 In this chapter, we will cover the most important features of OpenML and how to use it via the interface package `r ref_pkg("mlr3oml")`.
 This will give you an idea of what you can do with the platform, as well as how to do it.
 
-Note that while OpenML also contains representations of algorithms (Flows) and experiment results (Runs), we will only cover the OpenML Dataset, Task, and Task Collection in this section.
-While the `r ref_pkg("mlr3oml")` package also supports working with flows and runs, datasets and tasks are what OpenML is primarily used for.
-For more information about these features, we refer to the OpenML website or the documentation of the `r ref_pkg("mlr3oml")` package.
+OpenML has different types of objects that can be shared and accessed through the website.
 The following is a brief summarization of the OpenML entities that we will cover:
 
-* [**Dataset**](https://www.openml.org/search?type=data\&status=active): A (usually tabular) data with additional meta-data. 
-The latter includes e.g. a description of the dataset and its features, a license, or mathematical properties of the data.
-It can be converted into a `r ref("DataBackend", text = "mlr3::DataBackend")`.
-* [**Task**](https://www.openml.org/search?type=task\&sort=runs): A machine learning task, i.e. a concrete problem specification on a dataset.
-    This also includes a split into train and test set, which differs from the mlr3 task. 
+* [**OML Dataset**](https://www.openml.org/search?type=data\&status=active): A (usually tabular) data with additional meta-data. 
+The latter includes e.g. a description of the dataset and its features, a license, or meta-features of the data.
+When accessed through `r ref_pkg("mlr3oml")`, it can be converted into a `r ref("DataBackend", text = "mlr3::DataBackend")`.
+* [**OML Task**](https://www.openml.org/search?type=task\&sort=runs): A machine learning task, i.e. a concrete problem specification on an OML Dataset.
+    This also includes a split into train and test set, thereby differing from the mlr3 `r ref("Task")` definition. 
     For that reason, it can either be converted to a `r ref("Task", text = "mlr3::Task")`, or a `r ref("Resampling", text = "mlr3::Resampling")`.
-<!-- * [**Flow**](https://www.openml.org/search?type=flow\&sort=runs): The representation of a machine learning algorithm or pipeline. The mlr3 counterpart is the `r ref("Learner", text = "mlr3::Learner")`. -->
-<!-- * [**Run**](https://www.openml.org/search?type=run\&sort=date): An experiment result, which results from the application of a flow on a task. A conversion to a `r ref("ResampleResult", text = "mlr3::ResampleResult")` is possible. -->
-* [**Task Collection**](https://www.openml.org/search?type=study&sort=tasks_included&study_type=task): A container object, which contains tasks.
-Task collections allow for the creation of benchmark suites, which are designated tasks to evaluate the performance of certain machine learning algorithms, such as a benchmark suite for classification.
-<!-- While a task collection would in mlr3 terms be simply a list of tasks, the run collection can be converted to a `r ref("BenchmarkResult", text = "mlr3::BenchmarkResult")`. -->
+* [**OML Task Collection**](https://www.openml.org/search?type=study&sort=tasks_included&study_type=task): A container object, which contains tasks. 
+This allows for the creation of benchmark suites, such as the OpenML CC-18 (@bischl2021openml) which is a curated collection of classification problems.
+
+For example, the dataset with ID 31 is the "credit-g" dataset and can be accessed through the link <https://openml.org/d/31> or the `r ref_pkg("mlr3oml")` package.
+
+```{r}
+library(mlr3oml)
+library(mlr3)
+odata = odt(31)
+odata
+as_data_backend(odata)
+```
+
+Note that while OpenML also contains representations of algorithms (flows) and experiment results (runs), we will only cover the OpenML Dataset, Task, and Task Collection in this section.
+While the `r ref_pkg("mlr3oml")` package also supports working with Flows and runs, datasets and tasks are what OpenML is primarily used for.
+For more information about these features, we refer to the OpenML website or the documentation of the `r ref_pkg("mlr3oml")` package.
 
 
-:::{.callout-note}
-The mlr3oml package currently only supports downloading of objects.
-Uploading objects to OpenML can be achieved via the website, for example.
-:::
+## OpenML {#sec-openml}
 
-## Dataset {#openml-dataset}
+### Dataset {#sec-openml-dataset}
 
 The arguably most important entity on OpenML is the dataset.
 When a researcher wants to access datasets on OpenML, the two possible situations are that they want to
@@ -151,16 +249,16 @@ We could now start looking at the resulting datasets (accessible through their I
 
 :::{.callout-info}
 While the most common filters are hard-coded into the `r ref("list_oml_data")` function, other filters can be passed as well.
-For an overview, see the REST tab of the OpenML API documentation: <https://www.openml.org/apis>.
+For an overview, see the *REST* tab of the OpenML API documentation: <https://www.openml.org/apis>.
 :::
 
-## Task {#openml-task}
+### Task {#sec-openml-task}
 
 While the previous section showed how to access and filter datasets, we will now focus on OpenML **tasks** that are built on top of datasets.
 Like in mlr3, OpenML has different task types, including for example regression and classification.
 And while we have ignored this issue in the previous section, merely using the same dataset that was used in a previous study is not enough to allow for cross-study comparisons.
 Other important aspects are e.g. the choice of features and how the data was split into train- and test sets.
-Luckily, the AutoML benchmark we mentioned earlier shares the Task IDs.
+Luckily, the AutoML benchmark we mentioned earlier shares the task IDs.
 
 The accompanying task for the adult data that we used used earlier has ID 7592 and can be accessed through <https://openml.org/t/7592>.
 We can load it into R using the `r ref("otsk")` function from the mlr3oml package, which returns an `r ref("OMLTask")` object.
@@ -228,7 +326,7 @@ otasks = list_oml_tasks(
 otasks[, .(task_id, task_type, data_id, name, NumberOfClasses)]
 ```
 
-<!-- ## Flow and Run {#openml-flow-run} -->
+<!-- ## Flow and Run {#sec-openml-flow-run} -->
 <!---->
 <!-- OpenML not only allows to share datasets and tasks, but also the results of machine learning experiments. -->
 <!-- To do so, OpenML uses the notion of the **flow** to represent machine learning algorithms and pipelines. -->
@@ -279,7 +377,7 @@ otasks[, .(task_id, task_type, data_id, name, NumberOfClasses)]
 <!-- ``` -->
 
 
-## Collection {#openml-collection}
+### Collection {#sec-openml-collection}
 
 The last entity that we will cover in this chapter is the **task collection**, which allows to bundle tasks.
 One inherent problem of open platforms is that everyone can upload anything. 
@@ -312,33 +410,17 @@ otask_collection
 ```
 
 
-We can get an overview of these tasks by acessing the `$tasks` field.
+We can get an overview of these tasks by accessing the `$tasks` field.
 
 ```{r}
 otask_collection$tasks[, .(id, data, target, task_splits)]
 ```
-
-
 For a more exhaustive comparison between the random forest with the AutoML systems, we could create mlr3 tasks and resamplings from this information and evaluate the ranger on all of them.
 
-<!-- The experiment results of the AutoML benchmark are store in the run collection that has ID 226. -->
-<!---->
-<!-- ```{r} -->
-<!-- #| echo: false -->
-<!-- #| output: false -->
-<!---->
-<!-- # Collections are not cached (because they can be altered on OpenML).  -->
-<!-- # This is why we load it from disk -->
-<!-- orun_collection = readRDS("./openml/orun_collection.rds") -->
-<!-- ``` -->
-<!---->
-<!-- ```{r} -->
-<!-- #| eval: false -->
-<!-- orun_collection = ocl(id = 226) -->
-<!-- ``` -->
-<!---->
-<!-- ```{r} -->
-<!-- orun_collection -->
-<!-- orun_collection$runs[, .(id, data, flow, task_splits)] -->
-<!-- ``` -->
-<!---->
+
+## Large-Scale Experiments {#sec-large-experiments}
+
+In the previous sections we have seen how to 
+
+
+
