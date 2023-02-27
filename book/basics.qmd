@@ -12,7 +12,7 @@ author:
       - name: University of Wyoming
 abstract:
     We describe and explain the basic building blocks of mlr3 and how to train and evaluate simple machine learning models.
-    The chapter introduces the different types of tasks that mlr3 supports and how to work with them, learners and how to train models, how to make predictions using those trained models, and how to evaluate the quality of the predictions in a principled fashion.
+    The chapter introduces the different types of tasks that mlr3 supports and how to work with them, learners and how to train models, how to set parameters, how to make predictions using trained models, and how to evaluate the quality of the predictions in a principled fashion.
     Only the basic concepts are introduced, but we give pointers on where to learn more in the rest of the book, and overviews of other concepts.
     After reading this chapter, you will be able to use mlr3 for most machine learning workflows.
 ---
@@ -22,7 +22,7 @@ abstract:
 {{< include _setup.qmd >}}
 
 In this chapter, we will introduce the `r mlr3` objects and corresponding `r ref_pkg("R6")` classes that implement the essential building blocks of machine learning.
-These building blocks include the data (and the methods of creating training and test sets), the machine learning algorithm (and its training and prediction process), and evaluation measures to assess the quality of predictions.
+These building blocks include the data (and the methods of creating training and test sets), the machine learning algorithm (and its training and prediction process), the configuration of a machine learning algorithm through its hyperparameters, and evaluation measures to assess the quality of predictions.
 
 In essence, machine learning means learning relationships from data.
 In supervised learning, datasets consist of observations (rows in tabular data) that are labeled, which means that each data point includes features (columns in tabular data) and a quantity that we are trying to predict, also called 'target'.
@@ -40,6 +40,9 @@ For example, the parameters could be the weights given to individual features wh
 For other learners, the parameters are not as explicit, for example for decision tree learners where a fitted model corresponds to a particular decision tree.
 All learners optimize a so-called loss function during training, i.e. training a learner means finding the model that optimizes the loss.
 In general, a loss function quantifies the mismatch between ground truth target values in the training data and the predictions of the model.
+In addition to the parameters that are fit to the data, most learners also have hyperparameters that change how the model is fit.
+The proper choice of these hyperparameters can be -- depending on the algorithm -- be almost as important as the choice of the learner itself.
+In @sec-parameters we will give a brief introduction on how to configure the hyperparameters of a learner, which is done using the `r paradox` package.
 
 Given a model, we can make predictions (@sec-predicting) on new data.
 A model is only useful though if it generalizes beyond the training data.
@@ -401,14 +404,15 @@ You can access and change the current hyperparameter values by accessing this fi
 
 ```{r basics-027}
 learner_rpart$param_set$values
-learner_rpart$param_set$values$minsplit = 10
-learner_rpart$param_set$values
 ```
 
-:::{.callout-tip}
-It is possible to assign all hyperparameters in one go by assigning a named list to `$values`: `learner$param_set$values = list(minsplit = 10, ...)`.
-This operation removes all previously-set hyperparameters.
-:::
+While there are different methods for changing parameter values, it is recommended to use the `$set_values()` method.
+
+learner_rpart$param_set$set_values(minsplit = 10)
+learner_rpart$param_set$values
+
+
+More information on how to set parameters can be found in the #sec-parameters.
 
 The `r ref("lrn()")` function also accepts additional arguments to update hyperparameters or set fields of the learner when constructing it:
 
@@ -511,6 +515,152 @@ The prediction object now contains the standard error for the predictions.
 ```{r basics-034}
 predictions
 ```
+
+
+## Parameters {#sec-parameters}
+
+The `r ref_pkg("paradox")` package (developed by the mlr3 team) implements a language for systematically representing parameter spaces that is used throughout the `r ref_pkg("mlr3verse")`.
+One of the most important use cases is to handle the hyperparameter spaces for objects like learners, which we have already encountered in @sec-training.
+This provides the following advantages:
+
+1. Available parameter settings, their data type and boundaries can easily be listed without crawling through the respective manual pages.
+1. Hyperparameter settings can be checked for feasibility to immediately throw an error to inform the user about the invalid setting.
+1. One or more parameters can be marked as search space for optimization algorithms.
+
+The two most important classes of the `r ref_pkg("paradox")` package are the
+
+* `r ref("Param")` representing a single parameter and the
+* `r ref("ParamSet")`, which is a container object that combines multiple `r ref("Param")`s.
+
+This section will start with teaching you the basics of how to set (hyper-)parameters, i.e how to change the `$values` slot of a `r ref("ParamSet")`. 
+After that, we will briefly cover the conceptual difference between **initial parameter values** and **default values**.
+Information on defining search spaces for optimization can be found in @sec-learner-search-space.
+Guidance of how to define a new parameter space when e.g. implementing a custom learner, can be found in section TODO.
+
+To illustrate how to work with `r ref("ParamSet")`s, we will be using the parameter set of `r ref("LearnerClassifSVM")` from the `r mlr3learners` package.
+Akin to function arguments, the parameters allow to configure the behaviour of the `r ref("Learner")` during training and prediction.
+Unlike function arguments, these parameters are explicitly annotated with the type of values they expect.
+
+For simplicity, we consider only a subset of the parameters of the `r ref("LearnerClassifSVM")`. 
+We can obtain this subset by calling the method `$subset()` with the ids of the parameters we want to keep.
+```{r}
+library("mlr3learners")
+param_set = lrn("classif.svm")$param_set$subset(
+  c("cost", "kernel", "degree", "shrinking", "type"))
+param_set
+```
+
+The printed output above informs us what values are expected: 
+
+* `cost` must be a "double" greater than 0 and the default is 1.
+* `degree` is required to be an integer greater than 1. 
+* `kernel` is a "factor", with 4 available choices that are listed in the documentation: `"linear"`, `"polynomial"`, `"radial"`, and `"sigmoid"`. The default is `"radial"`
+* `shrinking` is a logical flag, the default being `TRUE`.
+* `type` is also a "factor", where the 2 options are `"C-classification"` and `"nu-classification"`, the former being the default.
+
+In addition, there are the columns *parents* and *value*.
+The *parent* column indicates on which other parameters a `r ref("Param")` depends. 
+For example, the parameter `cost` can only be set if `type` is set to `"C-classification"`, because the parameter does otherwise not apply.
+Similarly, the (polynomial) `degree` can only be specified if the `kernel` is `"polynomial"`.
+
+The *value* column indicates to which value the parameters are set.
+This parameter set has none of its values set after initialization.
+Note that some other learners such as `r ref("LearnerClassifRpart")` have values initialized that differ from their defaults.
+For more on that, we refer to @sec-parameters-defaults.
+
+We can inspect the individual parameters by accessing the field `$params`, which returns a named list of `r ref("Param")`s.
+As an example, we show the parameter `kernel`. 
+The printed information is similar to what we have already seen above, however it now also includes the available levels.
+
+```{r}
+names(param_set$params)
+param_set$params$kernel
+```
+
+### Setting Parameter Values {#sec-parameters-setting}
+
+The most common user-interaction with a `r ref("ParamSet")` is to change its `$values`.
+The values in this slot are used when the configured object is called, e.g. when a learner is trained.
+There are three ways to change the values of an existing parameter set that are summarized in the table below.
+
+| Method                                                      | Description                                        |
+| :---------------------------------------------------------  | :-------------------------------------------------- |
+| `param_set$values$<par> = <value>`                          | Changes only a single value                         |
+| `param_set$values = list(<par1> = <value1>, ...)`           | Replace all parameter values with the given list  |
+| `param_set$set_values(<par1> = <value1>, ...)`              | Changes only the provided values                    |
+
+: Different ways of setting parameter values for an existing parameter set {#tbl-parameters-configure}
+
+When using either of these functions, the resulting parameter set is checked for feasibility within the specified boundaries.
+
+We can modify a single parameter as follows
+
+```{r}
+#| error: true
+# Shrinking must be logical
+param_set$values$shrinking = "FALSE"
+param_set$values$shrinking = FALSE
+
+# Parameter cost depends on type being "C-classification"
+param_set$values$cost = 2
+param_set$values$type = "C-classification"
+param_set$values$cost = 2
+```
+
+If we want to change all parameter values, we can also assign a new list. 
+Be aware that this will remove all previously set parameters, i.e. the parameter `cost` does not have a value assigned.
+
+```{r}
+param_set$values = list(shrinking = TRUE, type = "C-classification")
+param_set$values
+```
+
+A convenient way to change multiple parameter values, while keeping previously set parameters is the `$set_values()` method.
+Below, one can observe that the previously set value of parameter `type` is preserved.
+
+```{r}
+param_set$set_values(cost = 3, shrinking = TRUE)
+param_set$values
+```
+
+In the next section we will show why the last method should usually be preferred over the second method.
+
+
+### Initial Values vs. Defaults {#sec-parameters-defaults}
+
+Parameter sets can have **initial values** (that are not set by the user), as well as **default values**.
+An example for such a learner is the `r ref("LearnerClassifRpart")`.
+Its parameter `xval` has a default of of 10.
+However, its value is initialized to 0.
+
+```{r}
+learner_rpart = lrn("classif.rpart")
+learner_rpart$param_set$default$xval
+learner_rpart$param_set$values$xval
+```
+
+The default value of a parameter indicates what value is used when no value is set.
+In this case, the `r ref("rpart::rpart")` function that is called under the hood when training `r ref("LearnerClassifRpart")` uses the value 10 for `xval`.
+
+Because the value for parameter `xval` has been initially set to 10, the `r ref("LearnerClassifRpart")` will not run with the default values.
+In other words, the default value *documents* the default which is used in absence of value while an initial value refers to the default value the mlr3 team favors.
+We set initial values very sporadically, i.e., only when it really makes sense from a technical point of view.
+All initial parameter values are documented in the description of the respective `r ref("Learner")`.
+
+Being aware of initial values is also important when setting of parameters, as you can (accidentally or intentionally) overwrite them.
+Consider the difference between the following parameter sets.
+```{r}
+learner_rpart$param_set$set_values(cp = 0.3)
+learner_rpart$param_set$values
+learner_rpart2 = lrn("regr.rpart")
+learner_rpart2$param_set$values = list(cp = 0.3)
+learner_rpart2$param_set$values
+```
+
+When one decides to replace all parameter `$values` with a new list, the initial values are unset.
+This is not the case, when using method 1 and 2 from @tbl-parameters-configure.
+
+
 
 ## Evaluation {#sec-eval}
 
