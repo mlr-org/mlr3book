@@ -182,6 +182,7 @@ Mostly, the black-box predicted class and the surrogate predicted classes overla
 Instead of explaining the model on the whole data set with global surrogate model, we can also explain individual predictions only using a local surrogate model.
 The underlying idea is that while it is very difficult to approximate the whole model with an interpretable one, it is much simpler if we only do so for a small area in the feature space surrounding a specific point -- the point of interest. 
 To receive a local surrogate model, the following steps are necessary: 
+
   1. We obtain predictions from the black-box model for a given dataset.
   2. We weight the observations in this dataset by their proximity to our point of interest. 
   3. We fit an interpretable model on the weighted dataset using the prediction as a response variable.
@@ -192,14 +193,14 @@ First, we select a data point we want to explain. Here, we use Steve, the first 
 For Steve, the model predicts the class Adelie with 99 \% probability.
 
 ```{r steve,  message=FALSE, warning=FALSE}
-steve = penguins[1,]
+steve = penguins[1, which(names(penguins) != "species")]
 model$predict(steve)
 ```
 
 Next, we use `r ref("iml::LocalModel")` to fit a locally weighted linear regression model to explain why Steve was classified as Adelie. The surrogate model is penalized such that only a given number `k` is used. 
 Per default, `k = 3L`.
 
-```{r iml-localsurrogate, message=FALSE, warning=FALSE, fig.cap='Local surrogate model implemented in `iml::LocalModel` for the penguin classification task and random forest model.', fig.align = 'center'}
+```{r iml-localsurrogate, message=FALSE, warning=FALSE, fig.cap='Local surrogate model implemented in `iml::LocalModel` for the first penguin in the dataset and a random forest model.', fig.align = 'center'}
 localsurrogate = LocalModel$new(model, steve)
 localsurrogate$plot()
 ```
@@ -208,30 +209,29 @@ Compared to the global surrogate model, the local surrogate does not have to be 
 
 
 ::: {.callout-tip}
-Local surrogate models should be interpreted with caution: how the observations are weighted and which data is used has a huge effect on the performance.
+Local surrogate models should be interpreted with caution: Which data is used to build the surrogate model and how the observations are weighted has a huge effect on the performance.
 :::
 
 
 ### Shapley
 
-The $\phi$ provides insight into the probability given the values on the vertical axis. For example, a penguin is less likely to be Gentoo if the bill_depth=18.7 is and much more likely to be Adelie than Chinstrap.
+With the help of `r ref("iml::Shapley")`, we can also generate Shapley values for Steve's prediction. 
+Again, the results can be visualized with the `$plot()` method.
 
-```{r iml-006, message=FALSE, warning=FALSE, fig.cap='Plot of the results from Shapley. $\\phi$ gives the increase or decrease in probability given the values on the vertical axis',  fig.align='center'}
-x = penguins[which(names(penguins) != "species")]
-model = Predictor$new(learner, data = penguins, y = "species")
-x.interest = data.frame(penguins[1, ])
-shapley = Shapley$new(model, x.interest = x.interest)
+```{r iml-006, message=FALSE, warning=FALSE, fig.cap='Shapley values implemented in `iml::Shapley` for the first penguin in the dataset and a random forest model.',  fig.align='center'}
+shapley = Shapley$new(model, x.interest = steve)
 plot(shapley)
 ```
 
-
+If we focus on the plot for `Adelie`, the $\phi$ shows us how to fairly distribute the difference of Steve's probability to be Adelie to the dataset average probability to be Adelie among the given features. 
+Steve's bill length of 39.1 mm has the most positive effect on the probability of being an Adelie, with an increase in the predicted probability of more than 20 \%. 
 
 ### Independent Test Data
 
-It is also interesting to see how well the model performs on a test data set. For this section, exactly as was recommended in Section [Train/Predict](#train-predict), 80% of the penguin data set will be used for the training set and 20% for the test set:
+It is also interesting to see how well the model performs on a test data set. For this section, 2/3 of the penguin data set will be used for the training set and 1/3 for the test set (default of the holdout method in `r ref("mlr3::resample")`):
 
 ```{r iml-008, message=FALSE, warning=FALSE}
-train_set = sample(task_peng$nrow, 0.8 * task_peng$nrow)
+train_set = sample(task_peng$nrow, 2/3 * task_peng$nrow)
 test_set = setdiff(seq_len(task_peng$nrow), train_set)
 learner$train(task_peng, row_ids = train_set)
 prediction = learner$predict(task_peng, row_ids = test_set)
@@ -240,37 +240,40 @@ prediction = learner$predict(task_peng, row_ids = test_set)
 First, we compare the feature importance on training and test set
 
 ```{r iml-009, message=FALSE, warning=FALSE, fig.cap='FeatImp on train (left) and test (right)',  fig.align='center'}
-num_features = c("bill_length_mm", "bill_depth_mm", "flipper_length_mm", "body_mass_g", "year")
 # plot on training
 model = Predictor$new(learner, data = penguins[train_set, ], y = "species")
 effect = FeatureImp$new(model, loss = "ce")
-plot_train = plot(effect, features = num_features)
+plot_train = effect$plot()
 
 # plot on test data
 model = Predictor$new(learner, data = penguins[test_set, ], y = "species")
 effect = FeatureImp$new(model, loss = "ce")
-plot_test = plot(effect, features = num_features)
+plot_test = effect$plot()
 
 # combine into single plot
 library("patchwork")
 plot_train + plot_test
 ```
 
-The results of the train set for `FeatureImp` are very similar, which is expected. We follow a similar approach to compare the feature effects:
+In both cases, the bill lengths is the most important feature. Since all other features have similar, much lower importance values, the ranking between training and test data slightly changes. The magnitude of values differs between training and test data. For test data FI values of $>$ 15 are measured while for train data the values are $\le$ 0.3. This is because fitting a model means that the model parameters are adapted to have low prediction error on the training data.
+
+We follow a similar approach to compare the feature effects:
 
 ```{r iml-010, message=FALSE, warning=FALSE, fig.cap='FeatEffect train data set', fig.align='center'}
+num_features = c("bill_length_mm", "bill_depth_mm", "flipper_length_mm", "body_mass_g", "year")
 model = Predictor$new(learner, data = penguins[train_set, ], y = "species")
-effect = FeatureEffects$new(model)
+effect = FeatureEffects$new(model, method = "pdp")
 plot(effect, features = num_features)
 ```
 
 ```{r iml-011, message=FALSE, warning=FALSE, fig.cap='FeatEffect test data set',  fig.align='center'}
 model = Predictor$new(learner, data = penguins[test_set, ], y = "species")
-effect = FeatureEffects$new(model)
+effect = FeatureEffects$new(model, method = "pdp")
 plot(effect, features = num_features)
 ```
 
-As is the case with `FeatureImp`, the test data results show either an over- or underestimate of feature importance / feature effects compared to the results where the entire penguin data set was used. This would be a good opportunity for the reader to attempt to resolve the estimation by playing with the amount of features and the amount of data used for both the test and train data sets of `FeatureImp` and `FeatureEffects`. Be sure to not change the line `train_set = sample(task_peng$nrow, 0.8 * task_peng$nrow)` as it will randomly sample the data again.
+As is the case with `FeatureImp`, the test data results are similar to the training results but the magnitude of effects differs slightly. 
+This would be a good opportunity for the reader to inspect the effect of varying amounts of features and the amount of data used for both the test and train data sets on `FeatureImp` and `FeatureEffects`.
 
 ## counterfactuals {#sec-counterfactuals}
 
