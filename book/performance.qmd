@@ -40,10 +40,10 @@ set.seed(3)
 In supervised machine learning, a model which is deployed in practice is expected to generalize well to new, unseen data.
 Accurate estimation of this so-called `r index("generalization performance")` is crucial for many aspects of machine learning application and research --- whether we want to fairly compare a novel algorithm with established ones or to find the best algorithm for a particular task after tuning --- we always rely on this performance estimate.
 Hence, performance estimation is a fundamental concept used for model selection, model comparison, and hyperparameter tuning (which will be discussed in depth in @sec-optimization) in supervised machine learning.
+And if a model has made its way into production use, we naturally want to monitor its performance on newly gathered data to ensure that it still performs well enough to stay in use, or to re-train it if needed.
 To properly assess the generalization performance of a model, we must first decide on a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
 A performance measure typically computes a numeric score indicating, e.g., how well the model predictions match the ground truth.
 However, it may also reflect other qualities such as the time for training a model.
-An overview of some common performance measures implemented in `r mlr3`, including a short description and a basic mathematical definition, can be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables.
 
 <!-- motivate the need for splitting the data -->
 Once we have decided on a performance measure, the next step is to adopt a strategy that defines how to use the available data to estimate the generalization performance.
@@ -54,6 +54,8 @@ It is therefore common practice to test a model on independent data not used to 
 However, we typically train a deployed model on all available data, which leaves no data to assess its generalization performance.
 To address this issue, existing performance estimation strategies withhold a subset of the available data for evaluation purposes.
 This so-called test set serves as unseen data and is used to estimate the generalization performance.
+In essence, the process of holding back some portion of the data for evaluation simulates what is happening in practice with a deployed model: New data is gathered as time moves on, and the model has never seen it during training.
+It should should however still perform reasonably well on this new data.
 <!-- is then used to mimic the presence of unseen data and to estimate the generalization performance. -->
 <!-- To overcome this issue, existing strategies for estimating the generalization performance preserve a subset of the data to mimic the presence of unseen data. -->
 
@@ -100,7 +102,7 @@ knitr::include_graphics("Figures/ml_abstraction-2.svg")
 <!-- chapter outline -->
 ## Holdout and Scoring
 
-In the previous chapter, we have applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
+In @sec-basics, we have applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
 As a quick start into resampling and benchmarking with the `r mlr3` package, we show a short example of how to do this with the `r ref("resample()")` and `r ref("benchmark()")` convenience functions.
 Specifically, we show how to estimate the generalization performance of a learner on a given task by the holdout method using `r ref("resample()")` and how to use `r ref("benchmark()")` to compare two learners on a task.
 
@@ -133,30 +135,12 @@ In our learner above, we have already selected `predict_type = "prob"`, which is
 More information about a performance measure, including its mathematical definition, can be obtained using the `$help()` method of a `r ref("Measure")` object, which opens the help page of the corresponding measure, e.g., `msr("classif.acc")$help()` provides all information about the classification accuracy.
 :::
 
-The code example below shows how to apply holdout (specified using `rsmp("holdout")`) on the previously specified `r ref("mlr_tasks_penguins")` task to estimate classification accuracy (using `msr("classif.acc")`) of the previously defined decision tree learner from the `r ref_pkg("rpart")` package:
-
-```{r performance-005}
-resampling = rsmp("holdout")
-rr = resample(task = task, learner = learner, resampling = resampling)
-rr$aggregate(msr("classif.acc"))
-```
-
-The `r ref("benchmark()")` function internally uses the `r ref("resample()")` function to estimate the performance based on a resampling strategy.
-For illustration, we show a minimal code example that compares the classification accuracy of the decision tree against a featureless learner which always predicts the majority class:
-
-```{r performance-006}
-lrns = c(learner, lrn("classif.featureless"))
-d = benchmark_grid(task = task, learner = lrns, resampling = resampling)
-bmr = benchmark(design = d)
-acc = bmr$aggregate(msr("classif.acc"))
-acc[, .(task_id, learner_id, classif.acc)]
-```
-
-Further details on resampling and benchmarking can be found in @sec-resampling and @sec-benchmarking.
+<!-- Moved from intro as per BB, not sure if good here -->
+An overview of some common performance measures implemented in `r mlr3`, including a short description and a basic mathematical definition, can be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables.
 
 ## Resampling {#sec-resampling}
 
-Existing resampling strategies differ in how they partition the available data into training and test set, and a comprehensive overview can be found in @japkowicz2011evaluating.
+Existing resampling strategies differ in how they partition the available data into training and test set.
 For example, the $k$-fold `r index("cross-validation")` method randomly partitions the data into $k$ subsets, called folds (see @fig-cv-illustration).
 Then $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as test data exactly once in each of the $k$ iterations.
 The $k$ performance estimates resulting from each fold are then averaged to obtain a more reliable performance estimate.
@@ -168,8 +152,14 @@ Other well-known resampling strategies include `r index("subsampling")` and `r i
 Subsampling --- also known as repeated holdout --- repeats the holdout method and creates multiple train-test splits, taking into account the ratio of observations to be included in the training sets.
 Bootstrapping creates training sets by randomly drawing observations from all available data with replacement.
 Some observations in the training sets may appear more than once, while the other observations that do not appear at all are used as test set.
-The choice of the resampling strategy usually depends on the specific task at hand and the goals of the performance assessment.
+The choice of the resampling strategy usually depends on the specific task at hand and the goals of the performance assessment, but some rules of thumb are available.
+If the available data is fairly small (N ≤ 500), holdout with a 2/3 ratio is often used, yet the resulting performance estimates will exhibit high variance. Alternatively, repeated cross-validation with a large number of repetitions can be used to keep the variance of the performance estimates low.
+For the 500 ≤ N ≤ 50000 range, 5- to 10-fold cross-validation is generally recommended.
+In general, the larger the dataset, the fewer splits are required, yet sample-size issues can still occur, e.g., due to imbalanced data.
+Additional recommendations are given by @hpo_practical.
+
 <!-- Japkowicz and Shah (2011) make a distinction between resampling strategies that use observations from the test set only once and resampling strategies that use observations from the test set multiple times. -->
+For resampling strategies in general, @japkowicz2011evaluating give a comprehensive overview.
 Properties and pitfalls of different resampling techniques have been widely studied and discussed in the literature, see e.g., @bengio2003no, @molinaro2005prediction, @kim2009estimating, @bischl2012resampling.
 <!-- TODO: See BB comment, summarize paper content a bit, maybe in separate section? -->
 
@@ -182,12 +172,26 @@ Properties and pitfalls of different resampling techniques have been widely stud
 knitr::include_graphics("Figures/cross-validation.svg")
 ```
 
-In `r mlr3`, many resampling strategies have already been implemented so that users do not have to implement them from scratch, which can be tedious and error-prone. In this section, we cover how to use `r mlr3` to
+In `r mlr3`, many resampling strategies have already been implemented so that users do not have to implement them from scratch, which can be tedious and error-prone.
+In this section, we cover how to use `r mlr3` to
 
 * query (@sec-resampling-strategies) implemented resampling strategies,
 * construct (@sec-resampling-construct) resampling objects for a selected resampling strategy,
 * instantiate (@sec-resampling-inst) the train-test splits of a resampling object on a given task, and
 * execute (@sec-resampling-exec) the selected resampling strategy on a learning algorithm to obtain resampling results.
+
+<!-- FIXME: moved from quick start, should go at the beginning of this section but not sure where to put it -->
+The holdout split we had previously done manually can be achieved through `rsmp("holdout")`, which we illustrate on the `r ref("mlr_tasks_penguins")` task to estimate classification accuracy (using `msr("classif.acc")`) of a decision tree learner from the `r ref_pkg("rpart")` package:
+
+```{r performance-005}
+task = tsk("penguins")
+learner = lrn("classif.rpart")
+resampling = rsmp("holdout")
+
+rr = resample(task = task, learner = learner, resampling = resampling)
+rr$aggregate(msr("classif.acc"))
+```
+
 
 ### Query {#sec-resampling-strategies}
 
@@ -618,7 +622,6 @@ In an applied setting, benchmarking may be used to evaluate whether a deployed m
 When comparing multiple learners on multiple tasks, the main aim is often more of a scientific nature, e.g., to gain insights into how different learners perform in different data situations or whether there are certain data properties that heavily affect the performance of certain learners (or certain hyperparameter of learners).
 For example, it is common practice for algorithm designers to analyze the generalization performance or runtime of a newly proposed learning algorithm in a benchmark study where it has been compared with existing learners.
 <!-- In an applied setting, benchmarking is used to compare a production model to e.g. a novel method or re-trained model based on the original learner to evaluate whether the model is still suitable. -->
-In @sec-benchmarking, we provide code examples for conducting benchmark studies and performing statistical analysis of benchmark results using the `r mlr3` package.
 
 <!-- previous subsection intro
 `r index("Benchmarking")` is used to compare the performance of different learning algorithms applied on one or more tasks using (potentially different) resampling strategies.
@@ -629,7 +632,17 @@ The `r mlr3` package offers the convenience function `r ref("benchmark()")` to c
 The function internally runs the `r ref("resample()")` function on each task separately.
 The provided resampling strategy is instantiated on each task to ensure a fair comparison by training and evaluating multiple learners under the same conditions.
 This means that all provided learners use the same train-test splits for each task.
-<!-- Specifically, it repeatedly trains and evaluates all provided learners under the same conditions by the specified resampling strategy which is instantiated on each task to ensure a fair comparison. -->
+<!-- Example moved from quick start: -->
+For illustration, we show a minimal code example that compares the classification accuracy of the decision tree against a featureless learner which always predicts the majority class:
+
+```{r performance-006}
+lrns = c(learner, lrn("classif.featureless"))
+d = benchmark_grid(task = task, learner = lrns, resampling = resampling)
+bmr = benchmark(design = d)
+acc = bmr$aggregate(msr("classif.acc"))
+acc[, .(task_id, learner_id, classif.acc)]
+```
+
 In this section, we cover how to
 
 * construct a benchmark design (@sec-bm-design) to define the benchmark experiments to be performed,
@@ -823,7 +836,7 @@ Combining multiple `r ref("BenchmarkResult")`s into a larger result object can b
 Similar to creating automated visualizations for tasks, [predictions](#autoplot-prediction), or [resample results](#autoplot-resampleresult), the `r mlr3viz` package also provides a `r ref("autoplot()")` method to visualize benchmark results, by default as a boxplot:
 
 ```{r performance-046}
-#| fig-height: 8
+#| fig-height: 5
 #| fig-width: 6
 autoplot(bmr, measure = msr("classif.acc"))
 ```
