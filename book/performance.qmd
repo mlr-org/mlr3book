@@ -54,9 +54,9 @@ It is therefore common practice to test a model on independent data that has not
 However, we typically train a deployed model on all available data, which leaves no further data to assess its generalization performance.
 To address this issue, existing performance estimation strategies withhold a subset of the available data for evaluation purposes.
 This so-called test set is then used to mimic the presence of unseen data and to estimate the generalization performance.
-In essence, the process of holding back part of the data for evaluation purposes simulates the application of the deployed model in practice: 
-Over time, new data is collected that was not known during the model training process.
-The deployed model makes predictions based on this new data, and we trust that it will perform as well as the previously estimated performance.
+The process of holding back part of the data for evaluation purposes simulates the application of the deployed model in practice: 
+Over time, new data is gathered that was not seen during the model training process.
+The model is used in practice to make predictions on this new data and we trust that it performs as well as reported by the performance estimate.
 <!-- As time moves on, new data is gathered that was never seen during the model training process, the deployed model makes predictions based on this new data, and we trust that the deployed model performs as well as reported by the performance estimate. -->
 <!-- New data is gathered as time moves on, and the model has never seen it during training. -->
 <!-- It should should however still perform reasonably well on this new data. -->
@@ -70,31 +70,43 @@ Below, we will learn different strategies to estimate the generalization perform
 ## Holdout and Scoring {#sec-holdout-scoring}
 
 <!-- describe performance estimation procedure and desiderata -->
-A common simple strategy for performance estimation is the `r index("holdout")` method, which randomly partitions the data into a single training and test set using a pre-defined splitting ratio.
+A simple strategy for performance estimation is the `r index("holdout")` method, which randomly partitions the data into a single training and test set using a pre-defined splitting ratio.
 The training set is used to create an intermediate model, whose sole purpose is to estimate the performance using the test set.
-This performance estimate is then used as a proxy for the performance of the final model trained on all available data and deployed in practice.
+This performance estimate is then used as a proxy for the performance of the final model trained on all available data which is deployed in practice.
 Ideally, the training set should be as large as all available data so that the intermediate model represents the final model well.
 If the training data is much smaller, the intermediate model learns less complex relationships compared to the final model, resulting in a pessimistically biased performance estimate.
 On the other hand, we also want as much test data as possible to reliably estimate the generalization performance.
-However, both goals are not possible if we have only access to a limited amount of data.
+However, both goals are not possible to achieve at the same time if we have only access to a limited amount of data.
 In practice, it is commonly agreed on using 2/3 of the data as training set and 1/3 as test set for the holdout strategy.
 
-In @sec-basics, we have already applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
-Below, we show a short code example of how to do this with the `r mlr3` package using the `r ref("resample()")` convenience functions.
+<!-- In @sec-basics, we have already applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance). -->
+<!-- Below, we show a short code example of how to do this with the `r mlr3` package using the `r ref("resample()")` convenience functions. -->
 <!-- Specifically, we show how to estimate the generalization performance of a learner on a given task by the holdout method using `r ref("resample()")` and how to use `r ref("benchmark()")` to compare two learners on a task. -->
 
-We first define the corresponding `r ref("Task")` and `r ref("Learner")` objects used throughout this chapter as follows:
+For illustration, we fist define the corresponding `r ref("Task")` and `r ref("Learner")` objects which will be used throughout this chapter:
 
 ```{r performance-003}
 task = tsk("penguins")
-learner = lrn("classif.rpart", predict_type = "prob")
+learner = lrn("classif.rpart")
 ```
 
-<!-- #### Further Reading -->
-<!-- * If data is pre-processed before feeding it into a learning algorithm, the train-test splits need to be taken into account, i.e., the pre-processing steps should be integrated into the model-building process. [Pipelines](pipelines) solve this by combining a `r ref("Learner")` with a pre-processing step into a more general machine learning pipeline that behaves like a learning algorithm. -->
-<!-- * Depending on the task at hand, more complex resampling strategies might be required, e.g., for [spatiotemporal data](#spatiotemporal). -->
+We can use the helper function `r ref("partition()")` to randomly create two disjoint sets containing the row indices used to partition the data into training and test set.
+We then train the previously defined learner on the training set and make predictions on the test set which will be stored in a `r ref("Prediction")` object:
 
-The next obvious step is to select a suitable performance measure, which can be done as explained in @sec-eval using the `r ref("mlr_measures")` dictionary.
+```{r}
+splits = partition(task, ratio = 2/3)
+str(splits)
+
+learner$train(task, splits$train)
+pred = learner$predict(task, splits$test)
+pred
+```
+
+The `r ref("Prediction")` object contains both predictions (column `response`) and ground truth (column `truth`.
+In performance estimation, we are usually interested in calculating a numeric score that quantifies the differences between predicted and ground truth values. 
+In `r mlr3`, this score is usually determined by `r ref("Measure")` objects which define how the differences between predicted and ground truth values are quantified.
+The next obvious step is to select a suitable performance measure from the many possibilities available, which can be done using the `r ref("mlr_measures")` dictionary.
+<!-- as explained in @sec-eval  -->
 Passing the dictionary to the `as.data.table` function provides an overview of implemented measures with additional information from which we can select a suitable performance measure, which we print here in two parts for compactness:
 
 ```{r performance-004}
@@ -103,22 +115,20 @@ msr_tbl[1:5, .(key, label, task_type)]
 msr_tbl[1:5, .(key, packages, predict_type, task_properties)]
 ```
 
-Depending on our task at hand, we will look for a measure that fits our `task_type` (`"classif"` for `penguins`) and `task_properties`.
+Depending on our task at hand, we will look for a measure that fits our `task_type` (`"classif"` for the `penguins` task we are using here) and `task_properties`.
 The latter is important since measures like AUC `"classif.auc"` are only defined for binary classification tasks (see also @sec-roc-space for more details on AUC), which is indicated by `"twoclass"` in the `task_properties` column --- multiclass-generalizations of the AUC measure are available, but need to be selected explicitly.
 Similarly, some measures require the learner to predict probabilities (indicated by `"prob"` in the `predict_type` column), while others require predicting discrete class labels (indicated by `"response"`).
-In the definition of the learner above, we have specified `predict_type = "prob"`, which is required for measures that are not defined on class labels, such as the aforementioned AUC.
+In the definition of the learner above, we could specify `predict_type = "prob"` to support measures during scoring that are not defined on class labels, such as the aforementioned AUC.
 
 ::: {.callout-tip}
-An overview of some common performance measures implemented in `r mlr3`, including a short description can also be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables.
+An overview of common performance measures implemented in `r mlr3`, including a short description can also be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables.
 More information about a specific performance measure, including its mathematical definition, can be obtained using the `$help()` method of a `r ref("Measure")` object, which opens the help page of the corresponding measure, e.g., `msr("classif.acc")$help()` provides all information about the classification accuracy.
 :::
 
-The code example below shows how to apply holdout (specified using `rsmp("holdout")`) on the previously specified `r ref("mlr_tasks_penguins")` task to estimate classification accuracy (using `msr("classif.acc")`) of the previously defined decision tree learner from the `r ref_pkg("rpart")` package:
+The code example below shows how to estimate the classification accuracy (using `msr("classif.acc")` as performance measure)  the `$score()` method of a `r ref("Prediction")` object  of the previously defined decision tree learner on the specified `r ref("mlr_tasks_penguins")` task:
 
 ```{r}
-resampling = rsmp("holdout")
-rr = resample(task = task, learner = learner, resampling = resampling)
-rr$aggregate(msr("classif.acc"))
+pred$score(msr("classif.acc"))
 ```
 
 
