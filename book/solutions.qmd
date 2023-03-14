@@ -269,6 +269,169 @@ as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
 
 ## Solutions to @sec-technical
 
+## Solutions to @sec-large-benchmarking
+
+1. In this exercise, we will learn how to work with OpenML
+
+a. Look at the OpenML dataset with ID 31 on the `r link("https://openml.org", "OpenML website")`.
+    Then load it into R and create an mlr3 task from it.
+
+You can access the dataset through the link <https://openml.org/d/31>.
+
+```{r}
+library("mlr3oml")
+odata = odt(id = 31)
+odata
+```
+
+Because the dataset has a default target, we can simply call `r ref("as_task")` without providing a target column.
+
+```{r}
+task = as_task(odata)
+```
+
+b. One OpenML dataset can be associated with many tasks.
+   Find one classification task that is associated with the dataset from the previous exercise (you can use the `r ref("list_oml_tasks()")` function for that).
+   Construct an mlr3 task and resampling from this OpenML task.
+
+```{r}
+task_list = list_oml_tasks(data_id = 31, limit = 10)
+
+head(task_list)
+
+otask = otsk(id = 261)
+
+task = as_task(otask)
+resampling  = as_resampling(otask)
+```
+
+c. List 10 OpenML datasets that have less than 5000 observations, no missing values, and less than 10 features.
+
+```{r}
+data_list = list_oml_data(
+  number_instances = c(0, 5000), 
+  number_features = c(0, 10),
+  number_missing_values = 0, 
+  limit = 10
+)
+
+head(data_list)
+```
+
+2. In this exercise, we are investigating the effect of the number of folds on the performance estimate and we will execute the experiment using `r ref_pkg("batchtools")`.
+   We are therefore changing the perspective and consider the resampling method the algorithm.
+
+a. Create an experiment registry.
+
+```{r}
+library("batchtools")
+reg = makeExperimentRegistry(NA, seed = 1)
+```
+
+b. Add a problem to the registry that accepts problem parameters `learner_id`, `task_id` and `measure_id` and returns a list with the corresponding learner, task, and measure, retrieved from the mlr3 dictionary.
+
+```{r}
+addProblem("my_problem", data = NULL, function(data, learner_id, task_id, measure_id, ...) {
+  library(mlr3verse)
+  list(
+    learner = lrn(learner_id),
+    task = tsk(task_id),
+    measure = msr(measure_id)
+  )
+})
+```
+
+
+
+c. Add an algorithm for the cross-validation method that takes in parameter `folds`, evaluates the resampling and returns the scalar performance measure.
+
+```{r}
+addAlgorithm("cv", function(instance, folds, ...) {
+  learner = instance$learner
+  task = instance$task
+  resampling = rsmp("cv", folds = folds)
+  measure = instance$measure
+
+  rr = resample(task, learner, resampling)
+
+  rr$aggregate(measure)
+})
+```
+
+
+d. Add an experiment using the penguins task, the `classif.rpart` learner and the accuracy measure. 
+    Add experiments for 2, 5, and 10 folds and repeat each experiment 12 times (read the documentation of `r ref("addExperiments")` on how to add repetitions of an experiment).
+
+```{r}
+addExperiments(
+  prob.designs = list(my_problem = data.frame(
+    learner_id = "classif.rpart",
+    task_id = "penguins",
+    measure_id = "classif.acc"
+  )), 
+  algo.designs = list(cv = data.frame(folds = c(2, 5, 10))),
+  repls = 12
+)
+```
+
+
+e. Test one of the defined jobs using the batchtools function `r ref("testJob")`.
+
+```{r}
+testJob(1)
+```
+
+
+f. Set the `cluster.function` of the registry to multicore `r ref("makeClusterFunctionsMulticore")` and save the registry.
+
+```{r}
+reg$cluster.functions = makeClusterFunctionsMulticore()
+saveRegistry()
+
+```
+
+
+g. Submit the jobs to the cluster and wait until they are finished. Chunk the jobs so that 3 computational jobs run for roughly the same amount of time.
+
+```{r}
+chunks = data.frame(
+  job.id = getJobTable()$job.id,
+  chunk = rep(1:3, times = 12)
+)
+
+submitJobs(chunks)
+waitForJobs()
+```
+
+
+h. Load and plot the experiment results using a box-plot that compares the results for the different number of folds.
+```{r}
+library("ggplot2")
+accuracy = sapply(1:18, loadResult)
+folds = unlist(getJobTable()$algo.pars)
+
+tbl = data.frame(accuracy = accuracy, folds = as.factor(folds))
+    
+ggplot(tbl, aes(x = folds, y = accuracy)) + 
+  geom_boxplot()
+```
+
+
+
+ 
+
+
+
+
+
+
+
+getJobTable()
+
+testJob(1, external = TRUE)
+
+
+
 ## Solutions to @sec-interpretation
 
 1. Prepare a `mlr3` regression task for `fifa` data. Select only variables describing the age and skills of footballers. Train any predictive model for this task, e.g. `regr.ranger`.
