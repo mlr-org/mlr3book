@@ -431,7 +431,7 @@ The scheduling system controls when these computational jobs are executed.
 #| label: fig-hpc
 #| fig-cap: "Illustration of a HPC cluster architecture."
 #| fig-align: "center"
-#| fig-alt: "A rough sketch of the architecture of a HPC cluster."
+#| fig-alt: "A rough sketch of the architecture of a HPC cluster. Ann and Bob both have access to the cluster and can log in to the head node. There, they can submit jobs to the scheduling system, which adds them to its queue and determines when they are run."
 #| echo: false
 knitr::include_graphics("Figures/hpc.drawio.png")
 ```
@@ -455,7 +455,7 @@ Afterwards we will show how the `r ref_pkg("mlr3batchmark")` package can be used
 
 
 <!-- What we wanna do conceptually -->
-Our goal now is to run the benchmark design shown below (and defined at the end of @sec-openml-collection) on a HPC cluster.
+Our goal now is to run the benchmark design shown below (originally defined at the end of @sec-openml-collection) on a HPC cluster.
 You may imagine this to be a large study, such that a `benchmark()` call and parallelization via `r ref_pkg("future")` would not result in a reasonable runtime.
 
 ```{r large_benchmarking-027_experiments-027}
@@ -465,42 +465,42 @@ large_design
 If we want to execute this experiment using `r ref_pkg("batchtools")`, we need to understand how the batchtools package conceptualizes benchmarking.
 The central concept is the experiment or `r define("job", "Job or Experiment")`:
 
-Experiment (Job $E$ is defined by applying Algorithm $A$ using algorithm parameters $\xi_A$ to problem $P$ with problem parameters $\xi_P$.
+Experiment (or Job) $E$ is defined by applying Algorithm $A$ using algorithm parameters $\xi_A$ to problem $P$ with problem parameters $\xi_P$.
 
-A benchmark experiments then consists of running many such experiments with different algorithm (parameters) and problem (parameters).
+A benchmark experiments in batchtools then consists of running many such experiments with different algorithms, algorithm parameters, problems, and problem parameters.
 Each such Experiment $E$ is independent of all other experiments and constitutes the basic level of computation that can be parallelized.
 
-If we want to utilize batchtools to execute the `large_design` from above, we therefore have to translate the mlr3 concepts into its language.
+If we want to utilize batchtools to execute the `large_design` from above, we therefore have to translate the mlr3 resampling experiments into the batchtools language.
 There is not a single right way to do this, and we here show one of many possible solutions.
 
 In the introduction of this chapter, we have defined a ML benchmark experiment as running a number of resampling experiments $E_{i, j} = (L_i, T_j, R_j)$ that are defined by a learner, task and resampling.
 While it might seem natural to define one such resampling experiment as a job, each resample experiment can be split even further, namely into its iterations $E^1_{i, j}, ..., E_{i, j}^{n_j}$, where $n_j$ are number of iterations of resampling $R_j$.
-We will understand one resampling iteration as a job (aka. experiment).
-
+We will therefore understand one resampling iteration as a job (aka. experiment).
 Note that such a job does not have to coincide with the notion of a computational job defined in the previous section.
 One computational job can consist of (sequentially) executing multiple jobs.
+This can make sense, when the jobs are short, as there comes some overhead with submitting and running a computational job on a HPC cluster.
 
-We will now continue with showing how to define the batchtools algorithms and problems in such a way that they allow to define each resampling iteration as a job.
-The first step is always to create an (or load an existing) experiment registry, using the function `r ref("batchtools::makeExperimentRegistry")` (or `r ref("batchtools::loadRegistry")`).
+We will now continue with showing how to define the batchtools algorithms $A$, algorithm parameters $\xi_A$, problems $P$ and problem parameters $\xi_P$ in such a way that they allow to define each resampling iteration as a job.
+The first step is always to create an (or load an existing) experiment registry, using the function `r ref("batchtools::makeExperimentRegistry()")` (or `r ref("batchtools::loadRegistry()")`).
 This function constructs the inter-communication object for all functions in `r ref_pkg("batchtools")` and corresponds to a folder in the file system.
 
 :::{.callout-note}
 Whenever we refer to a registry in this section, we mean an experiment registry.
-The R package `r ref_pkg("batchtools")` also has a different registry object that constructed with `r ref("batchtools::makeRegistry")` that we will not cover in this book.
+The R package `r ref_pkg("batchtools")` also has a different registry object that constructed with `r ref("batchtools::makeRegistry()")` that we will not cover in this book.
 :::
 
 <!-- So why do we need this registry? -->
 
 Among other things, the experiment registry will store the:
 
-* algorithm, problem, and job definitions
+* algorithms, problems, and job definitions
 * log outputs and status of running and finished jobs
 * job results
 * `r define("cluster function", "Batchtools object that allows to configure the interaction with the scheduling system.")`, which defines the interaction with the scheduling system
 
 While the first three bullet points should be relatively clear, the latter needs some explanation.
 By configuring the scheduling system through a "cluster function", it is possible to make the interaction with the scheduling system independent on the scheduling software.
-We will come back to this later.
+We will come back to this later and show how to change it to work on a Slurm cluster.
 
 We create a registry using a temporary directory by specifying `file.dir = NA` below, but we could also provide a proper path to be used as the registry folder.
 We also set a global seed for the registry.
@@ -513,7 +513,7 @@ reg = makeExperimentRegistry(file.dir = NA, seed = 1)
 ```
 
 When printing the registry, we see that that (unsurprisingly) there are 0 algorithms, problems, and jobs registered.
-We are also informed that the "Interactive" cluster function is used and about the path of the working directory that would be used when running cluster jobs.
+We are also informed that the "Interactive" cluster function is used and about the path of the working directory that will be used when running experimens.
 
 ```{r large_benchmarking-029_experiments-029}
 reg
@@ -522,14 +522,13 @@ reg
 The next step is to populate the registry with algorithms and problems, which we will then use to define the jobs.
 We can register a problem, by calling `r ref("batchtools::addProblem()")` whose main arguments beside the registry are:
 
-* `name`, to identify the problem
+* `name` to uniquely identify the problem
 * `data` to represent the static data part of a problem
-* `fun`, which takes in the `data` and problem parameters $\xi_P$ and returns a concrete problem instance
+* `fun` takes in the `data` and problem parameters $\xi_P$ and returns a concrete problem instance
 
-We register the first task-resampling combination using the task ID as the name.
-The `data` is the static part on which the algorithm will work, while the `fun` creates a specific problem instance from the `data` and additional problem parameters.
-We define the problem parameter $\xi_P$ is the resampling iteration. 
-The problem `fun` takes in the static problem -- a task and resampling -- and returns the problem instance by adding the problem parameter, namely the resampling iteration. 
+We register the first task-resampling combination of the `large_design` using the task ID as the name.
+We define the problem parameter $\xi_P$ as the resampling iteration.
+The problem `fun` takes in the static problem `data` -- a list with a task and resampling -- and the problem parameter $\xi_P$ -- the resampling iteration -- and returns the problem instance by adding the paparameter to the list.
 
 ```{r large_benchmarking-030_experiments-030}
 task = large_design$task[[1L]]
@@ -553,7 +552,7 @@ addProblem(
 :::{.callout-tip}
 All batchtools functions that interoperate with a registry, take a registry as an argument.
 By default, this argument is set to the last created registry, which is currently the `reg` object defined earlier.
-We nonetheless pass it explicitly in this section for clarity, but we would not have to do it.
+We nonetheless pass it explicitly in this section for clarity, but we would not have to do so.
 :::
 
 When calling `r ref("batchtools::addProblem")`, not only is the problem added to the registry object from the active R session, but this information is also synced with the registry folder.
@@ -566,11 +565,14 @@ The next step is to register the algorithm we want to run.
 We can add an algorithm by calling `r ref("batchtools::addAlgorithm()")`.
 Besides the registry, it takes in the arguments:
 
-* `name` to identify the algorithm
+* `name` to uniquely identify the algorithm
 * `fun` which takes in the problem instance and parameters $\xi_A$ and defines what is computed when running an experiment. Its output is the experiment result.
 
-We will call the algorithm that we add `"run_learner"` and it will take a learner and the as a parameter.
+Our goal at the start was to define one job as one resampling iteration, so the algorithm should execute a single resampling iteration.
+We will call the algorithm that we add `"run_learner"` and make the learner itself the parameter $\xi_A$.
 It receives a problem instance and the learner, executes one iteration of a resampling and returns the learner's state and the predictions.
+We could habe also add one algorithm for each learner and added the learner's hyperparameters as algorithm parameters $\xi_A$. 
+What is best, depends on the concrete problem at hand and --as mentioned before -- there is no single best solution.
 
 ```{r large_benchmarking-032_experiments-032}
 addAlgorithm(
@@ -621,8 +623,8 @@ addExperiments(
 )
 ```
 
-Whenever an experiment is added, the global seed set in the beginning is incremented and set as the seed for the experiment to ensure reproducibility.
-We can now also print the registry again, and see that indeed the algorithm, problem and experiments were added.
+Note that whenever an experiment is added, the global seed set in the beginning is incremented and saved for the experiment to ensure reproducibility.
+We can now also print the registry again, and see that indeed the algorithm, problem and experiments (jobs) were added.
 
 ```{r large_benchmarking-034_experiments-034}
 reg
@@ -642,22 +644,26 @@ job_table[1:2, c("job.id", "algorithm", "algo.pars", "problem", "prob.pars")]
 The complete workflow of adding algorithms, problems, and experiments is summarized in the image below.
 
 ```{r large_benchmarking-037_experiments-037}
+#| label: fig-batchtools-illustration
+#| fig-cap: "Illustration of batchtools problem, algorithm, and experiment"
+#| fig-align: "center"
+#| fig-alt: "A problem consists of a static data part and applies the problem function to this data part (and potentially problem parameters) to return a problem instance. The algorithm function takes in a problem instance (and potentially algorithm parameters), executes one job and returns its result."
 knitr::include_graphics("Figures/tikz_prob_algo_simple.png")
 ```
 
 We have defined 10 jobs, each representing one resampling iteration.
-It is now time, to translate these jobs into computational jobs and run them.
+It is now time to translate these jobs into computational jobs and run them.
 This includes:
 
-1. specifying resource requirements for the scheduler and
-1. possibly grouping multiple jobs into one computational job.
+1. specifying resource requirements for each computational
+1. (optionally) grouping multiple jobs into one computational job.
 
 The resource requirements that can be specified depend on the cluster function that is set in the registry.
 We earlier left the cluster function at its default value, which was the "Interactive" cluster function that is primarily intended for exploration of the package and testing of experiments.
 
-Because we are now starting with interaction with the scheduling system, the time has come to properly configure it.
+Because we now want to submit the jobs to the scheduling system, the time has come to properly configure it.
 We are assuming for this example that we are operating a Slurm cluster.
-We therefore set the cluster function to a simple Slurm cluster function that can be constructed using `r ref("batchtools::makeClusterFunctionsSlurm()")`.
+Therefore, we set the cluster function to a simple Slurm cluster function that can be constructed using `r ref("batchtools::makeClusterFunctionsSlurm()")`.
 
 ```{r large_benchmarking-038_experiments-038}
 #| eval: false
@@ -665,6 +671,7 @@ slurm_fn = makeClusterFunctionsSlurm(template = "slurm-simple")
 ```
 
 ```{r large_benchmarking-039_experiments-039}
+#| echo: false
 slurm_fn = makeClusterFunctionsInteractive()
 slurm_fn$name = "Slurm"
 ```
@@ -679,7 +686,7 @@ saveRegistry()
 
 Assuming that we are running this program now on the login node of the Slurm cluster, we can call `r ref("batchtools::submitJobs()")` to add the previously defined experiments to the queue of the Slurm scheduler.
 
-The most important arguments of this functino besides the registry are:
+The most important arguments of this function besides the registry are:
 
 * `ids`, which are either a vector of job ids to submit, or a data frame with columns `job.id` and `chunk`, which allows to group multiple jobs into one computational job, and
 * `resources`, which is a named list specifying the resource requirements with which the computational jobs will be run.
@@ -690,7 +697,7 @@ The ids we refer to here are the ids that can e.g. be accessed as the `job.id` c
 job_table$job.id
 ```
 
-In our case, we show how we can group five jobs into one computational jobs.
+In our case, we show how to group five jobs into one computational job.
 In addition to the grouping, we also specify the number of CPUs per computational job to 1, the wall time to 1 hour and the RAM limit to 8 GB.
 
 ```{r large_benchmarking-042_experiments-042}
@@ -707,6 +714,7 @@ submitJobs(
 ```
 
 
+
 ```{r large_benchmarking-043_experiments-043}
 #| echo: false
 #| output: false
@@ -716,8 +724,9 @@ submitJobs(ids = chunks, reg = reg)
 waitForJobs(reg = reg)
 ```
 
-While the cluster jobs are being processed, `r ref_pkg("batchtools")` exposes many useful functions that allow the user to access information about the running cluster jobs.
-This includes e.g. `r ref("batchtools::getStatus")` to get the status of the running job, `r ref("batchtools::showLog")` to inspect the logs or `r ref("batchtools::grepLogs")` to search the log files.
+Once the jobs are submitted, now its up to the scheduler and the cluster to run them.
+While the cluster jobs are being processed, `r ref_pkg("batchtools")` exposes many useful functions that allow the user to access information about the submitted, running, expired, or failed computational jobs.
+This includes e.g. `r ref("batchtools::getStatus()")` to get the status of the running job, `r ref("batchtools::showLog()")` to inspect the logs or `r ref("batchtools::grepLogs)_")` to search the log files.
 
 :::{.callout-tip}
 A good approach is to submit the jobs within a R Session that is running persistently through different SSH session.
@@ -734,29 +743,29 @@ names(results[[1L]])
 results[[1L]]$prediction
 ```
 
-If we wanted to run the whole benchmark experiment defined in `large_design`, we would simply have to add the remaining five problems and then add the experiments identically to how we have just shown.
+If we wanted to run the whole benchmark experiment defined in `large_design`, we would simply have to add the remaining five problems and then add the experiments analogously to how we have just shown.
 Instead, we will now show how this whole process can be simplified using the `r ref_pkg("mlr3batchmark")` package.
 For this, we will start with a new registry.
 ```{r large_benchmarking-046_experiments-046}
 reg = makeExperimentRegistry(NA, seed = 1)
 ```
 
-The whole process, of adding the algorithm, problems, and experiments can be done by swapping the common `r ref("mlr3::benchmark")` call with the `r ref("mlr3batchmark::batchmark")` function.
+The whole process, of adding the algorithm, problems, and experiments can be done by swapping the common `r ref("mlr3::benchmark()")` call with the `r ref("mlr3batchmark::batchmark()")` function.
 
 ```{r large_benchmarking-047_experiments-047}
 #| output: false
 batchmark(large_design)
 ```
 
-This does something similar as the steps that we have just shown earlier.
-Printing the registry, we see that one algorithm, six problems and 60 experiments are registered.
+This does something similar as the steps that we he executed manually before.
+When printing the registry, we see that one algorithm, six problems and 60 experiments are registered.
 
 ```{r large_benchmarking-048_experiments-048}
 reg
 ```
 
 We can now submit them like before using `r ref("batchtools::submitJobs()")`.
-Once they are done, we can either load the individual results using `r ref("loadResult")`, or the complete `r ref("BenchmarkResult")` by calling `r ref("mlr3batchmark::reduceBatchmarkResult")`.
+Once they are done, we can either load the individual results using `r ref("loadResult")`, or the complete `r ref("BenchmarkResult")` by calling `r ref("mlr3batchmark::reduceBatchmarkResult()")`.
 
 
 ```{r large_benchmarking-049_experiments-049}
@@ -776,7 +785,7 @@ if (file.exists(file.path(getwd(), "openml", "bmr_large.rds"))) {
 bmr = reduceBatchmarkResult()
 ```
 
-The resulting object is the same (except for seeding) that we would have obtained by calling `r ref("benchmark")` on the `large_design` above.
+The resulting object is the same (except for seeding) that we would have obtained by calling `r ref("benchmark()")` on the `large_design` above.
 
 ```{r large_benchmarking-051_experiments-051}
 bmr
@@ -810,7 +819,7 @@ Furthermore, we have shown how the R package `r ref_pkg("batchtools")` and its m
 | `r ref("batchmark()")`              |-                           | Register problems, algorithms, and experiments from a design        |
 | `r ref("reduceResultsBatchmark()")` |-                           | Load finished jobs as a benchmark result                            |
 
-Core functions for Open in mlr3 with the underlying R6 class that are constructed when these functions are called (if applicable) and a summary of the purpose of the functions. {#tbl-api-ls-benchmarking}
+:Core functions for Open in mlr3 with the underlying R6 class that are constructed when these functions are called (if applicable) and a summary of the purpose of the functions. {#tbl-api-ls-benchmarking}
 
 ### Resources{.unnumbered .unlisted}
 
