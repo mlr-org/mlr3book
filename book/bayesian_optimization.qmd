@@ -20,14 +20,19 @@ set.seed(2906)
 Black-box optimization considers the optimization of a so-called black-box function whose structure and analytical description is unknown, unexploitable or non-existent.
 As a result, the only information available is the output value of the function given an input value.
 Examples range from real-life experiments, e.g., crash tests or chemical reactions to computer simulations, e.g., the design of a helicopter rotor blade.
-Moreover, HPO (see @sec-optimization) is a prime example for black-box optimization.
-Recall that in HPO, we configure a learner with a hyperparameter configuration and evaluate the model via a resampling technique to measure its performance with the goal to find the optimal hyperparameter configuration.
-In general no analytical description exists for this mapping from a hyperparameter configuration to performance and gradient information is not available.
+Moreover, Hyperparameter Optimization (HPO, see @sec-optimization) is a prime example for black-box optimization.
+Recall that in HPO, we configure a learner with a hyperparameter configuration and evaluate the learner via a resampling technique to measure its performance with the goal to find the optimal hyperparameter configuration.
+In general no analytical description for this mapping from a hyperparameter configuration to performance exists and gradient information is not available.
 Besides, evaluating the performance of a learner can take a substantial amount of time, making HPO an expensive black-box optimization problem calling for sample efficient optimization methods.
-Detailed introductions to black-box optimization and Bayesian Optimization are given in @hpo_practical,@hpo_automl and @garnett_2022.
+Bayesian Optimization (BO) describes a class of sample efficient iterative black-box optimization algorithms that make use of a so-called surrogate trained on observed data modeling the black-box function.
+Based on this surrogate model and a so-called acquisition function quantifying the attractiveness of each point in the search space, the next candidate point is obtained that is to be evaluated next.
+After evaluating this candidate, the surrogate model is updated or re-trained and the process repeats itself until a termination criteria is met.
 
-In this section, we will give a brief general introduction to black-box Optimization making use of the `r bbotk`\index{bbotk} package.
-We then show how Bayesian Optimization can be performed within the mlr3 ecosystem making use of the `r mlr3mbo`\index{mlr3mbo} package.
+In this section, we will give a brief general introduction to black-box optimization making use of the `r bbotk`\index{bbotk} package.
+We then show how BO can be performed within the mlr3 ecosystem making use of the `r mlr3mbo`\index{mlr3mbo} package.
+Often, using BO results in very good optimization performance, especially if the overhead of the black-box evaluation (e.g., as in HPO) becomes large and optimization budget is tight.
+Therefore this chapter is of general relevance to users concerned with sample efficient black-box optimization and HPO.
+Detailed introductions to black-box optimization and BO are given in @hpo_practical, @hpo_automl and @garnett_2022.
 
 ## Black-Box Optimization {#sec-black-box-optimization}
 
@@ -80,9 +85,14 @@ xydt[, y := objective$eval_dt(xydt)$y]
 ```
 
 ```{r}
+#| echo: true
+#| label: fig-bayesian-optimization-ackley
+#| fig-cap: Contour plot of the 2D Ackley function.
+#| fig-alt: FIXME
 library(ggplot2)
 ggplot(aes(x = x1, y = x2, z = y), data = xydt) +
   geom_contour_filled() +
+  labs(fill = "y") +
   theme_minimal()
 ```
 
@@ -99,18 +109,21 @@ optimizer$optimize(instance)
 instance$archive$best()
 ```
 
-We probably can do better than a simple random search by using a more sophisticated optimizer.
+We probably can do better than a simple random search by using a more sophisticated optimizer (e.g., BO).
 To see all available optimizers you can inspect the following dictionary:
 
 ```{r}
 as.data.table(mlr_optimizers)
 ```
 
+We will now introduce the building blocks of BO.
+
 ## Building Blocks of Bayesian Optimization {#sec-bayesian-optimization-blocks}
 
 Bayesian Optimization (BO) is an iterative optimization algorithm that makes use of a so-called surrogate to model the unknown black-box function.
-After having observed an initial design of observations, the surrogate model is trained on all data points observed so far and a so-called acquisition function is used to determine which points of the search space are promising candidates that should be evaluated next.
-The acquisition function relies on the prediction of the surrogate model and requires no evaluation of the true black-box function and therefore is comparably cheap to optimize.
+After having observed an initial design of observations, the surrogate model is trained on all data points observed so far and a so-called acquisition function is used to determine which point of the search space is a promising candidate that should be evaluated next.
+The acquisition function relies on the predictions of the surrogate model and requires no evaluation of the true black-box function and therefore is comparably cheap to optimize.
+It is the job of the acquisition function to balance exploration and exploitation of the BO algorithm, i.e., we want to exploit knowledge about regions where we observed that performance is good and the surrogate model has low uncertainty but also want to make sure that we do not miss crucial regions and therefore also want to explore into regions where the uncertainty of the surrogate model is high.
 After having evaluated the next candidate, the process repeats itself until a given termination criteria is met.
 
 Most BO flavors therefore follow a simple loop:
@@ -150,7 +163,7 @@ as.data.table(mlr_loop_functions)
 
 Technically, all `loop_function`s are members of the `S3` class `r ref("loop_function")`, and are simply decorated `r ref("base::function", "functions")`.
 
-After having made some assertions and safety checks, and having evaluated the initial design, `r ref("mlr_loop_functions_ego", "bayesopt_ego")` essentially only performs the following steps:
+After having made some assertions and safety checks, and having evaluated the initial design, `r ref("mlr_loop_functions_ego", "bayesopt_ego")` essentially repeatedly performs the following steps:
 
 1. `acq_function$surrogate$update()`: updates the surrogate model
 2. `acq_function$update()`: updates the acquisition function
@@ -174,6 +187,7 @@ surrogate = srlrn(lrn("regr.km"))
 ```
 
 The encapsulated learner can be accessed via the `$model` field:
+FIXME: the more I read this the more I think we should have named this $learner field...
 
 ```{r}
 surrogate$model
@@ -192,6 +206,7 @@ $$
 \mathbb{E}_{y} \left[ \max \left( f_{\mathrm{min}} - y, 0 \right) \right]
 $$
 Here, $y$ is the surrogate prediction for a given point $x$ (which when using a Gaussian Process follows a normal distribution) and $f_{\mathrm{min}}$ is the currently best function value observed so far (when assuming minimization).
+FIXME: maybe show closed form expression and reference exploration vs. exploitation again?
 
 To get an overview of available acquisition functions, the following dictionary can be inspected:
 
@@ -209,7 +224,7 @@ acq_function = acqf("ei")
 
 ### Acquisition Function Optimizer
 
-To find the most promising candidate for evaluation, the acquisition function itself must be optimized.
+To find the most promising next candidate for evaluation, the acquisition function itself must be optimized.
 Internally, an `r ref("OptimInstance")` is constructed using the acquisition function as an `r ref("bbotk::Objective", "Objective")`.
 
 An acquisition function optimizer is then used to solve this optimization problem.
@@ -242,21 +257,35 @@ surrogate = srlrn(lrn("regr.km", covtype = "matern3_2", optim.method = "gen"),
 surrogate$update()
 ```
 
-The following plot visualizes the mean and variance prediction of the surrogate.
+The following figures visualize the mean (@fig-bayesian-optimization-mean) and variance prediction (@fig-bayesian-optimization-variance of the surrogate.
 Note that when using a Gaussian Process that interpolates the training data, the variance prediction is zero for training data.
 The initial design is coloured in red.
 
 ```{r}
 xydt[, c("mean", "variance") := surrogate$predict(xydt[, surrogate$x_cols, with = FALSE])]
+```
+
+```{r}
+#| echo: true
+#| label: fig-bayesian-optimization-mean
+#| fig-cap: Mean prediction of the Gaussian Process surrogate model trained on an initial design of eight points (red) choosing uniformly at random
+#| fig-alt: FIXME
 ggplot() +
   geom_contour_filled(aes(x = x1, y = x2, z = mean), data = xydt) +
   geom_point(aes(x = x1, y = x2), colour = "darkred", data = instance$archive$data) +
-  labs(title = "Mean Prediction") +
+  labs(fill = "Mean") +
   theme_minimal()
+```
+
+```{r}
+#| echo: true
+#| label: fig-bayesian-optimization-variance
+#| fig-cap: Variance prediction of the Gaussian Process surrogate model trained on an initial design of eight points (red) choosing uniformly at random. The variance is higher the further away from points in the initial design.
+#| fig-alt: FIXME
 ggplot() +
   geom_contour_filled(aes(x = x1, y = x2, z = variance), data = xydt) +
   geom_point(aes(x = x1, y = x2), colour = "darkred", data = instance$archive$data) +
-  labs(title = "Variance Prediction") +
+  labs(fill = "Variance") +
   theme_minimal()
 ```
 
@@ -268,18 +297,22 @@ acq_function$update()
 xydt[, "ei" := acq_function$eval_dt(xydt[, surrogate$x_cols, with = FALSE])]
 ```
 
-The following plot shows that the Expected Improvement is high in regions where the mean prediction is low but the variance prediction still suggested some variance:
+The following figure ((@fig-bayesian-optimization-ei) shows that the Expected Improvement is high in regions where the mean prediction is low but the variance prediction suggests uncerctainty:
 
 ```{r}
+#| echo: true
+#| label: fig-bayesian-optimization-ei
+#| fig-cap: Expected Improvement based on the mean and variance prediction of the Gaussian Process surrogate model. Points of the initial design in red.
+#| fig-alt: FIXME
 ggplot() +
   geom_contour_filled(aes(x = x1, y = x2, z = ei), data = xydt) +
   geom_point(aes(x = x1, y = x2), colour = "darkred", data = instance$archive$data) +
-  labs(title = "Expected Improvement") +
+  labs(fill = "Expected Improvement") +
   theme_minimal()
 ```
 
-Based on an acquisition function optimizer we now optimize the Expected Improvement (of course we also could have picked the next candidate based on the grid we used to generate the plot but in a real BO setting we probably would choose a more sophisticated optimizer, e.g., the DIRECT algorithm provided by the `nloptr` package):
-FIXME link
+Based on an acquisition function optimizer we now optimize the Expected Improvement (of course we also could have picked the next candidate based on the grid we used to generate the figure but in a real BO setting we probably would choose a more sophisticated optimizer, e.g., the DIRECT algorithm provided by the `nloptr` package).
+FIXME: link
 
 ```{r}
 acq_optimizer = acqo(opt("nloptr", algorithm = "NLOPT_GN_ORIG_DIRECT"),
@@ -288,16 +321,22 @@ acq_optimizer = acqo(opt("nloptr", algorithm = "NLOPT_GN_ORIG_DIRECT"),
 candidate = acq_optimizer$optimize()
 ```
 
+@fig-bayesian-optimization-ei-argmax visualizes the location of the next candidate found by maximizing the Expected Improvement.
+
 ```{r}
+#| echo: true
+#| label: fig-bayesian-optimization-ei-argmax
+#| fig-cap: Next candidate point (black) obtained by maximizing the Expected Improvement based on the mean and variance prediction of the Gaussian Process surrogate model. Points of the initial design in red.
+#| fig-alt: FIXME
 ggplot() +
   geom_contour_filled(aes(x = x1, y = x2, z = ei), data = xydt) +
   geom_point(aes(x = x1, y = x2), colour = "darkred", data = instance$archive$data) +
-  geom_point(aes(x = x1, y = x2), colour = "white", size = 2, data = candidate) +
-  labs(title = "Next Candidate in white") +
+  geom_point(aes(x = x1, y = x2), colour = "black", size = 3, data = candidate) +
+  labs(fill = "Expected Improvement") +
   theme_minimal()
 ```
 
-We proceed to evaluate the candidate and would continue with the next iteration of the loop.
+We proceed to evaluate the candidate and would then continue with the next iteration of the loop.
 
 ```{r}
 instance$eval_batch(candidate)
@@ -305,7 +344,7 @@ instance$eval_batch(candidate)
 
 ## Bayesian Optimization for Black-Box Optimization {#sec-bayesian-black-box-optimization}
 
-Of course, you usually do not want to perform all steps of the BO loop manually.
+Of course, users usually do not want to perform all steps of the BO loop manually.
 Instead you simply construct an `r ref("OptimizerMbo")` and use it to optimize the instance.
 Note that when not using `r mlr3mbo` interactively, passing arguments such as `archive` to the `surrogate` is not required:
 
@@ -332,19 +371,37 @@ instance$archive$best()
 
 We see that BO is much more sample efficient and comes close to the true global optimum using only 30 function evaluations.
 
+Visualizing the sequential decision making process of the BO algorithm (i.e., which candidate to evaluate next) shows that focus is given more and more to regions around the (as we know) global optimum (@fig-bayesian-optimization-sampling).
+Nevertheless, even in later optimization stages, exploration is performed, illustrating that the Expected Improvement indeed balances exploration and exploitation.
+
+```{r}
+#| echo: true
+#| label: fig-bayesian-optimization-sampling
+#| fig-cap: Sampling trajectory of the BO algorithm. Points that have been evaluated in later stages (i.e., batchers) of the optimization process are coloured in a lighter red.
+#| fig-alt: FIXME
+ggplot(aes(x = x1, y = x2, z = y), data = xydt) +
+  geom_contour_filled() +
+  geom_point(aes(x = x1, y = x2, colour = batch_nr), data = instance$archive$data) +
+  scale_color_gradient(low = "darkred", high = "lavenderblush") +
+  guides(fill = "none") +
+  labs(colour = "Batch Nr.") +
+  theme_minimal()
+```
+
 FIXME: Figure mit RS, CMAES, BO wie in lecture?
 
 FIXME: show the parameters of the optimizer? State that loop_function, surrogate, acq_function and acq_optimizer are fields and not params
        discuss result function, discuss how to pass arguments to the loop?
+       otoh this is all explained in detail in the vignette
 
 ## Bayesian Optimization for Hyperparameter Optimization {#sec-bayesian-tuning}
 
 FIXME: discuss with Bernd objective of tuning instance has property noisy --> therefore mlr3mbo treats it noisy and will change its default (e.g., GP); and mostly relevant the result function
-FIXME: issue in mlr3mbo with results functions (populate the field always!, rename result_by_default, allow surrogate argument for result_by_surrogate
-FIXME: note about defaults and safety nets and extending; separate chapters? note about extending --> maybe in a last technical subchapter?
+       discuss with Bernd new ResultAssigner PR in mlr3mbo
+FIXME: note about defaults and safety nets and extending; separate chapters? note about extending --> maybe in a last technical subchapter? or maybe simply reference the vignette
 
 `r mlr3mbo` can be used out of the box for HPO within the mlr3 ecosystem using a `r ref("TunerMbo")`.
-For illustrative purposes, we revisit the tuning example of @sec-tuning-instance and perform BO.
+For illustrative purposes, we revisit the tuning example of @sec-tuning-instance and perform BO instead of a grid search.
 
 First, we construct the tuning instance:
 
@@ -369,7 +426,8 @@ instance = ti(
 )
 ```
 
-We can then simply construct an `r ref("TunerMbo")` and use it to optimize the instance:
+We can then simply construct an `r ref("TunerMbo")` and use it to optimize the instance.
+Note that `r ref("TunerMbo")` is simply a light-weight wrapper around `ref("OptimizerMbo")`.
 
 ```{r}
 tuner = tnr("mbo",
@@ -377,7 +435,6 @@ tuner = tnr("mbo",
   surrogate = surrogate,
   acq_function = acq_function,
   acq_optimizer = acq_optimizer)
-
 ```
 
 ```{r, output=FALSE}
@@ -390,15 +447,16 @@ We see that BO finds a substantially better hyperparameter configuration than th
 instance$result
 ```
 
-FIXME: some notes about noisy here
+FIXME: some notes about noisy here and reference to the noisy chapter (if we want it or write about noisy here)
 
 ## Multi-Objective Bayesian Optimization {#sec-multi-objective-bayesian-optimization}
 
 BO cannot only be used to optimize single-objective black-box functions but also multi-objective black-box functions.
-Multi-Objective BO algorithms can differ in many ways, for example whether they use a scalarization approach of
+Multi-Objective BO algorithms can differ in many design choices, for example whether they use a scalarization approach of
 objectives and only rely on a single surrogate or fit a surrogate for each objective.
 More details on multi-objective BO can for example be found in @hpo_multi.
 
+FIXME: reference the multi-objective HPO chapter more because we do not want to reiterate all of it again
 FIXME: discuss with bernd whether ParEGO or smsego. then introduce either algorithm briefly
 
 We will now illustrate how ParEGO can be used for multi-objective HPO and revisit the example of @sec-multi-metrics-tuning:
@@ -444,9 +502,12 @@ tuner$result_function = result_by_default
 tuner$optimize(instance)
 ```
 
-FIXME: without tuner$result_function = result_by_default this fails because result_by_surrogate_design naturally does not work with the parego surrogate (1 surrogate vs 2 objectives)
 
 ```{r}
+#| echo: true
+#| label: fig-pareto
+#| fig-cap: Pareto front of selected features and classification error obtained using ParEGO.
+#| fig-alt: FIXME
 library(viridisLite)
 ggplot(instance$archive$best(), aes(x = selected_features, y = classif.ce)) +
   geom_step(
@@ -474,16 +535,15 @@ FIXME: maybe just use sms ego, this is more in line with the SurrogateLearnerCol
 ## Noisy Bayesian Optimization {#sec-noisy-bayesian-optimization}
 
 FIXME: Discuss with Bernd if we need this.
-HPO is already somehwat noisy.
+HPO is already somehwat noisy (although our resampling instance is fixed)
 We could show here that mlr3mbo supports e.g. Augmented EI and different options for choosing the final best points?
 
 ## Conclusion
 
-In this chapter, we learned how to use Bayesian Optimization within the mlr3 ecosystem - both for general black-box optimization as well as HPO.
 `r mlr3mbo` is built modular relying on a `r ref("Surrogate")`, `r ref("AcqFunction")` and `r ref("AcqOptimizer")` as well as a general `r ref("loop_function")` that build the actual optimizer or tuner constructed in the form of an `r ref("OptimizerMbo")` or `r ref("TunerMbo")`.
 A more in-depth introduction to `r mlr3mbo` is given in its getting started vignette.
 
-FIXME: same table as in Tuning? not so interesting here I guess because the relevant classes were menitoned above?
+FIXME: same table as in Tuning
 
 ### Resources{.unnumbered .unlisted}
 
@@ -491,5 +551,8 @@ FIXME:
 
 ## Exercises
 
-FIXME:
+1. Minimize the 2D Rastrigin function ($f(\mathbf{x})=10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$) via BO (standard sequential single-objective BO via `bayesopt_ego`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `nloptr` as acquisition function optimizer (similarly as above).
+Use either a Gaussian Process with Matérn 3/2 kernel (`regr.km`, similarly as above) or a random forest (`regr.ranger`) as surrogate model and compare the anytime performance of these two BO algorithms.
+
+FIXME: more
 
