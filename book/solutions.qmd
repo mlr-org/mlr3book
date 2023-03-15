@@ -58,7 +58,7 @@ preds$set_threshold(0.6)
 
 preds$confusion
 ```
-One reason we might want the false positive rate to be lower than the false negative rate is if we felt it was worse for a positive prediction to be incorrect (meaning the true label was the negative label) than it was for a negative prediction to be incorrect (meaning the true label was the positive label). 
+One reason we might want the false positive rate to be lower than the false negative rate is if we felt it was worse for a positive prediction to be incorrect (meaning the true label was the negative label) than it was for a negative prediction to be incorrect (meaning the true label was the positive label).
 
 ## Solutions to @sec-performance
 
@@ -158,7 +158,152 @@ rr = resample(task, at, outer_resampling, store_models = TRUE)
 rr$aggregate()
 ```
 
+3. Tune and benchmark an XGBoost model against a logistic regression `r ref("mlr_tasks_spam", text = "Spam")` data set and determine which has the best Brier score.
+Use mlr3tuningspaces and nested resampling.
+
+```{r}
+library(mlr3tuningspaces)
+
+learner_xgboost = lts(lrn("classif.xgboost", predict_type = "prob"))
+
+at_xgboost = auto_tuner(
+  method = tnr("random_search", batch_size = 1),
+  learner = learner_xgboost,
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.bbrier"),
+  term_evals = 2,
+)
+
+learner_logreg = lrn("classif.log_reg", predict_type = "prob")
+
+at_logreg = auto_tuner(
+  method = tnr("random_search", batch_size = 1),
+  learner = learner_logreg,
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.bbrier"),
+  term_evals = 2,
+)
+
+task = tsk("spam")
+outer_resampling = rsmp("cv", folds = 3)
+
+design = benchmark_grid(
+  tasks = task,
+  learners = list(at_xgboost, at_logreg),
+  resamplings = outer_resampling
+)
+
+bmr = benchmark(design, store_models = TRUE)
+
+bmr
+```
+
+
+
 ## Solutions to @sec-feature-selection
+
+1. Calculate a correlation filter on the `r ref("mlr_tasks_mtcars", text = "Motor Trend")` data set (`mtcars`).
+
+```{r feature-selection-001}
+library("mlr3verse")
+filter = flt("correlation")
+
+task = tsk("mtcars")
+filter$calculate(task)
+
+as.data.table(filter)
+```
+
+2. Use the filter from the first exercise to select the five best features in the `mtcars` data set.
+
+```{r feature-selection-007}
+keep = names(head(filter$scores, 5))
+task$select(keep)
+task$feature_names
+```
+
+3. Apply a backward selection to the `r ref("mlr_tasks_penguins", text = "penguins")` data set with a classification tree learner `"classif.rpart"` and holdout resampling by the measure classification accuracy. Compare the results with those in @sec-fs-wrapper-example. 
+
+```{r feature-selection-014}
+library("mlr3fselect")
+
+instance = fselect(
+  method = "sequential",
+  strategy = "sbs",
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc")
+)
+as.data.table(instance$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
+instance$result_feature_set
+```
+
+Answer the following questions: 
+
+  a. Do the selected features differ?
+
+Yes, the backward selection selects more features.
+
+  b. Which feature selection method achieves a higher classification accuracy? 
+
+In this example, the backwards example performs slightly better, but this depends heavily on the random seed and could look different in another run.
+
+  c. Are the accuracy values in b) directly comparable? If not, what has to be changed to make them comparable?
+
+No, they are not comparable because the holdout sampling called with `rsmp("holdout")` creates a different holdout set for the two runs. A fair comparison would create a single resampling instance and use it for both feature selections (see @sec-performance for details): 
+
+```{r feature-selection-015}
+resampling = rsmp("holdout")
+resampling$instantiate(tsk("penguins"))
+
+sfs = fselect(
+  method = "sequential",
+  strategy = "sfs",
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = resampling,
+  measure = msr("classif.acc")
+)
+sbs = fselect(
+  method = "sequential",
+  strategy = "sbs",
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = resampling,
+  measure = msr("classif.acc")
+)
+as.data.table(sfs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
+as.data.table(sbs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
+```
+
+Alternatively, one could automate the feature selection and perform a benchmark between the two wrapped learners. 
+
+4. Automate the feature selection as in @sec-autofselect with the `r ref("mlr_tasks_spam", text = "spam")` data set and a logistic regression learner (`"classif.log_reg"`). Hint: Remember to call `library("mlr3learners")` for the logistic regression learner.
+
+```{r feature-selection-027, warning=FALSE}
+library("mlr3fselect")
+library("mlr3learners")
+
+at = auto_fselector(
+  method = fs("random_search"),
+  learner = lrn("classif.log_reg"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc"),
+  terminator = trm("evals", n_evals = 50)
+)
+
+grid = benchmark_grid(
+  task = tsk("spam"),
+  learner = list(at, lrn("classif.log_reg")),
+  resampling = rsmp("cv", folds = 3)
+)
+
+bmr = benchmark(grid)
+
+aggr = bmr$aggregate(msrs(c("classif.acc", "time_train")))
+as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
+```
 
 ## Solutions to @sec-pipelines
 
@@ -174,7 +319,7 @@ rr$aggregate()
 library("DALEX")
 library("ggplot2")
 data("fifa", package = "DALEX")
-old_theme = set_theme_dalex("ema") 
+old_theme = set_theme_dalex("ema")
 
 library("mlr3")
 library("mlr3learners")
@@ -194,11 +339,11 @@ learner$model
 
 ```{r interpretation-201, warning=FALSE, message=FALSE}
 library(iml)
-model = Predictor$new(learner, 
-                data = fifa20, 
+model = Predictor$new(learner,
+                data = fifa20,
                 y = fifa$value_eur)
 
-effect = FeatureImp$new(model, 
+effect = FeatureImp$new(model,
                 loss = "rmse")
 effect$plot()
 ```
@@ -215,7 +360,7 @@ ranger_exp = DALEX::explain(learner,
 
 ranger_effect = model_parts(ranger_exp, B = 5)
 head(ranger_effect)
-plot(ranger_effect) 
+plot(ranger_effect)
 ```
 
 3. Use the Partial Dependence profile to draw the global behavior of the model for this variable. Is it aligned with your expectations?
@@ -235,10 +380,10 @@ plot(effect, features = num_features)
 num_features = c("movement_reactions", "skill_ball_control", "age")
 
 ranger_profiles = model_profile(ranger_exp, variables = num_features)
-plot(ranger_profiles) 
+plot(ranger_profiles)
 ```
 
-4 Choose one of the football players. You can choose some well-known striker (e.g. Robert Lewandowski) or a well-known goalkeeper (e.g. Manuel Neuer). The following tasks are worth repeating for several different choices. 
+4 Choose one of the football players. You can choose some well-known striker (e.g. Robert Lewandowski) or a well-known goalkeeper (e.g. Manuel Neuer). The following tasks are worth repeating for several different choices.
 
 ```{r interpretation-350, warning=FALSE, message=FALSE}
 player_1 <- fifa["R. Lewandowski", 5:42]
@@ -256,10 +401,10 @@ plot(shapley)
 **With `DALEX`**
 
 ```{r interpretation-402, warning=FALSE, message=FALSE}
-ranger_shap = predict_parts(ranger_exp, 
-             new_observation = player_1, 
+ranger_shap = predict_parts(ranger_exp,
+             new_observation = player_1,
              type = "shap", B = 1)
-plot(ranger_shap, show_boxplots = FALSE) 
+plot(ranger_shap, show_boxplots = FALSE)
 ```
 
 6. For the selected footballer, calculate the Ceteris Paribus / Individual Conditional Expectation profiles to draw the local behavior of the model for this variable. Is it different from the global behavior?
@@ -270,8 +415,8 @@ plot(ranger_shap, show_boxplots = FALSE)
 num_features = c("movement_reactions", "skill_ball_control", "age")
 
 ranger_ceteris = predict_profile(ranger_exp, player_1)
-plot(ranger_ceteris, variables = num_features) + 
-  ggtitle("Ceteris paribus for R. Lewandowski", " ") 
+plot(ranger_ceteris, variables = num_features) +
+  ggtitle("Ceteris paribus for R. Lewandowski", " ")
 ```
 
 
