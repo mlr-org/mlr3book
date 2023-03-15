@@ -11,7 +11,10 @@ author:
     email:
     affiliations:
       - name: Affiliation 2
-abstract: TODO (150-200 WORDS)
+abstract:
+    This chapter deals with the technical details around the execution of ML experiments. These are especially important when computing on larger, unmanageable data.
+    On the one hand, runtimes and efficient storage play an important role here, on the other hand, error handling.
+    For beginners this chapter is conditionally suitable, however we recommend to acquire at least a superficial knowledge to the topics in order to jump in case of a problem purposefully to the respective sections.
 ---
 
 # Technical {#sec-technical}
@@ -57,12 +60,12 @@ Fortunately, these sections are comparably easy to spot for machine learning exp
     Additionally, some tuners propose multiple configurations to evaluate independently in each step, which provides a second level for parallelization.
 
 When computational problems are so easy to parallelize like the examples listed in (1)-(4), they are often referred to as `r define("embarrassingly parallel")`.
-If you can write it down with a map-like function like `lapply()`, you are facing an embarrassingly parallel problem.
-Such problems are straightforward to parallelize with R, e.g., with the `r ref_pkg("furrr")` package providing map-like functions executed in parallel via the `r ref_pkg("future")` framework.
+Whenever you can put the heavy lifting into a function and call it with a map-like function like `lapply()`, you are facing an embarrassingly parallel problem.
+Such problems are straightforward to parallelize, e.g., in R with the `r ref_pkg("furrr")` package which provides parallel counterparts for popular sequential map-like functions from the `r ref_pkg("purrr")` package.
 
 However, note that it does not make practical sense to actually execute in parallel every operation that can be parallelized.
 Starting and terminating workers as well as possible communication between workers comes at a price in the form of additionally required runtime which is called `r define("parallelization overhead")`.
-The overhead must be related to the runtime of the sequential execution.
+The overhead strongly depends on the parallelization backends and must be compared to the runtime of the sequential execution.
 If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity and can even slow down the execution.
 
 <!-- We distinguish between [*implicit parallelism*](#sec-implicit) and [*explicit parallelism*](#sec-explicit). -->
@@ -70,21 +73,21 @@ If the sequential execution is comparably fast, enabling parallelization often j
 <!-- For the latter, parallelization has to be manually configured. -->
 <!-- On the one hand, this gives you full control over the execution, but on the other hand, this poses a greater obstacle for non-experts. -->
 
-:::{.callout-note}
-We don't cover parallelization on GPUs here.
-`mlr3` only distributes the fitting of multiple learners, e.g., during resampling, benchmarking, or tuning.
-On this rather abstract level, GPU parallelization doesn't work efficiently.
-Some learning procedures can be compiled against CUDA/OpenCL to utilize the GPU while fitting a single model.
-We refer to the respective documentation of the learner's implementation, e.g., [here](https://xgboost.readthedocs.io/en/stable/gpu/index.html) for `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
-:::
+### Parallelization of Learners {#sec-parallel-learner}
 
-### Implicit Parallelization {#sec-implicit}
-
-We talk about implicit parallelization in the context of `mlr3`, if `mlr3` calls external code (i.e., code from foreign CRAN packages which implements a `r ref("Learner")`) that itself runs in parallel.
-Note that this definition includes GPU acceleration.
+The most atomic part of `r mlr3` which can be parallelized is a `r ref("Learner")`.
+Here, `r mlr3` just provides a unified interface to control the execution, the parallel programming is implemented by the respective package author of the (external) code `r mlr3` calls.
 
 Many machine learning algorithms can parallelize their model fit using threading, e.g., the random forest implementation in `r ref("mlr_learners_classif.ranger", text = "ranger")` or the boosting implemented in `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
 During threading, the implementation instructs some sequential parts of the code to be executed independently of the other parts in the same process.
+
+:::{.callout-note}
+We don't cover parallelization on GPUs here.
+`mlr3` only distributes the fitting of multiple learners, e.g., during resampling, benchmarking, or tuning.
+On this rather abstract level, GPU parallelization does not work efficiently.
+However, some learning procedures can be compiled against CUDA/OpenCL to utilize the GPU while fitting a single model.
+We refer to the respective documentation of the learner's implementation, e.g., `r link("https://xgboost.readthedocs.io/en/stable/gpu/")` for `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
+:::
 
 For example, while fitting a decision tree, each split that divides the data into two disjoint partitions requires a search for the best cut point on all $p$ features.
 So instead of iterating over all features sequentially, the search can be broken down into $p$ threads, each searching for the best cut point on a single feature.
@@ -92,21 +95,23 @@ These threads can easily be parallelized by the scheduler of the operating syste
 After all threads have finished, the results are collected and merged before terminating the threads.
 I.e., for our example of the decision tree, (1) the $p$ best cut points per feature are collected and then (2) aggregated to the single best cut point across all features by just iterating over the $p$ results sequentially.
 
-
-
-Unfortunately, threading conflicts with certain parallel backends used during explicit parallelization, causing the system to be overutilized in the best case and causing hangs or segfaults in the worst case.
-For this reason, we introduced the convention that implicit parallelization is turned off per default.
+Unfortunately, threading conflicts with certain parallel backends, causing the system to be overutilized in the best case and causing hangs or segfaults in the worst case.
+For this reason, we introduced the convention that threading parallelization is turned off per default.
 Hyperparameters that control the number of threads are tagged with the label `"threads"`.
 Currently, controlling the number of threads is possible for some learners and filters from the `r ref_pkg("mlr3filters")` package:
+
 
 ```{r technical-001}
 library("mlr3learners") # for the ranger learner
 
+# get the ranger learner
 learner = lrn("classif.ranger")
+
+# show all hyperparameters tagged with "threads"
 learner$param_set$ids(tags = "threads")
 ```
 
-To enable the parallelization for this learner, we provide the helper function `r ref("set_threads()")` which
+To enable the parallelization for this learner, we provide the helper function `r ref("set_threads()")`:
 ```{r technical-002}
 # use 4 CPUs
 set_threads(learner, n = 4)
@@ -114,16 +119,15 @@ set_threads(learner, n = 4)
 # auto-detect cores on the local machine
 set_threads(learner)
 ```
-
-:::{.callout-caution}
-Automatic detection of the number of CPUs is sometimes flaky, and utilizing all available cores is occasionally counterproductive as overburdening the system often has negative effects on the overall runtime.
-The function which determines the number of CPUs for `r mlr3` is implemented in `r ref("parallelly::availableCores()")` and comes with reasonable heuristics for many setups.
-See [this blog post](https://www.jottr.org/2022/12/05/avoid-detectcores/) for some background information about the heuristic.
+In the last line, we did not set the number of threads, letting the package fall back to a heuristic to detect the correct number.
+This heuristic is sometimes flaky, and utilizing all available cores is occasionally counterproductive as overburdening the system often has negative effects on the overall runtime.
+The function which determines the number of CPUs for `r mlr3` is implemented in `r ref("parallelly::availableCores()")` and works well for many setups.
+See [this blog post](https://www.jottr.org/2022/12/05/avoid-detectcores/) for some background information about the implemented heuristic.
 However, there are still some scenarios where it is better to reduce the number of utilized CPUs manually:
 
 * You want to simultaneously work on the same system, e.g., browse the web or watch a video.
 * You are on a multi-user system and want to spare some resources for other users.
-* You have energy-efficient CPU cores, for example, the "Icestorm" cores on a Mac M1 chip.
+* You have a CPU with heterogeneous cores, for example, the energy-efficient "Icestorm" cores on a Mac M1 chip.
   These are comparably slower than the high-performance "Firestorm" cores and not well suited for heavy computations.
 * You have linked R to a threaded [BLAS](https://de.wikipedia.org/wiki/Basic_Linear_Algebra_Subprograms) implementation like [OpenBLAS](https://www.openblas.net/), and your learners make heavy use of linear algebra.
 
@@ -133,32 +137,44 @@ You can manually set the number of CPUs to overrule the heuristic via option `"m
 options(mc.cores = 4)
 ```
 We recommend setting this in your system's `.Rprofile` file, c.f. `r ref("Startup")`.
-:::
+
+<!-- ### Implicit Parallelization {#sec-implicit} -->
+
+<!-- We talk about implicit parallelization in the context of `mlr3`, if `mlr3` calls external code (i.e., code from foreign CRAN packages which implements a `r ref("Learner")`) that itself runs in parallel. -->
+<!-- Note that this definition includes GPU acceleration. -->
 
 
-### Explicit Parallelization {#sec-explicit}
 
-Here, we talk about explicit parallelization if `r mlr3` starts and controls the parallelization itself.
-For this purpose, an additional abstraction layer is used to be able to operate on a unified interface for a broad range of parallel backends: the `r ref_pkg("future")` package.
-There are two operations where `r mlr3` calls the `future` package: while performing resampling via `r ref("resample()")` and while benchmarking via `r ref("benchmark()")`.
-During resampling, because all resampling iterations are independent of each other, all iterations can be executed in parallel.
-The same holds for benchmarking, where additionally to the independent model fits of a single resampling, all combinations in the provided design are also independent.
-These iterations are performed by `r ref_pkg("future")` using the parallel backend configured with `r ref("future::plan()")`.
-Extension packages like `r mlr3tuning` internally call `r ref("benchmark()")` during tuning and thus work in parallel, too.
+### Parallelization of Resamplings {#sec-parallel-resample}
 
+In addition to parallel learners, most machine learning experiments include a very easy handle for parallelization: the resampling.
+By definition, resampling is performed to get an unbiased performance estimator by aggregating over **independent** repetitions of multiple train-test splits.
+
+`r mlr3` has "marked" this loop as parallelizable and uses an additional abstraction layer to support a broad range of parallel backends: the `r ref_pkg("future")` package.
+The loop is executed via `r ref_pkg("future")` using the parallel backend configured by the user with `r ref("future::plan()")` function.
+
+
+<!-- There are two operations where `r mlr3` calls the `future` package: while performing resampling via `r ref("resample()")` and while benchmarking via `r ref("benchmark()")`. -->
+<!-- During resampling, because all resampling iterations are independent of each other, all iterations can be executed in parallel. -->
+<!-- The same holds for benchmarking, where additionally to the independent model fits of a single resampling, all combinations in the provided design are also independent. -->
+<!-- Extension packages like `r mlr3tuning` internally call `r ref("benchmark()")` during tuning and thus work in parallel, too. -->
 
 :::{.callout-tip}
-When computational problems are so easy to parallelize, they are often referred to as "embarrassingly parallel".
+When computational problems are as easy to parallelize as resampling, they are often referred to as "embarrassingly parallel".
 
 Whenever you loop over elements with a map-like function (e.g., `r ref("lapply()")`, `r ref("sapply()")`, `r ref("mapply()")`, `r ref("vapply()")` or a function from package `r ref_pkg("purrr")`), you are facing an embarrassingly parallel problem.
 Such problems are straightforward to parallelize with R, e.g., with the `r ref_pkg("furrr")` package providing map-like functions executed in parallel via the `r ref_pkg("future")` framework.
 The same holds for `for`-loops with independent iterations, i.e., loops where the current iteration does not rely on the results of previous iterations.
 :::
 
-In this section, we will use the `r ref("mlr_tasks_spam", text = "spam task")` and a simple `r ref("mlr_learners_classif.rpart", text = "classification tree")` to showcase the explicit parallelization.
-We use the `r ref("future::multisession")` parallel backend that should work on all systems.
+
+In this section, we will use the `r ref("mlr_tasks_spam", text = "spam task")` and a simple `r ref("mlr_learners_classif.rpart", text = "classification tree")`.
+We use the `r ref("future::multisession")` parallel backend that should work on all operating systems.
 
 ```{r technical-005, eval = FALSE}
+# query the currently active plan
+future::plan()
+
 # select the multisession backend to use
 future::plan("multisession")
 
@@ -172,7 +188,7 @@ resample(task, learner, resampling)
 diff = proc.time()[3] - time
 ```
 
-By default, all CPUs of your machine are used unless you specify the argument `workers` in `r ref("future::plan()")` (possible problems with this default have already been discussed for implicit parallelization).
+By default, all CPUs of your machine are used unless you specify the argument `workers` in `r ref("future::plan()")` (possible problems with the value returned by the heuristic have already been discussed for learners parallelization).
 You should see a decrease in the reported elapsed time, but in practice, you cannot expect the runtime to fall linearly as the number of cores increases ([Amdahl's law](https://www.wikiwand.com/en/Amdahl%27s_law)).
 In contrast to threads, the technical overhead for starting workers, communicating objects, sending back results, and shutting down the workers is quite large for the multisession backend.
 Therefore, it is advised to only consider parallelization for resamplings where each iteration runs at least several seconds.
