@@ -32,21 +32,21 @@ This includes the following topics:
 
 ## Parallelization {#sec-parallelization}
 
-Parallelization refers to running multiple jobs in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
+The term "parallelization" refers to running multiple jobs in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 This process allows for significant savings in computing time.
 
 In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, [threads](https://en.wikipedia.org/wiki/Thread_(computing)) or [forks](https://en.wikipedia.org/wiki/Fork_(system_call)) are ways to utilize all cores.
 If you have multiple machines, they need a way to communicate and exchange information, e.g. via protocols like network sockets or the [Message Passing Interface (MPI)](https://en.wikipedia.org/wiki/Message_Passing_Interface).
 Larger computational sites rely on a scheduler to orchestrate the computation for multiple users.
-We don't want to delve too deep into such details here, but want to introduce some terminology:
+We don't want to delve too deep into such details here, but want to introduce some terminology which helps us to discuss parallelization on a more abstract level:
 
-* We call the parallelization platform together with its implementation for R the `r define("parallelization backend")`.
-  As many parallelization backends have a different API, we are using the `r ref_pkg("future")` package as an abstraction layer for many parallelization backends.
+* We call the parallelization platform together with the respective interface provided by an R package the `r define("parallelization backend")`.
+  As many parallelization backends have a different APIs, we are using the `r ref_pkg("future")` package as an abstraction layer for many parallelization backends.
   `r mlr3` just interfaces `r ref_pkg("future")` while the user can control how the code is executed by configuring a backend.
 * The R session or process which orchestrates the computational work is called `r define("main")`, and it starts computational `r define("jobs")`.
 * The R sessions, processes, forks or machines which receive the jobs, do the calculation and then send back the result are called `r define("workers")`.
 
-An important step in parallel programming involves the identification of sections of the program flow which are time-consuming (otherwise parallelization would not make sense) and also can run in parallel to a different section.
+An important step in parallel programming involves the identification of sections of the program flow which are time-consuming (`r define("bottlenecks")`) and also can run in parallel to a different section.
 The key characteristic is that these sections do not build sequentially on each other, i.e. results of the other section are not needed to start one section.
 Fortunately, these sections are comparably easy to spot for machine learning experiments:
 
@@ -54,10 +54,12 @@ Fortunately, these sections are comparably easy to spot for machine learning exp
     * A single decision tree iterates over all features to find the best split point, for each feature independently.
     * A random forest usually fits hundreds of trees independently.
     * Many feature filters work in a univariate fashion, i.e. calculate a numeric score for each feature independently.
-2. A resampling consists of independent repetitions of train-test-splits.
-3. A benchmark consists of multiple independent resamplings.
-4. Tuning is repeated benchmarking (although embedded in a sequential procedure which determines the hyperparameter configurations to try next).
-    Additionally, some tuners propose multiple configurations to evaluate independently in each step, which provides a second level for parallelization.
+
+   This parallelization level is covered in @sec-parallel-learner.
+2. A resampling consists of independent repetitions of train-test-splits (@sec-parallel-resample).
+3. A benchmark consists of multiple independent resamplings (@sec-parallel-benchmark).
+4. Tuning is repeated benchmarking, embedded in a sequential procedure which determines the hyperparameter configurations to try next.
+   In addition to parallelization of the benchmark, some tuners propose multiple configurations to evaluate independently in each sequential step, which provides a second level for parallelization.
 
 When computational problems are so easy to parallelize like the examples listed in (1)-(4), they are often referred to as `r define("embarrassingly parallel")`.
 Whenever you can put the heavy lifting into a function and call it with a map-like function like `lapply()`, you are facing an embarrassingly parallel problem.
@@ -66,7 +68,7 @@ Such problems are straightforward to parallelize, e.g., in R with the `r ref_pkg
 However, note that it does not make practical sense to actually execute in parallel every operation that can be parallelized.
 Starting and terminating workers as well as possible communication between workers comes at a price in the form of additionally required runtime which is called `r define("parallelization overhead")`.
 The overhead strongly depends on the parallelization backends and must be compared to the runtime of the sequential execution.
-If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity and can even slow down the execution.
+If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity for very little runtime savings or can even slow down the execution.
 
 <!-- We distinguish between [*implicit parallelism*](#sec-implicit) and [*explicit parallelism*](#sec-explicit). -->
 <!-- For the former, no special directives are required to enable the parallelization, everything works fully automatically. -->
@@ -79,7 +81,8 @@ The most atomic part of `r mlr3` which can be parallelized is a `r ref("Learner"
 Here, `r mlr3` just provides a unified interface to control the execution, the parallel programming is implemented by the respective package author of the (external) code `r mlr3` calls.
 
 Many machine learning algorithms can parallelize their model fit using threading, e.g., the random forest implementation in `r ref("mlr_learners_classif.ranger", text = "ranger")` or the boosting implemented in `r ref("mlr_learners_classif.xgboost", text = "xgboost")`.
-During threading, the implementation instructs some sequential parts of the code to be executed independently of the other parts in the same process.
+Threading is implemented in the compiled code of the package (e.g., in C or C++).
+The R interpreter calls the external code and waits for the results to be returned - without noticing that the computations were executed in parallel.
 
 :::{.callout-note}
 We don't cover parallelization on GPUs here.
@@ -137,6 +140,11 @@ You can manually set the number of CPUs to overrule the heuristic via option `"m
 options(mc.cores = 4)
 ```
 We recommend setting this in your system's `.Rprofile` file, c.f. `r ref("Startup")`.
+
+There are some other approaches for parallelization of learners, e.g. by directly supporting one specific parallelization backend or a parallelization framework like `r ref_pkg("foreach")`.
+If this is supported, parallelization must be explicitly activated, e.g. by setting a hyperparameter.
+If you need to parallelize on the learner level because is single model fit takes too much time, and you only fit a few of these models, consult the documentation of the respective learner.
+In many scenarios it makes more sense to parallelize on a different level like resampling or benchmarking.
 
 <!-- ### Implicit Parallelization {#sec-implicit} -->
 
@@ -219,23 +227,34 @@ graph LR
 ```
 
 
-:::{.callout-note}
-If you are transitioning from `r ref_pkg("mlr")`, you might be used to selecting different parallelization levels, e.g., for resampling, benchmarking, or tuning.
-In `r mlr3`, this is no longer required (except for nested resampling, briefly described in the following section).
-All kind of experiments are rolled out on the same level.
-Therefore, there is no need to decide whether you want to parallelize the tuning OR the resampling.
 
-Just lean back and let the machine do the work :-)
-:::
+### Parallelization of Benchmarks {#sec-parallel-benchmark}
 
-### Reproducibility
+Benchmarks can be seen as multiple resamplings where each combination of task, learner, and resampling strategy defines one resampling to perform.
+In pseudo-code, these are nested loops with $i$ and $j$ iterations, respectively:
+```{r, eval = FALSE}
+n = length(resamplings)
+for (i in 1:n) {
+    resampling = resamplings[[i]]
+    m = resampling$iterations
+    for (j in 1:m) {
+        execute(resampling, j)
+    }
+}
+```
 
-Usually reproducibility is a major concern during parallelization as special [pseudorandom number generators](https://en.wikipedia.org/wiki/Pseudorandom_number_generator) (PRNGs) are required.
-Luckily, this problem is already solved for us by the excellent `r ref_pkg("future")` package `r mlr3` calls under the hood.
-`r ref_pkg("future")` ensures that all workers will receive the exactly same PRNG streams.
-Although this alone does not guarantee full reproducibility, it is one problem less to worry about.
+For parallelization, there are now two options:
 
-You can find more details about the used pseudo RNG in [this blog post](https://www.jottr.org/2020/09/22/push-for-statistical-sound-rng/).
+1. Parallelize over all resamplings, execute each resampling sequentially (parallelize outer loop).
+2. Iterate over all resamplings, execute each resampling in parallel (parallelize inner loop).
+
+If you are transitioning from `r ref_pkg("mlr")`, you might be used to selecting one of these parallelization levels before benchmarking.
+One major drawback of this approach becomes clear when both the outer and inner loop have less iterations than there are available workers, resulting in an underutilized system.
+In `r mlr3`, the choice of level is no longer required (except occasionally for nested resampling, briefly described in the following @sec-nested-resampling-parallelization).
+All experiments are rolled out on the same level, i.e., `benchmark()` iterates over the elements of the Cartesian product of all resampling settings (combination of task, learner, and resampling strategy) and their respective resampling iterations.
+Therefore, there is no need to decide whether you want to parallelize the tuning *or* the resampling, you always parallelize both.
+Additionally, you can compute on up to $i \times j$ instead of only up to $\max(i, j)$ workers.
+
 
 
 ### Nested Resampling Parallelization {#sec-nested-resampling-parallelization}
@@ -390,6 +409,20 @@ If you expect homogeneous runtimes, i.e., you are tuning over a single learner o
 In general, larger batches mean more parallelization, while smaller batches imply a more frequent evaluation of termination criteria.
 We default to a `batch_size` of 1 that ensures that all `r ref("Terminator", text = "Terminators")` work as intended, i.e., you cannot exceed the computational budget.
 :::
+
+
+### Reproducibility
+
+Usually reproducibility is a major concern during parallelization because special [pseudorandom number generators](https://en.wikipedia.org/wiki/Pseudorandom_number_generator) (PRNGs) are required.
+A simple `r ref("set.seed()")` is not sufficient when parallelization is involved.
+One general recommendation here is switching from the default `r link("Mersenne Twister", "https://en.wikipedia.org/wiki/Mersenne_Twister")` to Pierre L'Ecuyer's RngStreams (see `r ref("Random")` and `r ref("parallel::RNGstreams")`).
+However, even this parallel PRNG comes with pitfalls w.r.t. reproducibility: if you change the number of workers, you still get different results.
+
+Luckily, this and many other problems are already addressed by the excellent `r ref_pkg("future")` parallelization framework which `r mlr3` uses under the hood.
+`r ref_pkg("future")` ensures that all workers will receive the exactly same PRNG streams, independent of the number of workers.
+Although correct seeding alone does not guarantee full reproducibility, it is one problem less to worry about.
+You can find more details about the used PRNG in [this blog post](https://www.jottr.org/2020/09/22/push-for-statistical-sound-rng/).
+
 
 ## Error Handling {#sec-error-handling}
 
