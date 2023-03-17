@@ -526,8 +526,8 @@ That is enough theory for now, let us take a look at how this works in mlr3.
 ### Nested Resampling with `AutoTuner`
 
 Nested resampling in mlr3 becomes quite simple with the `AutoTuner` (@sec-autotuner).
- We simply specify the inner-resampling and tuning setup with the `AutoTuner` and then pass this to `r ref("resample()")` or `r ref("benchmark()")`.
- Continuing with our previous example we will use the auto-tuner to resample a support vector classifier with 3-fold cross-validation in the outer-resampling and 4-fold cross-validation in the inner resampling.
+We simply specify the inner-resampling and tuning setup with the `AutoTuner` and then pass this to `r ref("resample()")` or `r ref("benchmark()")`.
+Continuing with our previous example we will use the auto-tuner to resample a support vector classifier with 3-fold cross-validation in the outer-resampling and 4-fold cross-validation in the inner resampling.
 
 ```{r optimization-026}
 learner = lrn("classif.svm",
@@ -596,6 +596,87 @@ rr$aggregate()
 ```
 
 As a final note, nested resampling is computationally expensive, as a simple example using five outer folds and three inner folds with a grid search of resolution 5 used to tune 2 parameters, results in 5*3*5*5 = 375 iterations of model training/testing. In practice, you may often see closer to three folds used in inner resampling or even holdout, or if you have the resources then we recommend parallelization (@sec-parallelization).
+
+### Instructive Example
+
+We will now show that nested resampling works using an example with simulated data.
+The task generator `tgen("moons")` creates two interleaving half circles ("moons") as a binary classification problem.
+
+```{r}
+generator = tgen("moons")
+task = generator$generate(n = 500L)
+```
+
+We tune the hyperparameters of an XGBoost model using the random search tuner.
+
+```{r}
+#| eval: false
+learner = lrn("classif.xgboost",
+  eta               = to_tune(1e-4, 1, logscale = TRUE),
+  nrounds           = to_tune(1, 5000),
+  max_depth         = to_tune(1, 20),
+  colsample_bytree  = to_tune(1e-1, 1),
+  colsample_bylevel = to_tune(1e-1, 1),
+  lambda            = to_tune(1e-3, 1e3, logscale = TRUE),
+  alpha             = to_tune(1e-3, 1e3, logscale = TRUE),
+  subsample         = to_tune(1e-1, 1)
+)
+
+instance = tune(
+  tuner = tnr("random_search", batch_size = 50L),
+  task = task,
+  learner = learner,
+  resampling = rsmp("cv", folds = 3),
+  measures = msr("classif.ce"),
+  terminator = trm("evals", n_evals = 1000L)
+)
+
+instance$result_y
+
+#> classif.ce
+#>      0.012
+```
+
+The best configuration has a classification error of 1.2%.
+
+```{r}
+#| eval: false
+
+learner = lrn("classif.xgboost")
+learner$param_set$set_values(.values = instance$result_learner_param_vals)
+
+learner$train(task)
+pred = learner$predict(generator$generate(n = 1000000L))
+pred$score()
+
+#> classif.ce
+#>      0.019
+```
+
+We train a model with the best configuration on the entire data set.
+Predicting on 1 million observations yields a classification error of 1.9%.
+We see that the performance estimated while tuning overestimates the performance of the final model.
+
+```{r}
+#| eval: false
+
+at = auto_tuner(
+  tuner = tuner,
+  learner = lts(lrn("classif.xgboost")),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.ce"),
+  terminator = trm("evals", n_evals = 1000L)
+)
+
+rr = resample(task, at, rsmp("cv", folds = 5))
+rr$aggregate()
+
+#> classif.ce
+#>      0.018
+```
+
+When adding an outer resampling, the performance estimate is 1.8%.
+This is much closer to the performance of the model trained on the entire data set.
 
 ## Advanced Tuning
 
