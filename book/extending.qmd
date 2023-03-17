@@ -33,46 +33,60 @@ Do not worry if you make a PR to the wrong repository, we will transfer it to th
 ## Extending the `Measure` Class {#sec-extending-measures}
 
 We will now turn to extending the `r ref("Measure")` class to implement new metrics, again we will focus on regression.
-As an example, let's consider the mean squared error defined by $f(y, \hat{y}) = \frac{1}{n} \sum_{i=1}^n (y_i - \hat{y}_i)^2$ where $y$ is a vector of true observations and $\hat{y}$ are respective predictions.
+As an example, let's consider a regression measure that scores a prediction as $1$ if the difference between the true and predicted values are less than one standard deviation of the truth, or scores the prediction as $0$ otherwise.
+In maths this would be defined as $f(y, \hat{y}) = \frac{\sum_{i=1}^n \mathbb{I}(|y_i - \hat{y}_i| < \sigma(y))}{n}$.
+As an aggregate measure, we would then take the mean of this score over all predictions.
 In code this may be written as:
 
 ```{r extending-015}
-mse = function(truth, response) mean((truth - response)^2)
+threshold_acc = function(truth, response) {
+  score = numeric(length(truth))
+  score[abs(truth - response) < sd(truth)] = 1
+  mean(score)
+}
 
-mse(c(0, 0.5, 1), c(0.5, 0.5, 0.5))
+threshold_acc(c(100, 0, 1), c(1, 11, 6))
 ```
 
-As with extending learners, we now need to create a new `r ref("R6::R6Class")`, this time inheriting from `r ref("Measure")` and in this case specifically inheriting from `r ref("MeasureRegr")`.
-We will once again show the final code and then explain each line, this can be used as a template for most performance measures.,
+This measure is then bounded between [1, 0] where a larger score is better.
+
+To implement this measure, we need to create a new `r ref("R6::R6Class")`, which will inherit from `r ref("Measure")` and in this case specifically inheriting from `r ref("MeasureRegr")`.
+We will now demonstrate what the final code for this new measure would look like and then explain each line, this can be used as a template for most performance measures.
 
 ```{r extending-016}
-MeasureRegrMSE = R6::R6Class("MeasureRegrMSE", # class name
+MeasureRegrThresholdAcc = R6::R6Class("MeasureRegrThresholdAcc", # class name
   inherit = mlr3::MeasureRegr, # regression measure
   public = list(
     initialize = function() { # initialize class
       super$initialize(
-        id = "mse", # unique ID
+        id = "thresh_acc", # unique ID
         packages = character(), # no dependencies
         properties = character(), # no special properties
         predict_type = "response", # measures response prediction
-        range = c(0, Inf), # results in values between (0, Inf)
-        minimize = TRUE # optimised at minimum
+        range = c(0, 1), # results in values between (0, 1)
+        minimize = FALSE # optimised at maximum
       )
     }
   ),
 
   private = list(
     .score = function(prediction, ...) { # define score as private method
-      mse = function(truth, response) mean((truth - response)^2) # define loss
-      mse(prediction$truth, prediction$response) # call loss function
+      # define loss
+      threshold_acc = function(truth, response) {
+        score = numeric(length(truth))
+        score[abs(truth - response) < sd(truth)] = 1
+        mean(score)
+      }
+      # call loss function
+      threshold_acc(prediction$truth, prediction$response)
     }
   )
 )
 ```
 
 1. In the first two lines we name the class, here "MeasureMSE", and then state this is a regression measure and inherits from `r ref("MeasureRegr")`.
-2. We initialize the class by stating its unique ID is "mse", that it does not require any external packages (`packages = character()`) and that it has no special properties (`properties = character()`).
-3. We then pass specific details of the loss function which are: it measures the quality of a "response" type prediction, its values range between (0, $\infty$), and that the loss is optimised as its minimum.
+2. We initialize the class by stating its unique ID is "thresh_acc", that it does not require any external packages (`packages = character()`) and that it has no special properties (`properties = character()`).
+3. We then pass specific details of the loss function which are: it measures the quality of a "response" type prediction, its values range between (0, 1), and that the loss is optimised as its maximum.
 4. Finally we define the score itself as a private method called `.score` and simply pass the predictions to the function we defined earlier.
 
 Sometimes measures require data from the training set, the task, or the learner.
@@ -84,12 +98,13 @@ Once you have defined your measure you can either use it with the `R6` construct
 library(mlr3verse)
 
 t = tsk("mtcars")
-l = lrn("regr.rpart")$train(t)$predict(t)
-l$score(MeasureRegrMSE$new())
+s = partition(t)
+p = lrn("regr.rpart")$train(t, s$train)$predict(t, s$test)
+l$score(MeasureRegrThresholdAcc$new())
 
 # or add to dictionary
-mlr3::mlr_measures$add("regr.mse", MeasureRegrMSE)
-l$score(msr("regr.mse"))
+mlr3::mlr_measures$add("regr.thresh_acc", MeasureRegrThresholdAcc)
+l$score(msr("regr.thresh_acc"))
 ```
 
 ## Extending the `Learner` Class {#sec-extending-learners}
