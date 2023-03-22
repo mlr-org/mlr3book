@@ -62,7 +62,7 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-ames <- fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
+ames = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
 
 ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
@@ -101,7 +101,7 @@ For all three cases simple removal is sufficient.
 
 ```{r preproc-0045, echo = TRUE, eval = TRUE, message=FALSE}
 
-to_remove <- c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
+to_remove = c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
 ```
 
 
@@ -119,13 +119,13 @@ Before we continue with feature engineering we create a task, choose a suitable 
 library(mlr3verse)
 
 
-ames_task <- TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
+ames_task = TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
 
 ames_task$select(setdiff(ames_task$feature_names, to_remove))
 
-measure <- msr("regr.mae")
+measure = msr("regr.mae")
 
-cv10 <- rsmp("cv")
+cv10 = rsmp("cv")
 
 cv10$instantiate(ames_task)
 
@@ -136,9 +136,9 @@ Lastly we want to compute a simple featureless baseline, i.e., always predicting
 
 ```{r preproc-007, echo = TRUE, eval = TRUE, message=FALSE}
 
-baseline_lrn <- lrn("regr.featureless", robust = TRUE)
+baseline_lrn = lrn("regr.featureless", robust = TRUE)
 
-baseline_res <- resample(ames_task, baseline_lrn, cv10)
+baseline_res = resample(ames_task, baseline_lrn, cv10)
 baseline_res$aggregate(measure)
 ```
 
@@ -165,7 +165,7 @@ Let us have a look at the number of levels of each categorical feature.
 
 ```{r preproc-008, echo = TRUE, eval = TRUE, message=FALSE}
 
-n_lvls <- sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
+n_lvls = sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
 sort(n_lvls)
 ```
 
@@ -205,7 +205,7 @@ First we collapse all levels that occur less than 1% of the time and build a sim
 
 ```{r preproc-009, echo = TRUE, eval = TRUE, message=FALSE}
 
-factor_pipeline <-
+factor_pipeline =
     po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
     po("encodeimpact", affect_columns = selector_cardinality_greater_than(10), id = "high_card_enc") %>>%
     po("encode", method = "one-hot", affect_columns = selector_cardinality_greater_than(2), id = "low_card_enc") %>>%
@@ -218,16 +218,16 @@ While many implementations of tree based algorithms, such as `rpart` or `ranger`
 
 ```{r preproc-010, echo = TRUE, eval = TRUE, message=FALSE}
 
-xgboost_preproc <- GraphLearner$new(factor_pipeline %>>% lrn("regr.xgboost", nrounds = 100), id = "regr.xgboost")
+xgboost_preproc = GraphLearner$new(factor_pipeline %>>% lrn("regr.xgboost", nrounds = 100), id = "regr.xgboost")
 
-learners <- list(
+learners = list(
     baseline = baseline_lrn,
     tree = lrn("regr.rpart"),
     xgboost = xgboost_preproc
 )
 
-design <- benchmark_grid(ames_task, learners = learners, cv10)
-bmr <- benchmark(design)
+design = benchmark_grid(ames_task, learners = learners, cv10)
+bmr = benchmark(design)
 plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
@@ -245,7 +245,7 @@ To keep track of the imputation, binary indicator features are added.
 
 ```{r preproc-011, echo = TRUE, eval = TRUE, message=FALSE}
 
-impute_pipeline <- list(
+impute_pipeline = list(
     po("missind", type = "integer", affect_columns = selector_type("integer")),
     po("imputehist", affect_columns = selector_type("integer"))
 ) %>>%
@@ -258,38 +258,58 @@ impute_pipeline$plot()
 
 ```{r preproc-012, echo = TRUE, eval = TRUE, message=FALSE}
 
-learners$ranger_preproc <- GraphLearner$new(impute_pipeline %>>% lrn("regr.ranger"), id = "regr.ranger")
+ranger_preproc = GraphLearner$new(impute_pipeline %>>% lrn("regr.ranger"), id = "regr.ranger")
 ```
 
 `r mlr3pipelines` offers a simple and reusable pipeline for (among other things) imputation and factor encoding called `pipeline_robustify`.
 
 ```{r preproc-013, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-robustify <- mlr3pipelines::pipeline_robustify()
+robustify = mlr3pipelines::pipeline_robustify()
 robustify$plot()
 
-learners$lm_preproc <- GraphLearner$new(robustify %>>% lrn("regr.lm"), id = "regr.lm")
+lm_preproc = GraphLearner$new(robustify %>>% lrn("regr.lm"), id = "regr.lm")
 
-design <- benchmark_grid(ames_task, learners = learners, cv10)
-bmr <- benchmark(design)
+design = benchmark_grid(ames_task, learners = list(ranger_preproc, lm_preproc), cv10)
+bmr_new = benchmark(design)
+bmr$combine(bmr_new)
 plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
 
 Many more advanced imputation strategies exist.
 For example, in model based imputation, additional machine learning models are trained to predict missing values from other features.
-Multiple imputation, resamples the data and imputes each value multiple time to attain more robust estimates.
+Multiple imputation resamples the data and imputes each value multiple time to attain more robust estimates.
 These more advanced techniques very rarely improve the model substantially and the simple imputation techniques introduced before are usually sufficient.
-
-
 
 ## Scaling Features and Targets
 
-* Log-scaling of the target for some models
-* Log-scaling of features for some models
-* Tree-based methods do only consider the order of features
-* Normalization for distance based methods
-* Polynomials, interactions and basis expansions are mainly interesting for LMs and not really considered here
+Simple transformations of features and the target can be beneficial for certain learners.
+
+Log transformation can help in making the distribution of the target more symmetrical.
+This is typically useful when the data is skewed, as some machine learning algorithms assume a normal distribution of the target.
+Thus, log transformation can help reduce the impact of outliers and improve the accuracy of the model.
+Similarly, log transformation of skew features can help to reduce the influence of outliers and very large models.
+
+For distance based methods such as K-nearest neighbor models, normalization is required as otherwise features with larger scale would have an higher impact on the neighborhood estimation.
+Luckily, most distance based models internally scale the data so most of the time we do not need to manually do this in preprocessing.
+
+```{r preproc-014, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+
+log_lm_preproc = ppl("targettrafo", graph = lm_preproc)
+log_lm_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
+log_lm_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
+
+log_lm_preproc$plot()
+
+log_lm_preproc = GraphLearner$new(log_lm_preproc, id = "regr.log_lm")
+
+design = benchmark_grid(ames_task, learners = log_lm_preproc, cv10)
+bmr_new = benchmark(design)
+bmr$combine(bmr_new)
+plot(bmr, measure = measure)
+bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
+```
 
 ## Feature Extraction
 
