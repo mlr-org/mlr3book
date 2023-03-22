@@ -62,7 +62,7 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-ames = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
+ames <- fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
 
 ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
@@ -99,14 +99,11 @@ Both features represent the lot area, just on different scales.
 
 For all three cases simple removal is sufficient.
 
-```{r preproc-005, echo = TRUE, eval = TRUE, message=FALSE}
+```{r preproc-0045, echo = TRUE, eval = TRUE, message=FALSE}
 
-ames = ames[, `:=`(Misc_Feature_2 = NULL, Condition_3 = NULL, Lot_Area_m2 = NULL)]
+to_remove <- c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
 ```
 
-::: callout-note
-This could also easily be done after creating a `RegressionTask`, either by `task$select()` or `po("select")`
-:::
 
 Next to constant or identical features, further typical problems that should be checked for are
 
@@ -120,11 +117,15 @@ Before we continue with feature engineering we create a task, choose a suitable 
 
 ```{r preproc-006, echo = TRUE, eval = TRUE, message=FALSE}
 library(mlr3verse)
-ames_task = TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
 
-measure = msr("regr.mae")
 
-cv10 = rsmp("cv")
+ames_task <- TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
+
+ames_task$select(setdiff(ames_task$feature_names, to_remove))
+
+measure <- msr("regr.mae")
+
+cv10 <- rsmp("cv")
 
 cv10$instantiate(ames_task)
 
@@ -135,68 +136,100 @@ Lastly we want to compute a simple featureless baseline, i.e., always predicting
 
 ```{r preproc-007, echo = TRUE, eval = TRUE, message=FALSE}
 
-baseline_lrn = lrn("regr.featureless", robust = TRUE)
+baseline_lrn <- lrn("regr.featureless", robust = TRUE)
 
-baseline_res = resample(ames_task, baseline_lrn, cv10)
+baseline_res <- resample(ames_task, baseline_lrn, cv10)
 baseline_res$aggregate(measure)
 ```
 
 ## Factor Encoding
 
-When working with categorical features in machine learning, it is important to properly encode them as numeric features.
+In machine learning, categorical features are variables that can take on a limited set of values, such as `Paved_Drive` with possible values of `Dirt_Gravel`, `Partial_Pavement`, `Paved` in the Ames housing data.
+
+However, many machine learning algorithms require numerical inputs to function properly.
+
+As shown in the Introduction (@sec-lrns-add-list), we can easily list learners that directly support categorical features.
+
+
+```{r preproc-0075, echo = TRUE, eval = TRUE, message=FALSE}
+as.data.table(mlr_learners)[task_type == "regr" &
+    sapply(feature_types, function(x) "factor" %in% x)]
+```
+
+For other learners we need to convert categorical features into numerical ones is through encoding.
+
 Categorical features can be distinguished by their cardinality, which refers to the number of levels they contain.
 There are three types of categorical features: binary, low-cardinality, and high-cardinality.
 
-Let us first have a look at the number of levels of each categorical feature.
+Let us have a look at the number of levels of each categorical feature.
 
 ```{r preproc-008, echo = TRUE, eval = TRUE, message=FALSE}
 
-n_lvls = sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
+n_lvls <- sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
 sort(n_lvls)
 ```
 
-No universal threshold exist when a feature should be considered high-cardinality.
+Generally, no universal threshold exist when a feature should be considered high-cardinality.
 
-For the Ames housing data, we assume `Exterior_1st `, `Exterior_2nd`, `MS_SubClass` an `Neighborhood` to be high-cardinality.
+For the Ames housing data, we assume `Exterior_1st `, `Exterior_2nd`, `MS_SubClass` an `Neighborhood` to be high-cardinality by assuming a threshold of 10.
+Generally, this threshold can be considered a hyperparameter and can be tuned jointly with all other hyperparameters.
 
-Some learner support handling categorical features out of the box, but can still crash for high-cardinality features.
+Some learners which support handling categorical features out of the box, can still crash for high-cardinality features, since they internally apply encodings that are only suitable for low-cardinality features, such as one-hot encoding.
+
+Low-cardinality features can be handled by one-hot encoding.
+One-hot encoding is a process of converting categorical features into a binary representation, where each possible category is represented as a separate binary feature.
+Theoretically it is sufficient to create one less binary feature than levels, as setting all binary features to zero is also a valid representation.
+This is typically called dummy or treatment encoding and required if the learner is a generalized linear (GLM) or additive model (GAM) model.
+
+For high-cardinality features, impact encoding is a reasonable approach.
+
+Impact encoding is a type of encoding that converts categorical features into numeric values based on the impact of the feature on the target.
+The idea behind impact encoding is to use the target feature to create a mapping between the categorical feature and a numerical value that reflects its importance in predicting the target feature.
+Impact encoding involves the following steps:
+
+1) Group the target variable by the categorical feature.
+2) Compute the mean of the target variable for each group.
+3) Compute the global mean of the target variable.
+4) Compute the impact score for each group as the difference between the mean of the target variable for the group and the global mean of the target variable.
+5) Replace the categorical feature with the impact scores.
+
+By using impact encoding, we can preserve the information of the categorical feature while also creating a numerical representation that reflects its importance in predicting the target.
+The main advantage, compared to one-hot encoding is that only a single numeric feature is created regardless of the number of levels of the categorical features.
+Hence, it is especially useful for high-cardinality features.
+Since information from the target is now used to compute the impact scores, it is crucial that the encoding process is embedded in the cross-validation process to avoid label leakage.
 
 The binary features `Alley`, `Central_Air`, `Street` can be encoded simply as 1 or 0, which does not change anything.
 
-Low-cardinality features, on the other hand, should be one-hot encoded.
-This means that for each level of the feature, a new binary feature is created.
+First we collapse all levels that occur less than 1% of the time and build a simple pipelines that encode categorical features based on their cardinality using `selector_cardinality_greater_than`.
 
-This can quickly result in a large number of new features, which can be problematic for training a model.
-
-For high-cardinality features, (regularized) impact encoding is a reasonable approach.
 
 ```{r preproc-009, echo = TRUE, eval = TRUE, message=FALSE}
 
-low_card_feats = names(n_lvls > 2 & n_lvls <= 10)
-high_card_feats = names(n_lvls > 10)
-
-factor_pipeline =
+factor_pipeline <-
     po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
-    po("encode", method = "one-hot", affect_columns = selector_name(low_card_feats), id = "low_card_enc") %>>%
-    po("encodeimpact", affect_columns = selector_name(high_card_feats), id = "high_card_enc") %>>%
+    po("encodeimpact", affect_columns = selector_cardinality_greater_than(10), id = "high_card_enc") %>>%
+    po("encode", method = "one-hot", affect_columns = selector_cardinality_greater_than(2), id = "low_card_enc") %>>%
     po("encode", method = "treatment", affect_columns = selector_type("factor"), id = "binary_enc")
+
+factor_pipeline$plot()
 ```
 
 While many implementations of tree based algorithms, such as `rpart` or `ranger` are able to handle categorical features, `xgboost` cannot and requires a preprocessing step.
 
 ```{r preproc-010, echo = TRUE, eval = TRUE, message=FALSE}
 
-xgboost_preproc = GraphLearner$new(factor_pipeline %>>% lrn("regr.xgboost", nrounds = 100), id = "regr.xgboost")
+xgboost_preproc <- GraphLearner$new(factor_pipeline %>>% lrn("regr.xgboost", nrounds = 100), id = "regr.xgboost")
 
-learners = list(
+learners <- list(
     baseline = baseline_lrn,
     tree = lrn("regr.rpart"),
     xgboost = xgboost_preproc
 )
 
-design = benchmark_grid(ames_task, learners = learners, cv10)
-bmr = benchmark(design)
+design <- benchmark_grid(ames_task, learners = learners, cv10)
+bmr <- benchmark(design)
 plot(bmr, measure = measure)
+bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
 
 
@@ -212,23 +245,42 @@ To keep track of the imputation, binary indicator features are added.
 
 ```{r preproc-011, echo = TRUE, eval = TRUE, message=FALSE}
 
-impute_pipeline = list(
+impute_pipeline <- list(
     po("missind", type = "integer", affect_columns = selector_type("integer")),
     po("imputehist", affect_columns = selector_type("integer"))
 ) %>>%
     po("featureunion") %>>%
     po("imputeoor", affect_columns = selector_type("factor"))
+
+
+impute_pipeline$plot()
 ```
 
 ```{r preproc-012, echo = TRUE, eval = TRUE, message=FALSE}
 
-learners$ranger_preproc = GraphLearner$new(impute_pipeline %>>% lrn("regr.ranger"), id = "regr.ranger")
-# learners$lm_preproc = GraphLearner$new(po("fixfactors") %>>% impute_pipeline %>>% factor_pipeline %>>% lrn("regr.lm"), id = "regr.lm")
-
-design = benchmark_grid(ames_task, learners = learners, cv10)
-bmr = benchmark(design)
-plot(bmr, measure = measure)
+learners$ranger_preproc <- GraphLearner$new(impute_pipeline %>>% lrn("regr.ranger"), id = "regr.ranger")
 ```
+
+`r mlr3pipelines` offers a simple and reusable pipeline for (among other things) imputation and factor encoding called `pipeline_robustify`.
+
+```{r preproc-013, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+
+robustify <- mlr3pipelines::pipeline_robustify()
+robustify$plot()
+
+learners$lm_preproc <- GraphLearner$new(robustify %>>% lrn("regr.lm"), id = "regr.lm")
+
+design <- benchmark_grid(ames_task, learners = learners, cv10)
+bmr <- benchmark(design)
+plot(bmr, measure = measure)
+bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
+```
+
+Many more advanced imputation strategies exist.
+For example, in model based imputation, additional machine learning models are trained to predict missing values from other features.
+Multiple imputation, resamples the data and imputes each value multiple time to attain more robust estimates.
+These more advanced techniques very rarely improve the model substantially and the simple imputation techniques introduced before are usually sufficient.
+
 
 
 ## Scaling Features and Targets
