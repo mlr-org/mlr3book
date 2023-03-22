@@ -62,7 +62,7 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-ames = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
+ames <- fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
 
 ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
@@ -108,20 +108,75 @@ ames[, `:=`(Misc_Feature_2 = NULL, Condition_3 = NULL, Lot_Area_m2 = NULL)]
 This could also easily be done after creating a `RegressionTask`, either by `task$select()` or `po("select")`
 :::
 
-The data contains missing values, but since the
+Next to constant or identical features, further typical problems that should be checked for are
 
-* ID columns need to be tagged, removed or at least ignored for training
-* Duplicated features need to be removed
-    * Features that are exactly the same
-    * Features that are a (linear) transformation of another feature.
-* Constant features
-* Errors in data, e.g. due to manual entry, e.g.
-    * Year remodeled is before year built
-    * Pool area > 0 even if the property does not have a pool
-    * `NA`s not correctly encoded, e.g. as `"NA"` or `""`
-* Numeric features encoded as categorical features
+1) ID columns, i.e., columns that are unique for every observations should be removed or tagged.
+2) `NA`s not correctly encoded, e.g. as `"NA"` or `""`
+3) Semantic errors in the data, e.g., negative `Lot_Area`
+4) Numeric features encoded as categorical
+5) ...
+
+Before we continue with feature engineering we create a task, choose a suitable performance measure and resampling strategy.
+
+```{r preproc-006, echo = TRUE, eval = TRUE, message=FALSE}
+library(mlr3verse)
+
+ames_task <- TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
+
+measure <- msr("regr.mae")
+
+cv10 <- rsmp("cv")
+
+cv10$instantiate(ames_task)
+
+print(ames_task)
+```
+
+Lastly we want to compute a simple featureless baseline, i.e., always predicting the median sale price.
+
+```{r preproc-007, echo = TRUE, eval = TRUE, message=FALSE}
+
+baseline_lrn <- lrn("regr.featureless", robust = TRUE)
+
+baseline_res <- resample(ames_task, baseline_lrn, cv10)
+baseline_res$aggregate(measure)
+```
 
 ## Factor Encoding
+
+When working with categorical features in machine learning, it is important to properly encode them as numeric features.
+Categorical features can be distinguished by their cardinality, which refers to the number of levels they contain.
+There are three types of categorical features: binary, low-cardinality, and high-cardinality.
+
+Let us first have a look at the number of levels of each categorical feature.
+
+```{r preproc-008, echo = TRUE, eval = TRUE, message=FALSE}
+
+n_lvls <- sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
+sort(n_lvls)
+```
+
+No universal threshold exist when a feature should be considered high-cardinality.
+
+For the ames housing data, we assume `Exterior_1st `, `Exterior_2nd`, `MS_SubClass` an `Neighborhood` to be high-cardinality.
+
+### Binary Features
+
+Binary features can be encoded simply as 1 or 0, which does not change anything except the interpretation of coefficients in linear models (LM) or generalized additive models (GAM).
+
+Low-cardinality features, on the other hand, require one-hot or dummy encoding.
+This means that for each level of the feature, a new binary feature is created.
+This can quickly result in a large number of new features, so it is important to carefully consider the properties of the learner being used to handle them.
+
+For high-cardinality features, regularized target or impact encoding, clustering, and hashing are some of the techniques that can be used.
+It is important to note that while some learners can handle low-cardinality features, they might crash when high-cardinality features are present.
+
+Tree-based algorithms are generally better equipped to handle even high-cardinality categorical features.
+However, it is still important to optimize the encoding of each feature based on the algorithm and hyperparameter configuration being used.
+
+Additionally, it is important to introduce and tune a threshold hyperparameter that determines when to use high-cardinality encoding.
+Finally, the encoder should be able to handle new feature levels that occur at test time without crashing.
+
 
 * For most learners categorical features need to be encoded in numeric features.
 * Distinguish between binary, low cardinality and high cardinality categorical features.
