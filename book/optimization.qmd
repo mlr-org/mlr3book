@@ -603,79 +603,100 @@ As a final note, nested resampling is computationally expensive, as a simple exa
 
 ### Instructive Example
 
-We will now show that nested resampling works using an example with a feature-independent learner and simulated data.
-The learner `lrn("classif.featureless")` randomly predicts a class label with equal probability.
-This means the true generalization error of the model is 50%.
-We add the hyperparameter `x` which has no effect.
+We will now demonstrate that nested resampling better estimates the generalization error of a tuned model.
+For this, we will tune the hyperparameters of an XGBoost model.
+We will compare the measured performance while tuning and the performance determined with nested resampling with the true performance of the tuned model.
+It is not necessary to run the examples because this could take a few minutes.
 
 ```{r}
-learner = lrn("classif.featureless", method = "sample")
-learner$param_set$add(paradox::ParamDbl$new("x", lower = 0, upper = 1))
-learner$param_set$set_values(x = to_tune())
+learner = lrn("classif.xgboost",
+  eta               = to_tune(1e-4, 1, logscale = TRUE),
+  nrounds           = to_tune(1, 5000),
+  max_depth         = to_tune(1, 20),
+  colsample_bytree  = to_tune(1e-1, 1),
+  colsample_bylevel = to_tune(1e-1, 1),
+  lambda            = to_tune(1e-3, 1e3, logscale = TRUE),
+  alpha             = to_tune(1e-3, 1e3, logscale = TRUE),
+  subsample         = to_tune(1e-1, 1)
+)
 ```
 
-The `tgen("2dnormals")` task generator creates a binary classification problem with equal class proportions.
+We use simulated data.
+This way we can generate as much data as we need.
+The task generator `tgen("moons")` creates two interleaving half circles ("moons") as a binary classification problem (see @fig-moon).
 
 ```{r}
-generator = tgen("2dnormals")
-task = generator$generate(n = 200L)
+generator = tgen("moons")
+task = generator$generate(n = 100L)
 ```
 
-We will now start the tuning using a random search with 100 evaluations.
+```{r}
+#| label: fig-moon
+#| fig-cap: Two interleaving half circles ("moons") as a binary classification problem.
+#| fig-alt: Two interleaving half circles ("moons") as a binary classification problem.
+#| echo: false
+library(ggplot2)
+library(viridisLite)
 
-```{r optimization-031}
+data = task$data()
+ggplot(data, aes(x = x1, y = x2, color = y)) +
+  geom_point() +
+  scale_color_viridis_d(end = 0.8) +
+  theme_minimal()
+```
+
+We start the tuning using a random search with 1000 evaluations.
+
+```{r}
+#| eval: false
+
 instance = tune(
-  tuner = tnr("random_search", batch_size = 100L),
+  tuner = tnr("random_search", batch_size = 10L),
   task = task,
   learner = learner,
   resampling = rsmp("holdout"),
   measures = msr("classif.ce"),
-  terminator = trm("evals", n_evals = 100L)
+  terminator = trm("evals", n_evals = 1000L)
 )
 
 instance$result_y
 ```
 
-The measured classification error of the best configuration is much lower than 50%.
-This means the measured performance while tuning overestimates the true performance of the model.
-Although `x` has no effect on the performance, the best classification error is decreasing over time.
+The measured classification error of the best configuration is 9%.
+We train a model with the best configuration on the entire data set and predict 1 million observations.
 
-```{r optimization-032}
-#| label: fig-nested-resampling-example-1
-#| fig-cap: The classification error of the best configuration over time.
-#| fig-alt: Line plot with iteration on the x-axis and classification error on the y-axis.
-#| echo: false
-library(ggplot2)
-library(viridisLite)
+```{r}
+#| eval: false
 
-data = as.data.table(instance$archive)
-data[, tuning_error := cummin(classif.ce)]
-
-ggplot(data, aes(x = seq(100), y = tuning_error)) +
-  geom_line(
-    colour = viridis(3, end = 0.8)[2],
-    linewidth = 1) +
-  xlab("Number of evaluations") +
-  ylab("Best classification error") +
-  theme_minimal()
+tuned_learner = lrn("classif.xgboost")
+tuned_learner$param_set$set_values(
+  .values = instance$result_learner_param_vals)
+tuned_learner$train(task)
+pred = tuned_learner$predict(generator$generate(n = 1000000L))
+pred$score()
 ```
 
-We now run nested resampling to estimate the unbiased performance of the model.
+The classification error of 11% is the true generalization error of the tuned model.
+We see that the measured performance significantly overestimates the performance of the tuned model.
 
-```{r optimization-033}
+Let's use nested resampling to estimate the performance of the tuned model.
+
+```{r}
+#| eval: false
+
 at = auto_tuner(
-  tuner = tnr("random_search", batch_size = 100L),
+  tuner = tnr("random_search", batch_size = 10L),
   learner = learner,
   resampling = rsmp("holdout"),
   measure = msr("classif.ce"),
-  terminator = trm("evals", n_evals = 100L)
+  terminator = trm("evals", n_evals = 1000L)
 )
-
-rr = resample(task, at, rsmp("cv", folds = 10))
+rr = resample(task, at, rsmp("cv", folds = 5))
 rr$aggregate()
 ```
 
-We see that the performance estimated by nested resampling is much closer to the true generalization error of 50%.
+Nested resampling estimate a classification error of 10.8%.
+The performance estimated by nested resampling is much closer to the true performance of the tuned model.
 
 ## Advanced Tuning
 
