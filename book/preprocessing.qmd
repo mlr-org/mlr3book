@@ -62,7 +62,7 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-ames <- fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
+ames = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv", stringsAsFactors = TRUE)
 
 ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
@@ -101,7 +101,7 @@ For all three cases simple removal is sufficient.
 
 ```{r preproc-005, echo = TRUE, eval = TRUE, message=FALSE}
 
-ames[, `:=`(Misc_Feature_2 = NULL, Condition_3 = NULL, Lot_Area_m2 = NULL)]
+ames = ames[, `:=`(Misc_Feature_2 = NULL, Condition_3 = NULL, Lot_Area_m2 = NULL)]
 ```
 
 ::: callout-note
@@ -120,12 +120,11 @@ Before we continue with feature engineering we create a task, choose a suitable 
 
 ```{r preproc-006, echo = TRUE, eval = TRUE, message=FALSE}
 library(mlr3verse)
+ames_task = TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
 
-ames_task <- TaskRegr$new(backend = ames, target = "Sale_Price", id = "ames")
+measure = msr("regr.mae")
 
-measure <- msr("regr.mae")
-
-cv10 <- rsmp("cv")
+cv10 = rsmp("cv")
 
 cv10$instantiate(ames_task)
 
@@ -136,9 +135,9 @@ Lastly we want to compute a simple featureless baseline, i.e., always predicting
 
 ```{r preproc-007, echo = TRUE, eval = TRUE, message=FALSE}
 
-baseline_lrn <- lrn("regr.featureless", robust = TRUE)
+baseline_lrn = lrn("regr.featureless", robust = TRUE)
 
-baseline_res <- resample(ames_task, baseline_lrn, cv10)
+baseline_res = resample(ames_task, baseline_lrn, cv10)
 baseline_res$aggregate(measure)
 ```
 
@@ -152,62 +151,85 @@ Let us first have a look at the number of levels of each categorical feature.
 
 ```{r preproc-008, echo = TRUE, eval = TRUE, message=FALSE}
 
-n_lvls <- sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
+n_lvls = sapply(ames[, .SD, .SDcols = sapply(ames, is.factor)], function(x) length(levels(x)))
 sort(n_lvls)
 ```
 
 No universal threshold exist when a feature should be considered high-cardinality.
 
-For the ames housing data, we assume `Exterior_1st `, `Exterior_2nd`, `MS_SubClass` an `Neighborhood` to be high-cardinality.
+For the Ames housing data, we assume `Exterior_1st `, `Exterior_2nd`, `MS_SubClass` an `Neighborhood` to be high-cardinality.
 
-### Binary Features
+Some learner support handling categorical features out of the box, but can still crash for high-cardinality features.
 
-Binary features can be encoded simply as 1 or 0, which does not change anything except the interpretation of coefficients in linear models (LM) or generalized additive models (GAM).
+The binary features `Alley`, `Central_Air`, `Street` can be encoded simply as 1 or 0, which does not change anything.
 
-Low-cardinality features, on the other hand, require one-hot or dummy encoding.
+Low-cardinality features, on the other hand, should be one-hot encoded.
 This means that for each level of the feature, a new binary feature is created.
-This can quickly result in a large number of new features, so it is important to carefully consider the properties of the learner being used to handle them.
 
-For high-cardinality features, regularized target or impact encoding, clustering, and hashing are some of the techniques that can be used.
-It is important to note that while some learners can handle low-cardinality features, they might crash when high-cardinality features are present.
+This can quickly result in a large number of new features, which can be problematic for training a model.
 
-Tree-based algorithms are generally better equipped to handle even high-cardinality categorical features.
-However, it is still important to optimize the encoding of each feature based on the algorithm and hyperparameter configuration being used.
+For high-cardinality features, (regularized) impact encoding is a reasonable approach.
 
-Additionally, it is important to introduce and tune a threshold hyperparameter that determines when to use high-cardinality encoding.
-Finally, the encoder should be able to handle new feature levels that occur at test time without crashing.
+```{r preproc-009, echo = TRUE, eval = TRUE, message=FALSE}
+
+low_card_feats = names(n_lvls > 2 & n_lvls <= 10)
+high_card_feats = names(n_lvls > 10)
+
+factor_pipeline =
+    po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
+    po("encode", method = "one-hot", affect_columns = selector_name(low_card_feats), id = "low_card_enc") %>>%
+    po("encodeimpact", affect_columns = selector_name(high_card_feats), id = "high_card_enc") %>>%
+    po("encode", method = "treatment", affect_columns = selector_type("factor"), id = "binary_enc")
+```
+
+While many implementations of tree based algorithms, such as `rpart` or `ranger` are able to handle categorical features, `xgboost` cannot and requires a preprocessing step.
+
+```{r preproc-010, echo = TRUE, eval = TRUE, message=FALSE}
+
+xgboost_preproc = GraphLearner$new(factor_pipeline %>>% lrn("regr.xgboost", nrounds = 100), id = "regr.xgboost")
+
+learners = list(
+    baseline = baseline_lrn,
+    tree = lrn("regr.rpart"),
+    xgboost = xgboost_preproc
+)
+
+design = benchmark_grid(ames_task, learners = learners, cv10)
+bmr = benchmark(design)
+plot(bmr, measure = measure)
+```
 
 
-* For most learners categorical features need to be encoded in numeric features.
-* Distinguish between binary, low cardinality and high cardinality categorical features.
-* Low or high cardinality refers to the number of levels.
-    * Binary: Encode as 1 / 0. Does not change anything except intepretation of coefficients in LM/GAM
-    * Low-cardinality: One-hot / dummy encoding.
-    * High-cardinality: Regularized target/impact encoding, clustering, hashing.
-* Check the learner properties if they can handle categorical features.
-* Be careful, a learner, e.g. LM, might be able to handle low-cardinality features, but might crash when high cardinality features are present.
-* Most Tree-based algorithms can natively handle even high-cardinality categorical features.
-* Optimal encoding can vary between each feature, algorithm and hyperparameter configuration.
-* Introduce and tune threshold hyperparameter that decides when to use high-cardinality encoding
-* The encoder should also be able to handle new feature levels occuring at test time without crashing.
+## Missing Values
 
-## Imputation
+Referring again to our `DataExplorer` report in Appendix XXX, we can see that most features contain no missing values, while 7 features contain a substantial amount of missings.
 
-* Imputation is the process of replacing missing values with artificial substituted values.
-* Visualize `NA`s with a missmap
-* Missingness can encode important information.
-    * Missing completely at random
-    * Missing at random: Missingness is related to some other features. EXAMPLE
-    * Missing not at random: Missingness is related to the feature itself. EXAMPLE
-* Simple imputation techniques replace missings with the mean, median, mode or a sample from empirical distribution of the feature.
-* For categorical features, missing values can easily be replaced by a new seperate level.
-* To keep track of the imputation, binary indicator features are added.
-* Check the learner properties if they can handle missing values
-* Some tree-based algorithms can natively handle missing values.
-* Model-based imputation trains a machine learning model to predict missing values using the remaining features.
-    * The imputation model should be able to handle missings natively.
-    * The choice of learner and its hyperparameters add additional complexity to the imputation.
-    * Random Forests are a reasonable choice.
+While both `rpart` and `xgboost` from the previous section could handle missing values automatically, both `ranger` and `lm` that we would like to consider do not.
+
+For simple imputation techniques, missing values can be replaced with the mean, median, mode, or a sample from the empirical distribution of the feature.
+For categorical features, missing values can easily be replaced by a new separate level, e.g. called `.MISSING`.
+To keep track of the imputation, binary indicator features are added.
+
+```{r preproc-011, echo = TRUE, eval = TRUE, message=FALSE}
+
+impute_pipeline = list(
+    po("missind", type = "integer", affect_columns = selector_type("integer")),
+    po("imputehist", affect_columns = selector_type("integer"))
+) %>>%
+    po("featureunion") %>>%
+    po("imputeoor", affect_columns = selector_type("factor"))
+```
+
+```{r preproc-012, echo = TRUE, eval = TRUE, message=FALSE}
+
+learners$ranger_preproc = GraphLearner$new(impute_pipeline %>>% lrn("regr.ranger"), id = "regr.ranger")
+# learners$lm_preproc = GraphLearner$new(po("fixfactors") %>>% impute_pipeline %>>% factor_pipeline %>>% lrn("regr.lm"), id = "regr.lm")
+
+design = benchmark_grid(ames_task, learners = learners, cv10)
+bmr = benchmark(design)
+plot(bmr, measure = measure)
+```
+
 
 ## Scaling Features and Targets
 
@@ -215,12 +237,12 @@ Finally, the encoder should be able to handle new feature levels that occur at t
 * Log-scaling of features for some models
 * Tree-based methods do only consider the order of features
 * Normalization for distance based methods
-* Polynomials, interections and basis expansions are mainly interesting for LMs and not really considered here
+* Polynomials, interactions and basis expansions are mainly interesting for LMs and not really considered here
 
 ## Feature Extraction
 
 * Unfortunately we don't have information about the quality and number of kitchen appliances, which can have an effect on the sales price.
-* But we have information on power consumptions in the kitchen over an average day in 2-Minute intervals
+* But we have information on power consumption in the kitchen over an average day in 2-Minute intervals
 * We cannot directly add these features to our data
 * Some information about the curves should give information about the kitchen:
     * Max-used wattage
