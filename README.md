@@ -16,7 +16,7 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
 1. Clone the `mlr-org/mlr3book` repository.
 
-1. Currently we need the latest quarto dev version to be able to render mermaid diagrams when rendering to pdf. 
+1. Currently we need the latest quarto dev version to be able to render mermaid diagrams when rendering to pdf: https://quarto.org/docs/download/prerelease (we need >=1.3.283)
 
 1. Call `make install` to initialize the renv virtual environment.
    The file `book/renv.lock` records all packages needed to build the book.
