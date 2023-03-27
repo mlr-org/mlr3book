@@ -182,9 +182,9 @@ index = function(main, index = toproper(main)) {
 #' @param text Text to display in main text
 #'
 #' @export
-link = function(url, text = url) {
-  if (text == url) {
-    sprintf("[%s](%s)", text, text)
+link = function(url, text = NULL) {
+  if (is.null(text)) {
+    sprintf("[%s](%s)", url, url)
   } else {
     sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
   }
