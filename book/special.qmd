@@ -868,17 +868,18 @@ Spatial analysis can be a subset of any other machine learning task (e.g., regre
 Spatial analysis is its own task as spatial data must be handled carefully due to the complexity of 'autocorrelation'.
 Where `r index("correlation")` is defined as a statistical association *between two* variables, `r define("autocorrelation")` is a statistical association *within one* variable.
 In machine learning terms, in a dataset with features and observations, correlation occurs when two or more features are statistically associated in some way, whereas autocorrelation occurs when two or more observations are statistically associated across one feature.
-Autocorrelation therefore violates one of the fundamental assumptions of ML that all observations in a dataset are independent, which results in lower confidence about the quality of a trained ML model and we therefore cannot trust any performance estimates [@hastie2001].
+Autocorrelation therefore violates one of the fundamental assumptions of ML that all observations in a dataset are independent, which results in lower confidence about the quality of a trained ML model and the resulting performance estimates [@hastie2001].
 
 Autocorrelation is present in spatial data as there is implicit information encoded in coordinates, such as whether two observations (e.g., cities, countries, continents) are close together or far apart.
 For example, say we are predicting the number of cases of a disease two months after outbreak in Germany.
-Outbreaks radiate outwards from an epicenter and therefore countries closer to Germany will have higher numbers of cases and countries further away will have lower numbers (Fig @fig-autocorrelation, bottom), thus
-there is autocorrelation in the 'country'.
+Outbreaks radiate outwards from an epicenter and therefore countries closer to Germany will have higher numbers of cases, and countries further away will have lower numbers (@fig-autocorrelation, bottom).
+Thus, looking at the data spatially shows clear signs of autocorrelation across nearby observations.
+Note in this example the autocorrelation is radial but in practice this will not always be the case.
 
 ```{r special-043, warning=FALSE, echo=FALSE, message=FALSE}
 #| label: fig-autocorrelation
 #| fig-cap: Heatmaps where darker countries indicate higher number of cases and lighter countries indicate lower number of cases of imaginary Disease X with epicenter in Germany. The top map imagines a world in which there is no spatial autocorrelation and the number of cases of a disease is randomly distributed. The bottom map shows a more accurate world in which the number of cases radiate outwards from the epicenter (Germany).
-#| fig-alt: Image shows two separate maps of Europe. Top mat has a random distribution of colors from yellow to red. Bottom mat shows darkest color (dark orange) at Germany with increasing lightness as the countries are increasingly further away.
+#| fig-alt: Image shows two separate maps of Europe. Top map has a random distribution of colors from light pink to very dark red. Bottom map shows darkest color (dark red) at Germany with increasing lightness as the countries are increasingly further away.
 
 library(dplyr)
 library(patchwork)
@@ -889,27 +890,31 @@ x1 = mean(m$lon)
 x2 = mean(m$lat)
 m = map_data("world")
 m = m %>% dplyr::filter(long > -15, long < 40, lat > 36, lat <  60)
-m$dist = -sqrt((m$lon - x1)^2 + (m$lat - x2)^2)
-m$rand = rnorm(nrow(m), mean(m$dist), sd(m$dist))
+m$dist = (-sqrt((m$lon - x1)^2 + (m$lat - x2)^2)) * 10e5
+if (min(m$dist) < 0) {
+  m$dist = m$dist - min(m$dist)
+}
+m$rand = runif(nrow(m), min(m$dist), max(m$dist))
 cou = m %>% group_by(region) %>% summarize(long = mean(long), lat = mean(lat))
 
 p = ggplot(data = m) +
-  scale_fill_gradient2(low = "white", mid = "orange", high = "red", midpoint = mean(m$dist)) +
+  scale_fill_gradient2(low = "white", mid = "lightpink", high = "black", midpoint = mean(m$dist)) +
   theme_minimal() +
-  theme(legend.position = "n") +
   xlim(-10, 25) + ylim(37, 58)
 
 t = geom_text(aes(label = region, x = long, y = lat), data = cou, size = 2)
 
-p1 = p + geom_map(map = m, aes(long, lat, map_id = region, fill = rand)) + t
+p1 = p + geom_map(map = m, aes(long, lat, map_id = region, fill = rand)) + t +
+  theme(legend.position = "n")
 
-p2 = p + geom_map(map = m, aes(long, lat, map_id = region, fill = dist)) + t
+p2 = p + geom_map(map = m, aes(long, lat, map_id = region, fill = dist)) + t +
+  labs(fill = "Cases")
 
-p1 / p2
+p1 / p2 & patchwork::plot_layout(guides = "collect")
 ```
 
-Unlike other tasks we have looked at in this chapter, there is no underlying difference to the implemented learners or measures, instead we provide new resampling methods in `r mlr3spatiotempcv` to account for any overconfidence in predictions that might occur from autocorrelation.
-To make use of these resamplings we have also implemented special tasks in `r mlr3spatial` to hold spatial data.
+Unlike other tasks we have looked at in this chapter, there is no underlying difference to the implemented learners or measures.
+Instead we provide new resampling methods in `r mlr3spatiotempcv` to account for the similarity in the train and test sets during resampling that originates from spatial autocorrelation.
 
 Throughout this section we will use the `r ref("mlr3spatiotempcv::ecuador")` dataset and task as a working example.
 
@@ -939,12 +944,12 @@ Once a task is created, you can train and predict as normal.
 lrn("classif.rpart")$train(task)$predict(task)
 ```
 
-However as discussed above, it is best to use the specialized resampling methods in order to have trustworthy estimates of model performance.
+However as discussed above, it is best to use the specialized resampling methods to achieve bias-reduced estimates of model performance.
 
 ### Spatiotemporal Cross-Validation {#spatiotemp-cv}
 
-Before we look at the spatial resampling methods implemented in `r mlr3spatiotempcv` we will first show what can go wrong if standard resampling methods are used.
-Below we benchmark a decision tree on the `r ref("mlr_tasks_ecuador")` task using two different repeated cross-validation resampling methods, the first ("NSpCV") is a standard resampling method from `r mlr3`, the second ("SpCV") is from `r mlr3spatiotempcv` and is optimized for spatial data.
+Before we look at the spatial resampling methods implemented in `r mlr3spatiotempcv` we will first show what can go wrong if non-spatial resampling methods are used for spatial data.
+Below we benchmark a decision tree on the `r ref("mlr_tasks_ecuador")` task using two different repeated cross-validation resampling methods, the first ("NSpCV" (non-spatial cross-validation)) is a standard resampling method from `r mlr3`, the second ("SpCV" (spatial cross-validation)) is from `r mlr3spatiotempcv` and is optimized for spatial data.
 The example highlights how "NSpCV" makes it appear as if the decision tree is performing better than it is with significantly higher estimated performance, however this is an overconfident prediction due to the autocorrelation in the data.
 
 ```{r special-046, warning=FALSE,message=FALSE}
@@ -957,11 +962,12 @@ bmr = benchmark(design)
 bmr$aggregate(msr("classif.acc"))[, c(5, 7)]
 ```
 
-In the above example, the non-spatial resampling method means that the train and test data are very similar due to spatial autocorrelation, and so this is almost as bad as evaluating a model on the training data (see @sec-basics).
+In the above example, applying non-spatial resampling results in train and test sets that are very similar due to the underlying spatial autocorrelation.
+Hence there is little difference from testing a model on the same data it was trained on, which should be avoided for an honest performance result (see @sec-basics).
 In contrast, the spatial method has accommodated for autocorrelation and the test data is therefore less correlated (though still some association will remain) with the training data.
 Visually this can be seen using built-in `r ref("autoplot")` methods.
-In @fig-sprsmp we visualize how the task is partitioned according to the spatial resampling method (@fig-sprsmp top) and non-spatial resampling method (@fig-sprsmp bottom).
-There is a clear separation between coordinates using the 'correct' spatial resampling method whereas the train and test splits overlap significantly (and are therefore highly correlated) using the non-spatial method.
+In @fig-sprsmp we visualize how the task is partitioned according to the spatial resampling method (@fig-sprsmp, top) and non-spatial resampling method (@fig-sprsmp, bottom).
+There is a clear separation in space for the respective partitions when using the spatial resampling whereas the train and test splits overlap a lot (and are therefore more correlated) using the non-spatial method.
 
 ```{r special-047}
 #| fig-cap: Scatterplots show separation of train (blue) and test (orange) data for the first three (left to right) folds of the first repetition of the cross-validation. The top row is spatial resampling where train and test data are clearly separated. The bottom row is non-spatial resampling where there is overlap in train and test data.
@@ -975,15 +981,14 @@ autoplot(rsmp_sp, task, fold_id = c(1:3), size = 0.7) /
   scale_x_continuous(breaks = seq(-79.06, -79.08, -0.02))
 ```
 
-Now we have seen why spatial resampling methods matter we can take a look at what is implemented in `r mlr3spatiotempcv`.
-At the time of writing we have implemented 19 different resampling methods for spatial and spatiotemporal analysis.
-These are categorized into:
+Now we have seen why spatial resampling matter we can take a look at what is implemented in `r mlr3spatiotempcv`.
+The resampling methods we have added can be categorized into:
 
-* Blocking -- Create rectangular blocks in 2D/3D space (as opposed to partitioning in 1D space used in non-spatial methods)
+* Blocking -- Create rectangular blocks in 2D or 3D space
 * Buffering -- Create buffering zones to remove observations between train and test sets
 * Spatiotemporal clustering -- Clusters based on coordinates (and/or time-points)
 * Feature space clustering -- Clusters based on feature space and not necessarily spatiotemporal
-* Partitioning -- Grouped by factor variables
+* Custom (partitioning) -- Grouped by factor variables
 
 The choice of method may depend on specific characteristics of the dataset and there is no easy rule to pick one method over another, full details of different methods can be found in @Schratz2021 -- the paper deliberately avoids recommending one method over another as the 'optimal' choice is highly dependent on the predictive task, autocorrelation in the data, and the spatial structure of the sampling design.
 The documentation for each of the implemented methods includes details of each method as well as references to original publications.
@@ -992,14 +997,14 @@ The documentation for each of the implemented methods includes details of each m
 ## Spatio*temporal* resampling
 
 We have focused on spatial analysis but referred to "spatiotemporal" and "spatiotemp".
-The resampling methods discussed in this section extend trivially to temporal analysis (or spatial and temporal analysis combined) by setting the `"time"` `col_role` in the task (@sec-performance).
+The spatial-only resampling methods discussed in this section can be extended to temporal analysis (or spatial and temporal analysis combined) by setting the `"time"` `col_role` in the task (@sec-performance) -- this is an advanced topic that may be added in future editions of this book.
 See the `r mlr3spatiotempcv` visualization `r link("https://mlr3spatiotempcv.mlr-org.com/articles/spatiotemp-viz.html", "vignette")` for specific details about 3D spatiotemporal visualization.
 :::
 
 ### Spatial Prediction {#sec-spatial-prediction}
 
 Until now we have looked at resampling to accommodate spatiotemporal *features*, but what if you want to make spatiotemporal *predictions*?
-In this case the goal is to make classification or regression predictions for spatial coordinates at a pixel level, usually by creating and labelling raster images.
+In this case the goal is to make classification or regression predictions at the a pixel level, i.e., for an area, defined by the geometric resolution, of a raster image.
 
 To enable these predictions we have created a new function, `r ref("predict_spatial")`, to allow spatial predictions using any of the following spatial data classes:
 
