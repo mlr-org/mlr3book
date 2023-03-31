@@ -10,15 +10,15 @@ author:
     email: sebastian.fischer@stat.uni-muenchen.de
     affiliations:
       - name: Ludwig-Maximilians-Universität München
-abstract: 
+abstract:
   TODO (150-200 WORDS)
 ---
 
-# Implementing New Classes {#sec-extending}
+# Implementing New Measures and Learners {#sec-extending}
 
 {{< include _setup.qmd >}}
 
-Hopefully having read the rest of this book you are now an `r mlr3` expert.
+Hopefully having read the rest of this book you are now on the way to being an `r mlr3` expert.
 Maybe you will even want to extend the universe with new classes for more learners, measures, tasks, pipeops, tuners, filters, or more; if so, read on.
 
 {{< include _optional.qmd >}}
@@ -27,18 +27,17 @@ In this chapter we will cover how to extend the two basic classes of the `r mlr3
 We will start with extending measures (@sec-extending-measures) and then move on to learners (@sec-extending-learners), both in the context of regression, but this extends to any other machine learning task.
 If you are interested in implementing new pipeops, tuners, feature selection methods, or filters, then check out the vignettes in the respective packages: `r mlr3pipelines`, `r mlr3tuning`, `r mlr3fselect`, or `r mlr3filters`.
 Or if you are considering adding a new machine learning task then please contact us on GitHub, email, or Mattermost.
-
 This chapter assumes good knowledge of `R6`, see @sec-r6 for a brief introduction and references to further resources.
 
 We welcome contributions from all levels of developers and if you want to add any of your new classes to our universe then please make pull requests to aligning packages, for example tuners and filters would go to `r mlr3tuning` and `r mlr3filters` respectively, a new survival measure would go to `r mlr3proba`, and *all* new learners go to `r mlr3extralearners`.
 Do not worry if you make a PR to the wrong repository, we will transfer it to the right one.
-Please read the `r link("https://github.com/mlr-org/mlr3/wiki", "mlr3 Wiki")` for coding conventions that we use if you want to add code to our organisation. 
+Please read the `r link("https://github.com/mlr-org/mlr3/wiki", "mlr3 Wiki")` for coding conventions that we use if you want to add code to our organisation.
 
 ## Extending the Measure Class {#sec-extending-measures}
 
 We will now turn to extending the `r ref("Measure")` class to implement new metrics, again we will focus on regression.
 As an example, let's consider a regression measure that scores a prediction as $1$ if the difference between the true and predicted values are less than one standard deviation of the truth, or scores the prediction as $0$ otherwise.
-In maths this would be defined as $f(y, \hat{y}) = \frac{\sum_{i=1}^n \mathbb{I}(|y_i - \hat{y}_i| < \sigma(y))}{n}$, where $y$ contains the true values and $\hat{y}$ the predicted values for observations $i = 1, ..., n$.
+In maths this would be defined as $f(y, \hat{y}) = \frac{1}{n} \sum_{i=1}^n \mathbb{I}(|y_i - \hat{y}_i| < \sigma(y))$, where $y$ contains the true values and $\hat{y}$ the predicted values for observations $i = 1, ..., n$.
 In code this may be written as:
 
 ```{r extending-015}
@@ -57,7 +56,7 @@ To implement this measure, we need to create a new `r ref("R6::R6Class")`, which
 We will now demonstrate what the final code for this new measure would look like and then explain each line, this can be used as a template for most performance measures.
 
 ```{r extending-016}
-MeasureRegrThresholdAcc = R6::R6Class("MeasureRegrThresholdAcc", # class name
+MeasureRegrThresholdAcc = R6::R6Class("MeasureRegrThresholdAcc",
   inherit = mlr3::MeasureRegr, # regression measure
   public = list(
     initialize = function() { # initialize class
@@ -87,23 +86,23 @@ MeasureRegrThresholdAcc = R6::R6Class("MeasureRegrThresholdAcc", # class name
 )
 ```
 
-1. In the first two lines we name the class, here "MeasureMSE", and then state this is a regression measure and inherits from `r ref("MeasureRegr")`.
+1. In the first two lines we name the class, here "MeasureRegrThresholdAcc", and then state this is a regression measure that inherits from `r ref("MeasureRegr")`.
 2. We initialize the class by stating its unique ID is "thresh_acc", that it does not require any external packages (`packages = character()`) and that it has no special properties (`properties = character()`).
 3. We then pass specific details of the loss function which are: it measures the quality of a "response" type prediction, its values range between (0, 1), and that the loss is optimised as its maximum.
 4. Finally we define the score itself as a private method called `.score` and simply pass the predictions to the function we defined earlier.
 
 Sometimes measures require data from the training set, the task, or the learner.
-These are usually complex edge-cases examples so we will not go into detail here, for working examples look at the code for `r ref("mlr3proba::MeasureSurvSongAUC")` and `r ref("mlr3proba::MeasureSurvAUC")`.
-Furthermore, you can consult the manual page of the `r ref("Measure")` for an overview of other properties and meta-data that can be specified.
+These are usually complex edge-cases examples so we will not go into detail here, for working examples we suggest looking at the code for `r ref("mlr3proba::MeasureSurvSongAUC")` and `r ref("mlr3proba::MeasureSurvAUC")`.
+You can also consult the manual page of the `r ref("Measure")` for an overview of other properties and meta-data that can be specified.
 
 Once you have defined your measure you can either use it with the `R6` constructor, or by adding it to the `r ref("mlr_measures")` dictionary:
 
 ```{r}
 library(mlr3verse)
 
-t = tsk("mtcars")
+t = tsk("boston_housing")
 s = partition(t)
-p = lrn("regr.rpart")$train(t, s$train)$predict(t, s$test)
+p = lrn("regr.featureless")$train(t, s$train)$predict(t, s$test)
 p$score(MeasureRegrThresholdAcc$new())
 
 # or add to dictionary
@@ -113,50 +112,30 @@ p$score(msr("regr.thresh_acc"))
 
 ## Extending the Learner Class {#sec-extending-learners}
 
-Although many learners are already included in the `r mlr3` ecosystem, there might be a situation in which your algorithm of choice is not implemented.
-Here, we show how to create a custom `r ref("Learner")` by reimplementing the `regr.rpart` learner from `r mlr3`.
+Many learners are already included in the `r mlr3` ecosystem but there are still many more that have not been and so in this section we will look at how to add a new `r ref("Learner")` to `r mlr3`.
+Please read `r link("", "extending vignette (TODO)")` if you want to add your new learner to `r mlr3extralearners`.
 
 :::{.callout-tip}
-The `r ref("mlr3extralearner::create_learner")` function can be used to generate files containing templates for the learner and test files.
+The `r ref("mlr3extralearner::create_learner")` function can be used to generate files containing templates for the learner and test files required to create and test a `Learner`.
 We will not use it in this book chapter for the sake of clarity, but recommend using it in practice to avoid writing a lot of boilerplate code.
 :::
 
-
-Please read `r link("", "extending vignette (TODO)")` if you want to add your new learner to `r mlr3extralearners`.
-
-Creating a new learner class consists of: 
-
-1. Picking the right `r mlr3` class to inherit from.
-1. Calling the `$initialize()` method of the parent class with the right meta-information. 
-  This includes defining its parameter set.
-1. Adding missing private and public methods, most importantly  `$.train()` and `$.predict()`.
-1. Testing the correctness of the learner.
-
-We start with showing the code and will then explain what it does.
-In a slightly unusual fashion, we will not write down the learner class in one go, but incrementally add the methods using the `$set()` class method.
-This is purely for didactic reasons.
+As before, we will first demonstrate what the final class looks like and then we will explain it line by line (and method by method).
+As a working example we will implement a stripped down version of `regr.rpart`.
 
 ```{r}
 #| cache: false
-LearnerRegrRpart2 = R6::R6Class("LearnerRegrRpart2",
+LearnerRegrRpartSimple = R6::R6Class("LearnerRegrRpartSimple",
   inherit = LearnerRegr,
   public = list(
     initialize = function() {
       param_set = ps(
-        cp             = p_dbl(0, 1, default = 0.01, tags = "train"),
-        keep_model     = p_lgl(default = FALSE, tags = "train"),
-        maxcompete     = p_int(0L, default = 4L, tags = "train"),
-        maxdepth       = p_int(1L, 30L, default = 30L, tags = "train"),
-        maxsurrogate   = p_int(0L, default = 5L, tags = "train"),
-        minbucket      = p_int(1L, tags = "train"),
-        minsplit       = p_int(1L, default = 20L, tags = "train"),
-        surrogatestyle = p_int(0L, 1L, default = 0L, tags = "train"),
-        usesurrogate   = p_int(0L, 2L, default = 2L, tags = "train"),
-        xval           = p_int(0L, default = 10L, tags = "train")
-      ) 
+        cp = p_dbl(0, 1, default = 0.01, tags = "train"),
+        xval = p_int(0L, default = 10L, tags = "train")
+      )
       param_set$values$xval = 10
       super$initialize(
-        id = "regr.rpart2",
+        id = "regr.rpart_simple",
         feature_types = c("logical", "integer", "numeric", "factor", "ordered"),
         predict_types = "response",
         packages = "rpart",
@@ -166,11 +145,33 @@ LearnerRegrRpart2 = R6::R6Class("LearnerRegrRpart2",
         man = "mlr3::mlr_learners_regr.rpart"
       )
     }
+  ),
+  private = list(
+    .train = function(task) {
+      pv = self$param_set$get_values(tags = "train")
+      if ("weights" %in% task$properties) {
+        pv$weights = task$weights$weight
+      }
+      mlr3misc::invoke(
+        rpart::rpart,
+        formula = task$formula(),
+        data = task$data(),
+        .args = pv
+      )
+    },
+
+    .predict = function(task) {
+      pv = self$param_set$get_values(tags = "predict")
+      # ensure same column order in train and predict
+      newdata = task$data(cols = intersect(names(self$state$data_prototype), task$feature_names))
+      response = mlr3misc::invoke(predict, self$model, newdata = newdata, .args = pv)
+      list(response = unname(response))
+    }
   )
 )
 ```
 
-We first specify the class name according to the mlr3 naming convention as "LearnerRegrRpart2".
+We first specify the class name according to the mlr3 naming convention as "LearnerRegrRpartSimple".
 In the second line, we select the appropriate parent class from which we want to inherit.
 Because we are implementing a regression learner, we have to inherit from the `r ref("LearnerRegr")` class.
 For classification we would inherit from `r ref("LearnerClassif")`, for survival from `r ref("LearnerSurv")`, and for clustering from `r ref("LearnerClust")`.
@@ -179,12 +180,12 @@ In the constructor, the constructor of the super class (in this case `r ref("Lea
 We strongly recommend reading the relevant class documentation to understand its arguments.
 These include:
 
-* `id`: The ID of the new learner. 
+* `id`: The ID of the new learner.
 * `packages`: The upstream package name(s) of the implemented learner.
 * `param_set`: A set of hyperparameters and their descriptions provided as a `r ref("paradox::ParamSet")`.
 * `predict_types`: Set of predict types the learner supports.
 * `feature_types`: Set of feature types the learner is able to handle.
-* `properties`: Set of properties of the learner. 
+* `properties`: Set of properties of the learner.
 * `man`: The roxygen identifier of the learner.
   This is used within the `$help()` method of the super class to open the help page of the learner.
 * `label`: The label of the learner.
@@ -237,7 +238,7 @@ In such cases, a practical compromise is to not set any default value when calli
 
 In some cases you want to change the parameter values during initialization.
 You can do this by changing the `param_set$values` during the learner's construction.
-You can see we have done this for `regr.rpart2` where the default for `xval` is changed to `0`.
+You can see we have done this for `regr.rpart_simple` where the default for `xval` is changed to `0`.
 Note however that we still annotate the default of the `xval` parameter as 0.
 For a difference between initial parameter values and default values see (TODO: Fundamentals (?)).
 It is recommended to only change the defaults for good reasons and document this properly when doing so.
@@ -247,7 +248,7 @@ It is recommended to only change the defaults for good reasons and document this
 In `r ref_pkg("paradox")` only integers, numerics, factors, and logicals have decicated parameter types.
 For all other parameters, the `r ref("ParamUty")` class has to be used, which is constructable via the `r ref("paradox::p_uty()")` function.
 It has the argument `custom_check`, which allows to specify custom constraints.
-This function return `TRUE` if the input is valid and a `character(1)` with the error message otherwise. 
+This function return `TRUE` if the input is valid and a `character(1)` with the error message otherwise.
 
 
 ###  Train function {#sec-learner-train}
@@ -270,24 +271,7 @@ Because the learner has the property `"weights"`, we insert the weights of the t
 Last, we call the upstream function `rpart::rpart()` with the data and pass all hyperparameters via argument `.args` using the `r ref("mlr3misc::invoke()")` function.
 The latter is simply an optimized version of `do.call()` that we use within the `r mlr3` ecosystem.
 
-```{r extending-007}
-#| cache: false
-.train = function(task) {
-  pv = self$param_set$get_values(tags = "train")
-  if ("weights" %in% task$properties) {
-    pv$weights = task$weights$weight
-  }
-  formula = task$formula()
-  data = task$data()
-  mlr3misc::invoke(
-    rpart::rpart,
-    formula = formula,
-    data = data,
-    .args = pv
-  )
-}
-LearnerRegrRpart2$set("private", ".train", .train)
-```
+<!-- OLD TRAIN CODE WAS HERE  -->
 
 At this point, an explanation for the difference between the public method `$train()` and the private method `$.train()` is in order.
 The former essentially calls the latter and additionally performs some checks and tasks that are the same for every learner.
@@ -312,26 +296,15 @@ response = predict(self$model, newdata = data)
 ```
 
 Next, we transition from `data` to a `r ref("Task")` again and construct a list with the return type requested by the user.
-This is stored in the `$predict_type` slot of a learner class. 
-Note that the `r ref("Task")` is automatically passed to the prediction object, so all you need to do is return the predictions! 
+This is stored in the `$predict_type` slot of a learner class.
+Note that the `r ref("Task")` is automatically passed to the prediction object, so all you need to do is return the predictions!
 Make sure the list names are identical to the task predict types.
-Because the `regr.rpart2` learner we are implementing has only one available predict type (`"response"`) we do not have to account for it.
+Because the `regr.rpart_simple` learner we are implementing has only one available predict type (`"response"`) we do not have to account for it.
 
 The final `.predict()` method is below, we could omit the `pars` line as there are no parameters with the `"predict"` tag but we keep it here to be consistent:
 
-```{r extending-009}
-#| cache: false
-.predict = function(task) {
-  pv = self$param_set$get_values(tags = "predict")
-  # ensure same column order in train and predict
-  newdata = task$data(cols = intersect(names(self$state$data_prototype), task$feature_names))
-  response = mlr3misc::invoke(predict, self$model, newdata = newdata, .args = pv)
-  list(response = unname(response))
-}
+<!-- OLD PREDICT CODE WAS HERE  -->
 
-LearnerRegrRpart2$set("private", ".predict", .predict)
-
-```
 :::{.callout-warning}
 You cannot rely on the column order of the data returned by `task$data()` as the order of columns may be different from the order of the columns during `$.train`.
 The `newdata` line ensures the ordering is the same by calling the same order as in train!
@@ -343,7 +316,7 @@ Specific learner implementations are free to implement additional getters to eas
 Some of these methods are standardized in `r mlr3`, c.f. the `r ref("Learner")` documentation.
 Because we specified earlier that the learner has the properties "`weights`" and "`selected_feature`", we implement these (standardized) extractors as public method.
 They access the `$model` slot of a learner after training and return one of its fields.
-If it is one of the standardized extractors, some custom code might have to be written for the return value to comply with the mlr3 standards (see `r ref("Learner")`). 
+If it is one of the standardized extractors, some custom code might have to be written for the return value to comply with the mlr3 standards (see `r ref("Learner")`).
 The `$importance()` method for example must return the importance scores as a sorted numeric vector, the names being the features.
 
 ```{r}
@@ -359,7 +332,7 @@ importance = function() {
   }
 }
 
-LearnerRegrRpart2$set("public", "importance", importance)
+LearnerRegrRpartSimple$set("public", "importance", importance)
 ```
 
 The selected features must return a subset of the features that were selected internally by the learning algorithm.
@@ -372,7 +345,7 @@ selected_features = function() {
   }
   setdiff(self$model$frame$var, "<leaf>")
 }
-LearnerRegrRpart2$set("public", "selected_features", selected_features)
+LearnerRegrRpartSimple$set("public", "selected_features", selected_features)
 ```
 
 ### Testing the learner {#sec-learner-test}
@@ -384,7 +357,7 @@ For a bare-bone check you can just try to run a simple `$train()` call locally.
 
 ```{r extending-012, eval = TRUE}
 task = tsk("mtcars") # assuming a Classif learner
-learner = LearnerRegrRpart2$new()
+learner = LearnerRegrRpartSimple$new()
 learner$train(task)
 p = learner$predict(task)
 
@@ -423,12 +396,12 @@ library(testthat)
 #| error: true
 library(testthat)
 test_that("autotest", {
-  learner = LearnerRegrRpart2$new()
+  learner = LearnerRegrRpartSimple$new()
   # TODO: Re-enable this when it is possible to disable the man page check
 
   # expect_learner(learner)
   # note that you can skip tests using the exclude argument
-  result = run_autotest(LearnerRegrRpart2$new())
+  result = run_autotest(LearnerRegrRpartSimple$new())
   result = run_autotest(learner)
   expect_true(result, info = result$error)
 })
@@ -458,7 +431,7 @@ In our example, the final paramtest script looks like:
 ```{r extending-014, eval = TRUE}
 #| error: true
 test_that("paramtest", {
-  learner = LearnerRegrRpart2$new()
+  learner = LearnerRegrRpartSimple$new()
 
   exclude = c("formula", "data", "weights", "subset", "na.action", "method", "model",
     "x", "y", "parms", "control", "cost", "keep_model")
