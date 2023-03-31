@@ -12,7 +12,7 @@ author:
       - name: University of Wyoming
 abstract:
     We describe and explain the basic building blocks of mlr3 and how to train and evaluate simple machine learning models.
-    The chapter introduces the different types of tasks that mlr3 supports and how to work with them, learners and how to train models, how to make predictions using those trained models, and how to evaluate the quality of the predictions in a principled fashion.
+    The chapter introduces the different types of tasks that mlr3 supports and how to work with them, learners and how to train models, how to set parameters, how to make predictions using trained models, and how to evaluate the quality of the predictions in a principled fashion.
     Only the basic concepts are introduced, but we give pointers on where to learn more in the rest of the book, and overviews of other concepts.
     After reading this chapter, you will be able to use mlr3 for most machine learning workflows.
 ---
@@ -22,7 +22,7 @@ abstract:
 {{< include _setup.qmd >}}
 
 In this chapter, we will introduce the `r mlr3` objects and corresponding `r ref_pkg("R6")` classes that implement the essential building blocks of machine learning.
-These building blocks include the data (and the methods of creating training and test sets), the machine learning algorithm (and its training and prediction process), and evaluation measures to assess the quality of predictions.
+These building blocks include the data (and the methods of creating training and test sets), the machine learning algorithm (and its training and prediction process), the configuration of a machine learning algorithm through its hyperparameters, and evaluation measures to assess the quality of predictions.
 
 In essence, machine learning means learning relationships from data.
 In supervised learning, datasets consist of observations (rows in tabular data) that are labeled, which means that each data point includes features (columns in tabular data) and a quantity that we are trying to predict, also called 'target'.
@@ -40,6 +40,9 @@ For example, the parameters could be the weights given to individual features wh
 For other learners, the parameters are not as explicit, for example for decision tree learners where a fitted model corresponds to a particular decision tree.
 All learners optimize a so-called loss function during training, i.e. training a learner means finding the model that optimizes the loss.
 In general, a loss function quantifies the mismatch between ground truth target values in the training data and the predictions of the model.
+In addition to the parameters that are fit to the data, most learners also have hyperparameters that change how the model is fit.
+The proper choice of these hyperparameters can be -- depending on the algorithm -- be almost as important as the choice of the learner itself.
+In @sec-parameters we will give a brief introduction on how to configure the hyperparameters of a learner, which is done using the `r paradox` package.
 
 Given a model, we can make predictions (@sec-predicting) on new data.
 A model is only useful though if it generalizes beyond the training data.
@@ -333,14 +336,15 @@ You can access and change the current hyperparameter values by accessing this fi
 
 ```{r basics-027}
 learner_rpart$param_set$values
-learner_rpart$param_set$values$minsplit = 10
-learner_rpart$param_set$values
 ```
 
-:::{.callout-tip}
-It is possible to assign all hyperparameters in one go by assigning a named list to `$values`: `learner$param_set$values = list(minsplit = 10, ...)`.
-This operation removes all previously-set hyperparameters.
-:::
+While there are different methods for changing parameter values, it is recommended to use the `$set_values()` method.
+
+learner_rpart$param_set$set_values(minsplit = 10)
+learner_rpart$param_set$values
+
+
+More information on how to set parameters can be found in the #sec-parameters.
 
 The `r ref("lrn()")` function also accepts additional arguments to update hyperparameters or set fields of the learner when constructing it:
 
@@ -447,24 +451,95 @@ predictions
 
 ### Hyperparameters {#sec-param-set}
 
-Each learner has a `r ref("ParamSet")` that contains the hyperparameters for the learner.
-The user can access this object using the `$param_set` field.
+The `r ref_pkg("paradox")` package (developed by the mlr3 team) implements a system for representing hyperparameter spaces.
+Hyperparameters are mutable values that effect the way that a [learner](#sec-learners) creates a model.
+An example of a hyperparameter is the maximum depth of a decision tree.
+Representing hyperparameters using the `r ref_pkg("paradox")` package provides the following advantages:
+
+1. Available hyperparameter settings, their data types and accepted ranges can easily be listed without crawling through the respective manual pages.
+1. Hyperparameters and their ranges can be defined in a search space for optimization algorithms (this subject will be covered in [Hyperparameter Tuning](#tuning)).
+
+There are two classes within the `r ref_pkg("paradox")` package that we will cover:
+
+* `r ref("Param")`: representing a single hyperparameter
+* `r ref("ParamSet")`: which is a container object that combines multiple `r ref("Param")`s.
+
+The following table lists the available hyperparameter types.
+
+| Parameter Class    | Description                          |
+| :-----------------: | :----------------------------------: |
+| `r ref("ParamDbl")` | Real-valued (Numerical) parameters   |
+| `r ref("ParamInt")` | Integer parameters                   |
+| `r ref("ParamFct")` | Categorical (factor) parameters      |
+| `r ref("ParamLgl")` | Logical / Boolean parameters         |
+| `r ref("ParamUty")` | Untyped parameters                   |
+
+: Parameter Classes and the type of value they represent. {#tbl-parameters-classes}
+
+Individual hyperparameters can be combined into `r ref("ParamSet")` objects. Every [learner](#sec-learners) has a `r ref("ParamSet")` that defines the values it uses when training a model. The user can access this object using the `$param_set` field.
+
+To illustrate how to work with `r ref("ParamSet")`s, we will be using the hyperparameter set of `r ref("LearnerClassifSVM")` from the `r mlr3learners` package.
+For simplicity, we consider only a subset of the hyperparameters of the `r ref("LearnerClassifSVM")`. 
+We can obtain this subset by calling the method `$subset()` with the ids of the hyperparameters we want to keep.
+```{r}
+svm = lrn("classif.svm")
+all_params = svm$param_set
+subset = all_params$subset(c("cost", "kernel", "degree", "shrinking", "type"))
+subset
+```
+
+The printed output above informs us what values are expected: 
+
+* `cost` must be a "double" greater than 0 and the default is 1.
+* `degree` is required to be an integer greater than 1. 
+* `kernel` is a "factor", with 4 available choices that are listed in the documentation: `"linear"`, `"polynomial"`, `"radial"`, and `"sigmoid"`. The default is `"radial"`
+* `shrinking` is a logical flag, the default being `TRUE`.
+* `type` is also a "factor", where the 2 options are `"C-classification"` and `"nu-classification"`, the former being the default.
+
+In addition, there are the columns *parents* and *value*.
+The *parent* column indicates on which other hyperparameters a `r ref("Param")` depends. 
+For example, the hyperparameter `cost` can only be set if `type` is set to `"C-classification"`, because the hyperparameter does otherwise not apply.
+Similarly, the (polynomial) `degree` can only be specified if the `kernel` is `"polynomial"`.
+
+The *value* column indicates to which value the hyperparameters are set.
+This hyperparameter set has none of its values set after initialization.
+Note that some other learners such as `r ref("LearnerClassifRpart")` have values initialized that differ from their defaults.
+
+#### Setting Parameter Values {#sec-parameters-setting}
+
+The most common user-interaction with a `r ref("ParamSet")` is to change its `$values`, e.g. for the purpose of changing the hyperparameters.
+The values in this slot are used when the configured object is called, e.g. when a learner is trained.
+There are three ways to change the values of an existing parameter set that are summarized in the table below.
+
+| Method                                                      | Description                                        |
+| :---------------------------------------------------------  | :-------------------------------------------------- |
+| `param_set$values$<par> = <value>`                          | Changes only a single value                         |
+| `param_set$values = list(<par1> = <value1>, ...)`           | Replace all parameter values with the given list  |
+| `param_set$set_values(<par1> = <value1>, ...)`              | Changes only the provided values                    |
+
+: Different ways of setting parameter values for an existing parameter set {#tbl-parameters-configure}
+
+When using any of these methods, the new hyperparameter setting is checked to make sure it falls in the allowed range/options.
+
+These methods are demonstrated here:
 
 ```{r}
-rpart = lrn("regr.rpart")
-rpart$param_set
+# Changing a single hyperparameter
+subset$values$shrinking = FALSE
+
+# Changing all hyperparameter values
+subset$values = list(
+  shrinking = TRUE, 
+  type = "C-classification", 
+  cost = 0.0, 
+  kernel = "polynomial", 
+  degree = 2)
+
+# Changing only the provided values
+subset$set_values(cost = 3, shrinking = TRUE)
 ```
-These hyperparameters effect the way that learners create their model. 
-There are five classes of `r ref("Param")` objects:
 
-1. `r ref("ParamDbl")` - A Param to describe real-valued (Numerical) parameters.
-1. `r ref("ParamFct")` - A Param to describe categorical (factor) parameters.
-1. `r ref("ParamInt")` - A Param to describe integer parameters.
-1. `r ref("ParamLgl")` - A Param to describe logical parameters.
-1. `r ref("ParamUty")` - A Param to describe untyped parameters.
-
-Individual hyperparameters can be combined into `r ref("ParamSet")` objects that are used to perform hyperparameter optimization. This process is covered in @sec-optimization.
-
+We do not recommend using the second method since it effectively clears all meta information (like inital values, read more about this here: `r ref_pkg("paradox")`).
 
 ## Evaluation {#sec-eval}
 
