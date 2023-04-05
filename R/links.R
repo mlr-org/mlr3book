@@ -299,3 +299,8 @@ NULL
 #' @title Helper mlr links
 #' @export
 NULL
+
+#' @name mlr3fairness
+#' @title Helper mlr links
+#' @export
+NULL

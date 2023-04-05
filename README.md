@@ -105,6 +105,13 @@ To add a new figure into the repository consider the following rules:
   - If your `pdf` or `svg` file is larger than `1MB` it probably contains unnecessary hidden content or unvectorized parts.
   - If your `png` file is larger than `1MB` the resolution is probably too big.
 
+#### Adding a new mlr3 package
+
+This allows linking a package using \`r packagename\`.
+
+* Add the package to `db$hosted` in `R/zzz.R`
+* Export the package by adding a new entry in the end of `R\links.R`
+
 #### Further aspects
 
 * How do I convert `svg` to `pdf`?
