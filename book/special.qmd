@@ -15,7 +15,7 @@ author:
     email:
     affiliations:
       - name: University of Wyoming
-abstract: Previous chapters have considered the core functionality of functions and features in the mlr3 universe and other helper packages, which altogether create a modular ecosystem. This chapter uses that modularity to discuss tasks beyond deterministic regression and single-label classification. The chapter starts with cost-sensitive classification, which makes use of mlr3, mlr3tuning, and mlr3pipelines to implement a classification task in which different types of errors have different costs. Next, the chapter looks at probabilistic regression, which is a regression problem where the prediction is a distribution and not a single point prediction. We first discuss how this is implemented in mlr3 and how this is extended in mlr3proba. We then discuss survival analysis and density estimation, which are both implemented in mlr3proba and make use of the distr6 package for distribution predictions. After these tasks, we look at unsupervised learning in the form of clustering with mlr3cluster, and then finally spatial analysis with mlr3spatial and mlr3spatiotempcv. As some or all of these tasks may be new to some readers, we include an overview to the theory behind each, before looking at the extensions to common mlr3 objects (learners, predictions, tasks, and measures), and then finally consider task-specific extensions.
+abstract: Previous chapters have considered the core functionality of functions and features in the mlr3 universe and other helper packages, which altogether create a modular ecosystem. This chapter uses that modularity to discuss tasks beyond deterministic regression and single-label classification. The chapter starts with cost-sensitive classification, which makes use of mlr3, mlr3tuning, and mlr3pipelines to implement a classification task in which different types of errors have different costs. Next, the chapter looks at survival analysis and density estimation, which are both implemented in mlr3proba and make use of the distr6 package for distribution predictions. After these tasks, we look at unsupervised learning in the form of clustering with mlr3cluster, and then finally spatial analysis with mlr3spatial and mlr3spatiotempcv. As some or all of these tasks may be new to some readers, we include an overview to the theory behind each, before looking at the extensions to common mlr3 objects (learners, predictions, tasks, and measures), and then finally consider task-specific extensions.
 ---
 
 ```{r, include = FALSE}
@@ -37,7 +37,6 @@ As we work through this chapter we will refer to the 'building blocks' of `r mlr
 | Task | Package | Description |
 | ---- | ------- | --------------- |
 | Deterministic regression | `r mlr3`  | Point prediction of a continuous variable. |
-| Probabilistic regression | `r mlr3` and `r mlr3proba`  | Probability distribution prediction of a continuous variable. |
 | Deterministic single-label classification | `r mlr3`  | Prediction of a single class an observation falls into. |
 | Probabilistic single-label classification | `r mlr3`  | Prediction of the probability of an observation falling into one or more mutually exclusive categories. |
 | Cost-sensitive classification | `r mlr3` and `r mlr3pipelines`  | Classification predictions with unequal costs associated with misclassifications. |
@@ -123,108 +122,6 @@ bmr$aggregate(cost_measure)[, c(4, 7)]
 ```
 
 As expected, our tuned learner performs much better and now we expect a profit and not a loss.
-
-## Probabilistic Regression {#sec-probregr}
-
-`r index("Probabilistic regression")` is a simple extension to deterministic regression in which the goal is to predict a full distribution around a single '`r index("point prediction")`'.
-For example, instead of just predicting someone's height, $\mu$, we could also predict how confident we are about our prediction, usually estimated as a standard error, $\sigma$.
-This 'confidence' could be expressed as a confidence interval, for example $\mu \pm \sigma$, or by assuming a distribution, for example $\mathcal{N}(\mu, \sigma)$.
-
-### Confidence interval predictions
-
-Predicting a `r index("confidence interval")` is possible using methods in the `r mlr3` core package (no extension packages are needed).
-Several (but not all) implemented regression learners can make standard error predictions by setting `predict_type = "se"`.
-For compatible learners this means the learner will predict both the 'usual' `response` predict type, as well as the standard error of the prediction, `se`.
-Manually combining these predict types leads to a confidence interval.
-An example is in @fig-probregrconfint where we assume a symmetric Normal 95% confidence interval by setting `quantile = 1.96` which calculates `response` $\pm$ 1.96 `se`.
-
-```{r special-006, warning=FALSE}
-#| fig-alt: x-label says "Response plus-minus 1.96se" and y-label says "Truth". Plot shows a black line running through the x=y axis. 7 blue points are plotted with error bars. Plot shows that 3 points are lying on the x=y line. Other points are not on the line and their error bars do not overlap with the line either.
-#| fig-cap: Scatter plot of predictions (x) vs truth (y) where the straight line is $x=y$. Points lying on $x=y$ indicate good (mean) predictions, points with error bars overlapping $x=y$ indicates truth is within 95% confidence interval.
-#| label: fig-probregrconfint
-t = tsk("mtcars")
-split = partition(t)
-l = lrn("regr.ranger", predict_type = "se")
-l$train(t, split$train)
-p = l$predict(t, split$test)
-p
-autoplot(p, type = "confidence", quantile = 1.96)
-```
-
-This representation is more informative than a standard 'point prediction' as it includes confidence about the predictions.
-For example, the top prediction in @fig-probregrconfint might seem like a 'good' prediction as the mean response is close to the truth.
-However, the error bars suggest that we actually have low confidence in the prediction.
-On the other hand, the fourth prediction from the top is slightly further from the truth, but we are much more confident about our predictions.
-Analogously to classification, we might think of the top prediction as "P(Y = 30) = 0.4" versus the fourth prediction as "P(Y = 23) = 0.7" (numbers not exact).
-This level of detail allows more nuanced metrics to be utilized to measure probabilistic predictions, which we will turn to in the next section.
-
-### Probability distribution predictions
-
-In the example above we used the estimated standard error to calculate an approximate symmetric Normal confidence interval.
-Instead we could have plugged the predicted `response` and `se` into a `r index("probability distribution")` as an estimate of the distribution mean and standard deviation.
-By assuming a probability distribution, we can make our predictions even more detailed by not just considering the mean and standard error of the distribution, but also the probability density function, cumulative distribution function, and all other common properties and methods.
-
-`r ref_pkg("distr6")` implements many probability distributions with `r ref_pkg("R6")` and provides a flexible interface that was originally designed to be used with `r mlr3proba`.
-Below we demonstrate construction of two distributions (Uniform and Normal) in `r ref_pkg("distr6")` and how to access their methods and properties, below we call the `pdf` (probability density function) and `cdf` (cumulative distribution function) methods and look at the most important properties with `summary`.
-Full details of the `r ref_pkg("distr6")` interface can be found on the `r link("https://alan-turing-institute.github.io/distr6/", "package website")`.
-
-```{r special-007, warning=FALSE, message=FALSE}
-library(distr6)
-response = 5
-se = 2
-
-# construct Uniform distribution
-unif = dstr("Uniform",
-  lower = response - se * sqrt(3),
-  upper = response + se * sqrt(3))
-# summary of distribution properties
-summary(unif)
-# evaluate cdf and pdf
-rbind(cdf = unif$cdf(1:6), pdf = unif$pdf(1:6))
-```
-
-In the above example we manually transformed the `response` and `se` 'predictions' to be compatible with a Uniform distribution construction, but learning these transformations can be time consuming.
-`r mlr3proba` ('mlr3 **proba**bilistic') includes a pipeline `r ref("pipeline_probregr()")` that incorporates the key steps of distribution prediction for probabilistic regression, which are:
-
-1. Train and predict a learner to make `response` predictions
-2. Train and predict a learner to make `se` predictions
-3. Select a probability distribution to model these predictions
-4. Transform predictions to parameterize the chosen distribution
-5. Return prediction
-
-This pipeline is a wrapper around `r ref("PipeOpProbregr")`, and is showcased in the code below where we specify three inputs: 1) a random forest as the main learner, which predicts `response`; 2) a featureless learner to estimate the standard deviation, which simply predicts the future standard error as the sample standard deviation in the training set; and 3) we assume a Normal distribution for the predicted distribution. We visualize the quality of predictions in @fig-probregrdist.
-
-```{r special-008}
-#| fig-alt: Three Normally distributed curves are plotted in blue, red, and green. Each curve has a point of the same color, representing the true value. The x-label says "x" and the y-label says "f(x)". The point on the green curve is very close to the distribution maximum. The point on the red curve is close to, but not exactly the maximum. The point on the blue curve is about a third of the way down from the top of the curve. The title of the plot says "Logloss = 2.82".
-#| fig-cap: Three probability distribution predictions plotted as probability density functions. True values are represented as points. Shows fairly good predictions for the green and red observations as the truth is close to the distribution mean/mode but a less good (but not terrible) prediction for the blue observation. The logloss value is low but could be better (0 is the minimum).
-#| label: fig-probregrdist
-library(mlr3verse)
-library(mlr3proba)
-library(ggplot2)
-
-# create our pipeline
-l = as_learner(ppl("probregr",
-  learner = lrn("regr.ranger"),
-  learner_se = lrn("regr.featureless"),
-  dist = "Normal")
-)
-
-# train and predict
-task = tsk("mtcars")
-split = partition(task)
-l$train(task, split$train)
-p = l$predict(task, split$test)
-p
-
-plot_probregr(p, 3, "point", "random") +
-  ggtitle(sprintf("Logloss = %s", round(p$score(msr("regr.logloss")), 2)))
-```
-
-The `$distr` column in our `r ref("PredictionRegr")` contains objects inheriting from `r ref("distr6::Distribution")`, which allows querying of all standard probability distribution methods and properties, as we have seen in the code above.
-This example shows that although none of our predictions were perfect -- the truth was not exactly in line with the peak of the predicted distributions -- in each case the truth was at least within an area of reasonable confidence.
-
-In future versions of `r mlr3proba` we will extend functionality further by adding models that can make probabilistic predictions (e.g., with Bayesian methods), more losses (e.g., Brier score), and a dedicated predict type for interval predictions.
-We now turn to the next task implemented in `r mlr3proba`, which follows closely from probabilistic regression.
 
 ## Survival Analysis {#sec-survival}
 
@@ -316,9 +213,6 @@ as.data.table(mlr_tasks)[task_type == "surv"]
 The interface for `r ref("LearnerSurv")` and `r ref("PredictionSurv")` objects is identical to the regression and classification settings discussed in @sec-basics.
 Similarly to these settings, survival learners are constructed with `"lrn"`; available learners are listed in @sec-appendix-overview-tables.
 
-The primary difference in constructing a survival learner (and the resulting predictions) is the number of possible `predict_type` options that can be passed to `r ref("lrn")`.
-
-Similarly to deterministic regression (@sec-tasks), a survival model can make a single point prediction, and similarly to probabilistic regression (@sec-probregr), a survival model could also make a prediction of a probability distribution.
 `r mlr3proba` has a different predict interface to `r mlr3` as all possible types of prediction ('predict types') are returned when possible for all survival models -- i.e., if a model can compute a predict type then it is returned in `r ref("PredictionSurv")`.
 The reason for this decision is that all these predict types can be transformed to one another and it is therefore computationally simpler to return all at once instead of rerunning models to change predict type.
 In survival analysis, the following predictions can be made:
@@ -365,14 +259,14 @@ Hence, with no realistic way to evaluate these models, survival time predictions
 
 So unlike regression in which deterministic/point predictions are most common, in survival analysis distribution predictions are much more common.
 You will therefore find that the majority of survival models in `r mlr3proba` will make distribution predictions by default.
-As with probabilistic regression, we implement these predictions using the `r ref_pkg("alan-turing-institute/distr6")` interface, which allows visualization and evaluation of survival curves (defined as 1 - cumulative distribution function).
+These predictions are implemented using the `r ref_pkg("alan-turing-institute/distr6")` package, which allows visualization and evaluation of survival curves (defined as 1 - cumulative distribution function).
 In the example below we train a Cox PH model on the `rats` dataset and then plot the survival function of the first three predictions and evaluate this function for all three predictions at $t = 77$.
 
 ```{r special-017}
 t = tsk("rats")
 split = partition(t)
 p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
-plot(p$distr[1:3], fun = "survival")
+plot(p$distr[1:3], fun = "survival", xlab = "T", ylab = "S(T)")
 p$distr[1:3]$survival(77)
 ```
 
@@ -535,7 +429,7 @@ In this small experiment, Coxnet and Cox PH have the best discrimination with $C
 ## Density Estimation {#sec-density}
 
 Density estimation is the learning task to estimate the unknown distribution from which a univariate dataset is generated, or put more simply to estimate the probability density (or mass) function for a single variable.
-Density estimation is implemented in `r mlr3proba`, similarly to the previous two tasks that can also predict probability distributions (hence the name "**mlr3proba**bilistic").
+As with survival analysis, density estimation is implemented in `r mlr3proba`, as both can make probability distribution predictions (hence the name "**mlr3proba**bilistic").
 Unconditional density estimation, i.e., estimation of a target without any covariates, is viewed as an unsupervised task, which means the 'truth' is never known.
 For a good overview to density estimation see @Silverman1986.
 
@@ -573,7 +467,7 @@ Density learners can make one of three possible prediction types.
 1. `cdf` - cumulative distribution function
 
 All learners will return a `distr` and `pdf` prediction but only some can make `cdf` predictions.
-Similarly to survival analysis and probabilistic regression, the `distr` predict type is implemented using `r ref_pkg("alan-turing-institute/distr6")`.
+Again, the `distr` predict type is implemented using `r ref_pkg("alan-turing-institute/distr6")`.
 
 ```{r special-024}
 learn = lrn("dens.hist")
@@ -596,7 +490,7 @@ The reason for returning `pdf` and `cdf` in this way is to enable measures that 
 
 ### MeasureDens
 
-Currently the only measure implemented in `r mlr3proba` for density estimation is logloss, which is defined in the same way as in classification and probabilistic regression, $L(y) = -log(\hat{f}_Y(y))$, where $\hat{f}_Y$ is our estimated probability density function.
+Currently the only measure implemented in `r mlr3proba` for density estimation is logloss, which is defined in the same way as in classification, $L(y) = -log(\hat{f}_Y(y))$, where $\hat{f}_Y$ is our estimated probability density function.
 Putting this together with the above we are now ready to train a density learner, estimate a distribution, and evaluate our estimation:
 
 ```{r special-026}
@@ -604,39 +498,6 @@ meas = msr("dens.logloss")
 meas
 
 p$score(meas)
-```
-
-### Unconditional density estimation vs. probabilistic regression
-
-Some readers may spot parallels between density estimation and `r index("probabilistic regression")` (@sec-probregr).
-In fact, density estimation is just a special case of probabilistic regression, occurring when we make an unconditional prediction.
-For example, given average rainfall across the USA, estimating the distribution of rainfall would be unsupervised density estimation.
-If we now wanted to estimate the distribution of rainfall next year given rainfall this year, then we would be back to supervised probabilistic regression.
-This is illustrated in the code below.
-
-We load the `r ref("precip")` dataset and train, predict, and score a Normal kernel density estimation density learner (`r ref("mlr_learners_dens.kde")`).
-We then create a new dataset based on `r ref("precip")` but with an added variable for rainfall next year.
-Now we can specify a target for prediction based on another covariate, thus making this a supervised learning task.
-We then use the `probregr` pipeline (@sec-probregr) and train, predict, and score a random forest learner (`regr.ranger`).
-Note the key difference in these outputs is that whilst both make distribution predictions, the former (density) *estimates* a single probability distribution (of class `r ref("distr6::Distribution")`) for the variable of interest, whereas the latter (regression) *predicts* a vector of distributions (`r ref("distr6::VectorDistribution")`), where each distribution in the vector is a prediction for a respective observation.
-
-```{r special-027}
-task = tsk("precip")
-split = partition(task)
-learn = lrn("dens.kde", kernel = "Norm")
-p = learn$train(task, split$train)$predict(task, split$test)
-p
-p$distr
-p$score(msr("dens.logloss"))
-
-df = task$data()
-df$next_year = (df$precip * 1.5) + rnorm(length(df$precip))
-task = as_task_regr(df, target = "next_year")
-pipe = as_learner(ppl("probregr", lrn("regr.ranger"), dist = "Normal"))
-p = pipe$train(task, split$train)$predict(task, split$test)
-p
-p$distr
-p$score(msr("regr.logloss"))
 ```
 
 ### Putting it all together {#sec-density-all}
@@ -1055,9 +916,7 @@ plot(pred, col = c("#440154FF", "#443A83FF", "#31688EFF",
 In this chapter, we explored going beyond deterministic regression and classification to see how functions in the `r mlr3` can be used to implement other machine learning tasks.
 Cost-sensitive classification extends the 'normal' classification setting by assuming errors associated with false negatives and false positives are unequal.
 Running cost-sensitive classification experiments is possible just using features in `r mlr3`.
-Probabilistic regression extend deterministic regression by making predictions over a full probability distribution and not just a single point.
-You can train and predict probabilistic regression models with `r mlr3` or more effectively in pipelines with `r mlr3proba`.
-Survival analysis, also available in `r mlr3proba`, is a special form of probabilistic regression when the outcome is censored, which means it may never be observed within a given time frame.
+Survival analysis, available in `r mlr3proba`, can be thought of as a regression problem when the outcome may be censored, which means it may never be observed within a given time frame.
 The final task in `r mlr3proba` is density estimation, the unsupervised task concerned with estimating univariate probability distributions.
 Using `r mlr3cluster`, you can perform cluster analysis on observations, which involves grouping observations together according to similarities in their variables.
 Finally, with `r mlr3spatial` and `mlr3spatiotempcv`, it is possible to perform spatial analysis to make predictions using co-ordinates as features and to make spatial predictions.
@@ -1068,10 +927,7 @@ The `r mlr3` interface is highly extensible, which means future machine learning
 We will run `set.seed(11)` before each of our solutions so you can reproduce our results.
 
 1. Run a benchmark experiment on the `german_credit` task with algorithms: `featureless`, `log_reg`, `ranger`. Tune the `featureless` model using `tunetreshold` and `learner_cv`. Use 2-fold CV and evaluate with `msr("classif.costs", costs = costs)` where you should make the parameter `costs` so that the cost of a true positive is -10, the cost of a true negative is -1, the cost of a false positive is 2, and the cost of a false negative is 3. Are your results surprising?
-1. Use the `probregr` pipeline to create a probabilistic regression model using: xgboost for the `response` prediction, featureless learner for the `se` prediction, and assuming an Cauchy distribution. Train and predict on `task = tsk("mtcars"); split = partition(task)`. Evaluate your model with the logloss measure.
-1. Train and predict a survival forest using `rfsrc` (from `mlr3extralearners`). Run this experiment using `task = tsk("rats"); split = partition(task)`. Evaluate your model with the RCLL measure.
-1. Estimate the density of the `tsk("precip")` data using `logspline` (from `mlr3extralearners`). Run this experiment using `task = tsk("precip"); split = partition(task)`. Evaluate your model with the logloss measure.
-1. Run a benchmark clustering experiment on the `wine` dataset without a label column. Compare the performance of `k-means` learner with `k` equal to 2, 3 and 4 using the silhouette measure. Use insample resampling technique. What value of `k` would you choose based on the silhouette scores?
-
-
-1. Run a (spatially) unbiased classification benchmark experiment on the `ecuador` task with a featureless learner and xgboost, evaluate with the binary Brier score.
+2. Train and predict a survival forest using `rfsrc` (from `mlr3extralearners`). Run this experiment using `task = tsk("rats"); split = partition(task)`. Evaluate your model with the RCLL measure.
+3. Estimate the density of the `tsk("precip")` data using `logspline` (from `mlr3extralearners`). Run this experiment using `task = tsk("precip"); split = partition(task)`. Evaluate your model with the logloss measure.
+4. Run a benchmark clustering experiment on the `wine` dataset without a label column. Compare the performance of `k-means` learner with `k` equal to 2, 3 and 4 using the silhouette measure. Use insample resampling technique. What value of `k` would you choose based on the silhouette scores?
+5. Run a (spatially) unbiased classification benchmark experiment on the `ecuador` task with a featureless learner and xgboost, evaluate with the binary Brier score.
