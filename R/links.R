@@ -299,3 +299,18 @@ NULL
 #' @title Helper mlr links
 #' @export
 NULL
+
+#' @name mlr3oml
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3batchmark
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3fairness
+#' @title Helper mlr links
+#' @export
+NULL
