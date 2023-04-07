@@ -4,7 +4,7 @@
 \alias{define}
 \title{Add term to index and margin}
 \usage{
-define(main, margin = toproper(main))
+define(main, margin = toproper(main), index = toproper(main))
 }
 \arguments{
 \item{main}{Text to show in book}
