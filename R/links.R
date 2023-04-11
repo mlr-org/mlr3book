@@ -161,15 +161,16 @@ toproper = function(str) {
 #' @param index Text to show in index
 #' @param margin Text to show in margin
 #' @export
-define = function(main, margin = toproper(main)) {
-  sprintf("\\index{%s}%s[%s]{.aside}", toproper(main), main, margin)
+define = function(main, margin = toproper(main), index = toproper(main)) {
+  sprintf("\\index{%s}%s[%s]{.aside}", index, main, margin)
 }
 
 #' @title Add term to index
 #' @param main Text to show in book
+#' @param index Index entry if different from `main
 #' @export
-index = function(main) {
-  sprintf("\\index{%s}%s", toproper(main), main)
+index = function(main, index = toproper(main)) {
+  sprintf("\\index{%s}%s", index, main)
 }
 
 #' @title Create markdown and print-friendly link
@@ -181,8 +182,12 @@ index = function(main) {
 #' @param text Text to display in main text
 #'
 #' @export
-link = function(url, text = url) {
-  sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
+link = function(url, text = NULL) {
+  if (is.null(text)) {
+    sprintf("[%s](%s)", url, url)
+  } else {
+    sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
+  }
 }
 
 #' @name paradox
@@ -291,6 +296,21 @@ NULL
 NULL
 
 #' @name mlr3benchmark
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3oml
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3batchmark
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3fairness
 #' @title Helper mlr links
 #' @export
 NULL
