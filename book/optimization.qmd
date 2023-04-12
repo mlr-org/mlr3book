@@ -261,9 +261,77 @@ The optimizer returns the best hyperparameter configuration and the correspondin
 This information is also stored in `instance$result`.
 
 ::: {.callout-note}
-The column `x_domain` contains transformed values and `learner_param_vals` optional constants (none in this example).
+The column `x_domain` contains transformed values and `learner_param_vals` the transformed values and optional constants (none in this example).
 See section @sec-logarithmic-transformations for more information.
 :::
+
+### Logarithmic Transformations {#sec-logarithmic-transformations}
+
+The SVM's `cost` and `gamma` parameters that we have tuned in the example above, are usually tuned on a logarithmic (as opposed to linear) scale.
+We can achieve this, by sampling uniformly from the interval $[log(1e-5), log(1e5)]$ and afterwards transforming the selected configuration with `exp()` before passing it to the learner.
+Using the log transformation emphasizes smaller values but can also result in large values.
+The code below demonstrates this more clearly.
+The histograms show how the algorithm searches within a narrow range but exponentiating then results in the majority of points being relatively small but a few being very large.
+
+```{r optimization-011}
+cost = runif(1000, log(1e-5), log(1e5))
+```
+
+```{r optimization-012}
+#| echo: false
+#| label: fig-logscale
+#| fig-cap: Histogram of sampled `cost` values.
+#| fig-subcap:
+#|   - "`cost` values sampled by the optimization algorithm."
+#|   - "`exp(cost)` values seen by the learner."
+#| layout-ncol: 2
+library(ggplot2)
+library(viridisLite)
+data = data.frame(cost = cost)
+ggplot(data, aes(x = cost)) +
+  geom_histogram(
+    bins = 15,
+    fill = viridis(1, begin = 0.5),
+    alpha = 0.8,
+    color = "black") +
+  theme_minimal()
+data = data.frame(cost = exp(cost))
+ggplot(data, aes(x = cost)) +
+  geom_histogram(
+    bins = 15,
+    fill = viridis(1, begin = 0.5),
+    alpha = 0.8,
+    color = "black") +
+  theme_minimal()
+```
+
+To add the `exp()` transformation to a hyperparameter, we pass `logscale = TRUE` to `r ref("to_tune()")`.
+
+```{r optimization-013}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
+  kernel = "radial",
+  type = "C-classification"
+)
+instance = ti(
+  task = tsk("sonar"),
+  learner = learner,
+  resampling = rsmp("cv", folds = 3),
+  measures = msr("classif.ce"),
+  terminator = trm("none")
+)
+
+tuner$optimize(instance)
+```
+
+The column `x_domain` contains the hyperparameter values after the transformation i.e. `exp(5.76)` and `exp(-5.76)`:
+
+```{r optimization-014}
+instance$result$x_domain
+```
+
+You can learn more about transformations in section @sec-search-space-scratch.
 
 ### Quick Tuning with `tune` {#sec-simplified-tuning}
 
@@ -271,10 +339,10 @@ In the previous section, we looked at creating a tuning instance manually using 
 However, you can also simplify this (albeit with slightly less control) using the `r ref("tune()")` sugar function.
 Internally this creates a `r ref("TuningInstanceSingleCrit")`, starts the tuning and returns the result with the instance.
 
-```{r optimization-011}
+```{r optimization-015}
 learner = lrn("classif.svm",
-  cost  = to_tune(1e-1, 1e5),
-  gamma = to_tune(1e-1, 1),
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
   kernel = "radial",
   type = "C-classification"
 )
@@ -299,7 +367,7 @@ The train-test splits are generated at the beginning of the optimization with th
 
 Whether you use `r ref("ti")` or `r ref("tune")` the output is the same and the 'archive' lists all evaluated hyperparameter configurations:
 
-```{r optimization-012}
+```{r optimization-016}
 as.data.table(instance$archive)[, list(cost, gamma, classif.ce)]
 ```
 
@@ -308,7 +376,7 @@ The columns here show the tested configurations and the measure we optimize,
 If we only specify a single-objective criteria then the instance will return the configuration that optimizes this measure however we can manually inspect the archive to determine other important features.
 For example, how long did the model take to run? Were there any errors in running?
 
-```{r optimization-013}
+```{r optimization-017}
 as.data.table(instance$archive)[,
   list(timestamp, runtime_learners, errors, warnings)]
 ```
@@ -317,7 +385,7 @@ Now we see not only was our optimal configuration the best performing with respe
 
 Another powerful feature of the instance is that we can score the internal `r ref("ResampleResult")`s on a different performance measure, for example looking at false negative rate (FNR) and false positive rate (FPR) as well as classification error:
 
-```{r optimization-014}
+```{r optimization-018}
 as.data.table(instance$archive,
   measures = msrs(c("classif.fpr", "classif.fnr")))[,
   list(cost, gamma, classif.ce, classif.fpr, classif.fnr)]
@@ -329,7 +397,7 @@ You can view all the resamplings in a `r ref("BenchmarkResult")` object with `in
 
 Finally, for more visually appealing results you can use `r mlr3viz` (@fig-surface).
 
-```{r optimization-015}
+```{r optimization-019}
 #| label: fig-surface
 #| fig-cap: Model performance with different configurations for `cost` and `gamma`. Bright yellow regions represent the model performing worse and dark blue performing better. We can see that high `cost` values and low `gamma` values achieve the best performance.
 #| fig-alt: Heatmap showing model performance during HPO. y-axis is 'gamma' parameter between (-10,10) and x-axis is 'cost' parameter between (-10,10). The heatmap shows squares covering all points on the plot and circular points indicating configurations tried in our optimisation. The top-left quadrant is all yellow indicating poor performance when gamma is high and cost is low. The bottom-right is dark blue indicating good performance when cost is high and gamma is low.
@@ -341,7 +409,7 @@ autoplot(instance, type = "surface")
 Once the learner has been tuned we can start to use it like any other model in the mlr3 universe.
 To do this we simply construct a new learner with the same underlying algorithm and set the learner hyperparameters with the optimal configurations:
 
-```{r optimization-016}
+```{r optimization-020}
 svm_tuned = lrn("classif.svm", id = "SVM Tuned")
 svm_tuned$param_set$values = instance$result_learner_param_vals
 ```
@@ -349,7 +417,7 @@ svm_tuned$param_set$values = instance$result_learner_param_vals
 Now we can train the learner on the full dataset and we are ready to make predictions.
 The trained model can then be used to predict new, external data:
 
-```{r optimization-017}
+```{r optimization-021}
 svm_tuned$train(tsk("sonar"))
 svm_tuned$model
 ```
@@ -370,10 +438,10 @@ As the `r ref("AutoTuner")` itself inherits from the `r ref("Learner")` base cla
 Let us see this in practice.
 We will run the exact same example as above but this time using the `r ref("AutoTuner")` for automated tuning:
 
-```{r optimization-018}
+```{r optimization-022}
 learner = lrn("classif.svm",
-  cost  = to_tune(1e-1, 1e5),
-  gamma = to_tune(1e-1, 1),
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
   kernel = "radial",
   type = "C-classification"
 )
@@ -391,7 +459,7 @@ at
 We can now use this like any other learner, calling the `$train()` and `$predict()` methods.
 The key difference to a normal learner, is that calling `$train()` also tunes the model.
 
-```{r optimization-019}
+```{r optimization-023}
 task = tsk("sonar")
 split = partition(task)
 at$train(task, row_ids = split$train)
@@ -416,7 +484,7 @@ A common mistake is to confuse nested resampling for model evaluation and compar
 To put it differently, nested resampling is a statistical procedure to estimate the predictive performance of the model trained on the full dataset, it is *not* a procedure to select optimal hyperparameters.
 Nested resampling produces many hyperparameter configurations which should not be used to construct a final model [@Simon2007].
 
-```{r optimization-020}
+```{r optimization-024}
 #| label: fig-nested-resampling
 #| fig-cap: An illustration of nested resampling. The green blocks represent 3-fold coss-validation for the outer resampling for model evaluation and the blue and gray blocks represent 4-fold cross-validation for the inner resampling for HPO.
 #| fig-alt: The image shows three rows of blocks in light and dark green representing three-fold cross-validation for the outer resampling. Below the dark green blocks are four further rows of blue and gray blocks representing four-fold cross-validation for the inner resampling.
@@ -443,10 +511,10 @@ Nested resampling in mlr3 becomes quite simple with the `AutoTuner` (@sec-autotu
 We simply specify the inner-resampling and tuning setup with the `AutoTuner` and then pass this to `r ref("resample()")` or `r ref("benchmark()")`.
 Continuing with our previous example we will use the auto-tuner to resample a support vector classifier with 3-fold cross-validation in the outer-resampling and 4-fold cross-validation in the inner resampling.
 
-```{r optimization-021}
+```{r optimization-025}
 learner = lrn("classif.svm",
-  cost  = to_tune(1e-1, 1e5),
-  gamma = to_tune(1e-1, 1),
+  cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE),
   kernel = "radial",
   type = "C-classification"
 )
@@ -475,7 +543,7 @@ There are some special functions for nested resampling available in addition to 
 
 The `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` functions return the optimal configurations (across all outer folds) and full tuning archives respectively.
 
-```{r optimization-022}
+```{r optimization-026}
 extract_inner_tuning_results(rr)[,
   list(iteration, cost, gamma, classif.ce)]
 extract_inner_tuning_archives(rr)[,
@@ -491,7 +559,7 @@ Another reason for instability in hyperparameters could be due to small data set
 
 Finally, we will compare the predictive performances estimated on the outer resampling to the inner resampling to gain an understanding of model overfitting and general performance.
 
-```{r optimization-023}
+```{r optimization-027}
 extract_inner_tuning_results(rr)[,
   list(iteration, cost, gamma, classif.ce)]
 
@@ -505,7 +573,7 @@ It is therefore important to ensure that the performance of a tuned model is *al
 Note here we use the term *unbiased* to refer only to the statistical procedure of the performance estimation.
 The underlying prediction of the model could still be biased e.g. due to a bias in the data set.
 
-```{r optimization-024}
+```{r optimization-028}
 rr$aggregate()
 ```
 
@@ -518,7 +586,7 @@ For this, we will tune the hyperparameters of an XGBoost model.
 We will compare the measured performance while tuning and the performance determined with nested resampling with the true performance of the tuned model.
 It is not necessary to run the examples because this could take a few minutes.
 
-```{r optimization-025}
+```{r optimization-029}
 learner = lrn("classif.xgboost",
   eta               = to_tune(1e-4, 1, logscale = TRUE),
   nrounds           = to_tune(1, 5000),
@@ -535,12 +603,12 @@ We use simulated data.
 This way we can generate as much data as we need.
 The task generator `tgen("moons")` creates two interleaving half circles ("moons") as a binary classification problem (see @fig-moon).
 
-```{r optimization-026}
+```{r optimization-030}
 generator = tgen("moons")
 task = generator$generate(n = 100L)
 ```
 
-```{r optimization-027}
+```{r optimization-031}
 #| label: fig-moon
 #| fig-cap: Two interleaving half circles ("moons") as a binary classification problem.
 #| fig-alt: Two interleaving half circles ("moons") as a binary classification problem.
@@ -557,7 +625,7 @@ ggplot(data, aes(x = x1, y = x2, color = y)) +
 
 We start the tuning using a random search with 1000 evaluations.
 
-```{r optimization-028}
+```{r optimization-032}
 #| eval: false
 
 instance = tune(
@@ -575,7 +643,7 @@ instance$result_y
 The measured classification error of the best configuration is 9%.
 We train a model with the best configuration on the entire data set and predict 1 million observations.
 
-```{r optimization-029}
+```{r optimization-033}
 #| eval: false
 
 tuned_learner = lrn("classif.xgboost")
@@ -591,7 +659,7 @@ We see that the measured performance overestimates the performance of the tuned 
 
 Let's use nested resampling to estimate the performance of the tuned model.
 
-```{r optimization-030}
+```{r optimization-034}
 #| eval: false
 
 at = auto_tuner(
@@ -623,7 +691,7 @@ Since tuning is an automated process, there is no opportunity for manual interve
 Encapsulation creates a buffer between tuning and training, which allows errors in training to be isolated and handled, without disrupting the tuning process.
 In `r mlr3`, encapsulation is controlled by passing arguments to the `encapsulate` field in any learner, as in the example below.
 
-```{r optimization-031}
+```{r optimization-035}
 learner = lrn("classif.svm",
   cost  = to_tune(1e-5, 1e5),
   gamma = to_tune(1e-5, 1e5),
@@ -640,7 +708,7 @@ There are currently two options for encapsulating a learner, via the packages `r
 `r ref_pkg("evaluate")` catches any errors that occur and allows the process to continue, whereas `r ref_pkg("callr")` encapsulation spawns a separate R process (thus comes with more computational overhead).
 Both packages allow setting a timeout which is useful when a learner does not converge, in `r mlr3` you can do this by setting the `timeout` field, again this can be set for training and predicting individually:
 
-```{r optimization-032}
+```{r optimization-036}
 learner$timeout = c(train = 30, predict = 30)
 ```
 
@@ -653,13 +721,13 @@ See @sec-fallback for more detailed information.
 
 Below we set `r ref("mlr_learners_classif.featureless")` as the featureless learner which always predicts the most frequent label.
 
-```{r optimization-033}
+```{r optimization-037}
 learner$fallback = lrn("classif.featureless")
 ```
 
 Errors and warnings that occurred during tuning are stored in the archive.
 
-```{r optimization-034}
+```{r optimization-038}
 instance = tune(
   tuner = tnr("random_search", batch_size = 5),
   task = tsk("sonar"),
@@ -704,7 +772,7 @@ In @sec-tuning-instance we have seen how one can conveniently define the tuning 
 In this section, we will show how to define such search spaces from scratch and also cover more advanced techniques.
 To start, we will revisit an example from earlier, where we have tuned the `cost` and `gamma` parameter of an SVM classifier.
 
-```{r optimization-035}
+```{r optimization-039}
 learner = lrn("classif.svm",
   cost  = to_tune(1e-1, 1e5),
   gamma = to_tune(1e-1, 1),
@@ -716,7 +784,7 @@ learner = lrn("classif.svm",
 When an auto tuner is created from such a learner, the search space is automatically constructed from the tune tokens.
 This search space is an object of class `r ref("ParamSet")`.
 
-```{r optimization-036}
+```{r optimization-040}
 learner$param_set$search_space()
 ```
 
@@ -750,7 +818,7 @@ For the purpose of defining search spaces, the relevant arguments of the domain 
 
 We can recreate the search space from earlier using the `p_dbl()` function.
 
-```{r optimization-037}
+```{r optimization-041}
 search_space = ps(
   cost  = p_dbl(lower = 1e-1, upper = 1e5),
   gamma = p_dbl(lower = 1e-1, upper = 1)
@@ -773,14 +841,14 @@ A search space is bounded if all parameters are bounded:
 
 One can check whether a `ParamSet` (or `Param`) is bounded by accessing the `$is_bounded` field.
 
-```{r optimization-038}
+```{r optimization-042}
 ps(cost = p_dbl(lower = 0.1, upper = 1))$is_bounded
 ps(cost = p_dbl(lower = 0.1, upper = Inf))$is_bounded
 ```
 
 As a second example, we define a search space in which we search the optimal `cost` parameter in the range $[0.1, 1]$ and the best kernel of all values `"polynomial"` and `"radial"`.
 
-```{r optimization-039}
+```{r optimization-043}
 search_space = ps(
   cost   = p_dbl(lower = 0.1, upper = 1),
   kernel = p_fct(levels = c("polynomial", "radial"))
@@ -793,7 +861,7 @@ The SVM, for example, has the `degree` parameter that is only valid when the `ke
 We can specify this constraint by using the `depends` argument of the domain constructor.
 To tune the `degree` parameter, one would need to do the following:
 
-```{r optimization-040}
+```{r optimization-044}
 search_space = ps(
   cost   = p_dbl(-1, 1),
   kernel = p_fct(c("polynomial", "radial")),
@@ -808,7 +876,7 @@ This is done by using a **transformation** (`trafo`), which allow to exercise mo
 This is a function that is applied to a parameter after it has been sampled by the tuner.
 We can tune `cost` on a logarithmic scale by sampling on the linear scale $[-1, 1]$ and computing $10^x$ from that value.
 
-```{r optimization-041}
+```{r optimization-045}
 search_space = ps(
   cost   = p_dbl(-1, 1, trafo = function(x) 10^x),
   kernel = p_fct(c("polynomial", "radial"))
@@ -817,7 +885,7 @@ search_space = ps(
 
 @fig-technical-paradox-tuning-log visualizes the resulting design.
 
-```{r optimization-042}
+```{r optimization-046}
 #| echo: false
 #| label: fig-technical-paradox-tuning-log
 #| fig-cap: Design points from a grid search when tuning an SVM. The resolution is 5 and the cost parameter on a logarithmic scale.
@@ -838,7 +906,7 @@ It is even possible to add or remove parameters.
 
 In our example we now assume that the parameter `cost` should be set to a higher value when the `kernel` is `"polynomial"`.
 
-```{r optimization-043}
+```{r optimization-047}
 search_space = ps(
   cost = p_dbl(-1, 1, trafo = function(x) 10^x),
   kernel = p_fct(c("polynomial", "radial")),
@@ -853,7 +921,7 @@ search_space = ps(
 
 An exemplary design is depicted in @fig-technical-paradox-trafo.
 
-```{r optimization-044}
+```{r optimization-048}
 #| echo: false
 #| label: fig-technical-paradox-trafo
 #| fig-cap: Design grid for tuning a SVM. The resolution is 5, the cost parameter is logarithmically transformed when points with a `kernel` equal to `"polynomial"` are shifted to the right by a value of 2.
@@ -871,7 +939,7 @@ When trying to tune over these hyperparameters, it is necessary to perform a tra
 An example is the `class.weights` parameter of the [Support Vector Machine](https://machinelearningmastery.com/cost-sensitive-svm-for-imbalanced-classification/) (SVM), which takes a named vector of class weights with one entry for each target class.
 The transformation that would tune `class.weights` for the `r ref("mlr_tasks_sonar", text = "sonar")` dataset could be:
 
-```{r optimization-045}
+```{r optimization-049}
 search_space = ps(
   class.weights = p_dbl(lower = 0.1, upper = 0.9,
     trafo = function(x) c(M = x, R = 1 - x))
@@ -884,7 +952,7 @@ Or it may be that a choice of special numeric values should be tried.
 For this, the `r ref("p_fct")` constructor's `level` argument may be a value that is not a `character` vector, but something else.
 If, for example, only the values 0.1, 3, and 10 should be tried for the `cost` parameter, even when doing random search, then the following search space would achieve that:
 
-```{r optimization-046}
+```{r optimization-050}
 search_space = ps(
   cost = p_fct(c(0.1, 3, 10)),
   kernel = p_fct(c("polynomial", "radial"))
@@ -892,7 +960,7 @@ search_space = ps(
 ```
 
 This is equivalent to the following:
-```{r optimization-047}
+```{r optimization-051}
 search_space = ps(
   cost   = p_fct(c("0.3", "0.7"),
     trafo = function(x) list(`0.3` = 0.3, `0.7` = 0.7)[[x]]),
@@ -902,7 +970,7 @@ search_space = ps(
 
 This makes sense when considering that factorial tuning parameters are always `character` values:
 
-```{r optimization-048}
+```{r optimization-052}
 search_space = ps(
   cost   = p_fct(c(0.3, 0.7)),
   kernel = p_fct(c("polynomial", "radial"))
@@ -932,7 +1000,7 @@ When introducing the dependency, we need to use the `cost` value from *before* t
 Concretely, we write the dependency as `cost == "val2"` and not `cost == 0.7`.
 :::
 
-```{r optimization-049}
+```{r optimization-053}
 learner = lrn("classif.svm",
   cost = to_tune(c(val1 = 0.3, val2 = 0.7)),
   shrinking = to_tune(p_lgl(depends = cost == "val2"))
@@ -943,7 +1011,7 @@ learner$param_set$search_space()
 The `$search_space()` picks up dependencies from the underlying `r ref("ParamSet")` automatically.
 So if the `kernel` is tuned, then `degree` automatically gets the dependency on it, without us having to specify that.
 
-```{r optimization-050}
+```{r optimization-054}
 learner = lrn("classif.svm",
   kernel = to_tune(c("polynomial", "radial")),
   degree = to_tune(p_int(1, 3))
@@ -956,7 +1024,7 @@ This may be especially useful for vector hyperparameters that should be searched
 In this special case, the `.extra_trafo` must return a list with a single element, as it corresponds to a single hyperparameter that is being tuned.
 Suppose the `class.weights` hyperparameter should be tuned along two dimensions:
 
-```{r optimization-051}
+```{r optimization-055}
 par = ps(
   M = p_dbl(0.1, 0.9),
   R= p_dbl(0.1, 0.9),
@@ -979,20 +1047,20 @@ The package `r ref_pkg("mlr3tuningspaces")` tries to make HPO more accessible by
 These search spaces should be applicable to a wide range of data sets, however, they may need to be adapted in specific situations.
 The search spaces are stored in the dictionary `r ref("mlr_tuning_spaces")`.
 
-```{r optimization-052}
+```{r optimization-056}
 as.data.table(mlr_tuning_spaces)
 ```
 
 The tuning spaces are named according to the scheme `{learner-id}.{publication}`.
 The sugar function `r ref("lts()")` is used to retrieve a `r ref("TuningSpace")`.
 
-```{r optimization-053}
+```{r optimization-057}
 lts("classif.rpart.default")
 ```
 
 A tuning space can be passed to `ti()` as the `search_space`.
 
-```{r optimization-054}
+```{r optimization-058}
 instance = ti(
   task = tsk("sonar"),
   learner = lrn("classif.rpart"),
@@ -1005,7 +1073,7 @@ instance = ti(
 
 Alternatively, we can explicitly set the search space of a learner with `r ref("TuneToken", "TuneTokens")`
 
-```{r optimization-055}
+```{r optimization-059}
 vals = lts("classif.rpart.default")$values
 vals[1]
 learner = lrn("classif.rpart")
@@ -1014,14 +1082,14 @@ learner$param_set$set_values(.values = vals)
 
 When passing a learner to `r ref("lts()")`, the default search space from the @hpo_practical article is applied.
 
-```{r optimization-056}
+```{r optimization-060}
 #| result: false
 lts(lrn("classif.rpart"))
 ```
 
 It is possible to simply overwrite a predefined tuning space in construction, for example here we change the range of the `maxdepth` hyperparameter in rpart:
 
-```{r optimization-057}
+```{r optimization-061}
 lts("classif.rpart.rbv2", maxdepth = to_tune(1, 20))
 ```
 
@@ -1089,7 +1157,7 @@ The bracket $s = 3$ is the most explorative bracket and $s = 0$ performance a ra
 In this practical example, we will optimize the hyperparameters of XGBoost on the `r ref("mlr_tasks_spam", "Spam")` data set.
 We begin by loading the `r ref("mlr_learners_classif.xgboost", "classif.xgboost")` learner.
 
-```{r optimization-058}
+```{r optimization-062}
 learner = lrn("classif.xgboost")
 ```
 
@@ -1101,7 +1169,7 @@ We need to tag the parameter with `"budget"` to identify it as a fidelity parame
 For the other hyperparameters, we take the search space for XGBoost from the @hpo_practical article.
 This search space works for a wide range of data sets.
 
-```{r optimization-059}
+```{r optimization-063}
 learner$param_set$set_values(
   nrounds           = to_tune(p_int(16, 128, tags = "budget")),
   eta               = to_tune(1e-4, 1, logscale = TRUE),
@@ -1117,7 +1185,7 @@ learner$param_set$set_values(
 We construct the tuning instance.
 We use the `"none"` terminator because Hyperband terminates itself when all brackets are evaluated.
 
-```{r optimization-060}
+```{r optimization-064}
 instance = ti(
   task = tsk("spam"),
   learner = learner,
@@ -1132,19 +1200,19 @@ Hyperband can start from the beginning when the last bracket is evaluated.
 We control the number of Hyperband runs with the `repetition` argument.
 The setting `repetition = Inf` is useful when a terminator should stop the optimization.
 
-```{r optimization-061}
+```{r optimization-065}
 tuner = tnr("hyperband", eta = 2, repetitions = 1)
 ```
 
 Using `eta = 2` and a range from 16 to 128 boosting iterations results in the following schedule.
 
-```{r optimization-062}
+```{r optimization-066}
 hyperband_schedule(r_min = 16, r_max = 128, eta = 2)
 ```
 
 Now we are ready to start the tuning.
 
-```{r optimization-063}
+```{r optimization-067}
 #| output: false
 tuner$optimize(instance)
 ```
@@ -1152,13 +1220,13 @@ tuner$optimize(instance)
 The result of a run is the configuration with the best performance.
 This does not necessarily have to be a configuration evaluated with the highest budget since we can overfit the data with too many boosting iterations.
 
-```{r optimization-064}
+```{r optimization-068}
 instance$result[, .(nrounds, eta, max_depth, colsample_bytree, colsample_bylevel, lambda, alpha, subsample)]
 ```
 
 The archive of a Hyperband run has the additional columns `"bracket"` and `"stage"`.
 
-```{r optimization-065}
+```{r optimization-069}
 as.data.table(instance$archive)[, .(bracket, stage, classif.ce, eta, max_depth, colsample_bytree)]
 ```
 
@@ -1167,20 +1235,20 @@ as.data.table(instance$archive)[, .(bracket, stage, classif.ce, eta, max_depth, 
 In this example, we will optimize the hyperparameters of the support vector machine on the `r ref("mlr_tasks_sonar", "Sonar")` data set.
 We begin by constructing a classification machine by setting `type` to `"C-classification"`.
 
-```{r optimization-066}
+```{r optimization-070}
 learner = lrn("classif.svm", id = "svm", type = "C-classification")
 ```
 
 The `r ref_pkg("mlr3pipelines")` package features a `r ref("PipeOp")` for subsampling.
 
-```{r optimization-067}
+```{r optimization-071}
 po("subsample")
 ```
 
 The `r ref("PipeOp")` controls the size of the training data set with the `frac` parameter.
 We connect the `r ref("PipeOp")`  with the learner and get a `r ref("GraphLearner")`.
 
-```{r optimization-068}
+```{r optimization-072}
 graph_learner = as_learner(
   po("subsample") %>>%
   learner
@@ -1190,7 +1258,7 @@ graph_learner = as_learner(
 The graph learner subsamples and then fits a support vector machine on the data subset.
 The parameter set of the graph learner is a combination of the parameter sets of the `r ref("PipeOp")` and learner.
 
-```{r optimization-069}
+```{r optimization-073}
 as.data.table(graph_learner$param_set)[, .(id, lower, upper, levels)]
 ```
 
@@ -1202,7 +1270,7 @@ The data set size is increased from 3.7% to 100%.
 For the other hyperparameters, we took the search space for support vector machines from the @kuehn_2018 article.
 This search space works for a wide range of data sets.
 
-```{r optimization-070}
+```{r optimization-074}
 graph_learner$param_set$set_values(
   subsample.frac  = to_tune(p_dbl(3^-3, 1, tags = "budget")),
   svm.kernel      = to_tune(c("linear", "polynomial", "radial")),
@@ -1216,7 +1284,7 @@ graph_learner$param_set$set_values(
 Support vector machines often crash or never finish the training with certain hyperparameter configurations.
 We set a timeout of 30 seconds and a fallback learner (@sec-encapsulation-fallback) to handle these cases.
 
-```{r optimization-071}
+```{r optimization-075}
 graph_learner$encapsulate = c(train = "evaluate", predict = "evaluate")
 graph_learner$timeout = c(train = 30, predict = 30)
 graph_learner$fallback = lrn("classif.featureless")
@@ -1225,7 +1293,7 @@ graph_learner$fallback = lrn("classif.featureless")
 Let's create the tuning instance.
 We use the `"none"` terminator because Hyperband controls the termination itself.
 
-```{r optimization-072}
+```{r optimization-076}
 instance = ti(
   task = tsk("sonar"),
   learner = graph_learner,
@@ -1237,26 +1305,26 @@ instance = ti(
 
 We load the `r ref("TunerHyperband", "hyperband")` tuner and set `eta = 3`.
 
-```{r optimization-073}
+```{r optimization-077}
 tuner = tnr("hyperband", eta = 3)
 ```
 
 Using `eta = 3` and a lower bound of 3.7% for the data set size, results in the following schedule.
 
-```{r optimization-074}
+```{r optimization-078}
 hyperband_schedule(r_min = 3^-3, r_max = 1, eta = 3)
 ```
 
 Now we are ready to start the tuning.
 
-```{r optimization-075}
+```{r optimization-079}
 #| output: false
 tuner$optimize(instance)
 ```
 
 The best model is a support vector machine with a polynomial kernel.
 
-```{r optimization-076}
+```{r optimization-080}
 instance$result[, .(subsample.frac, svm.cost, svm.degree, svm.gamma, svm.kernel, svm.tolerance, classif.ce)]
 ```
 
@@ -1265,7 +1333,7 @@ We look at the 8 configurations that were evaluated on the complete data set.
 The configuration with the best classification error on the full data set was sampled in bracket 2.
 The classification error was estimated to be 30% on 33% of the data set and decreased to 22% on the full data set (see blue line in @fig-hyperband).
 
-```{r optimization-077}
+```{r optimization-081}
 #| echo: false
 #| label: fig-hyperband
 #| fig-cap: "Optimization path of the 8 configurations evaluated on the complete data set."
@@ -1313,7 +1381,7 @@ We will tune
 * The `minsplit` hyperparameter that controls how many observations must be present in a leaf for another split to be attempted.
 * The `maxdepth` hyperparameter that limits the depth of the tree.
 
-```{r optimization-078}
+```{r optimization-082}
 learner = lrn("classif.rpart",
   cp = to_tune(1e-04, 1e-1),
   minsplit = to_tune(2, 128),
@@ -1325,7 +1393,7 @@ measures = msrs(c("classif.ce", "selected_features"))
 
 Note that as we tune with respect to multiple measures, the function `ti` creates a `r ref("TuningInstanceMultiCrit")` instead of a `r ref("TuningInstanceSingleCrit")`.
 
-```{r optimization-079}
+```{r optimization-083}
 instance = ti(
   task = tsk("sonar"),
   learner = learner,
@@ -1339,18 +1407,18 @@ instance
 
 As before we will then select and run a tuning algorithm, here we use random search:
 
-```{r optimization-080,output=FALSE}
+```{r optimization-084,output=FALSE}
 tuner = tnr("random_search", batch_size = 30)
 tuner$optimize(instance)
 ```
 
 Finally, we inspect the best-performing configurations, i.e., the Pareto set and visualize the estimated Pareto front:
 
-```{r optimization-081}
+```{r optimization-085}
 instance$archive$best()[, list(cp, minsplit, maxdepth, classif.ce, selected_features)]
 ```
 
-```{r optimization-082}
+```{r optimization-086}
 #| label: fig-pareto
 #| fig-cap: Pareto front of selected features and classification error. Purple dots represent tested configurations, each blue dot individually represents a Pareto-optimal configuration and all blue dots together represent the Pareto front.
 #| fig-alt: Scatter plot with selected_features on x-axis and classif.ce on y-axis. Purple dots represent simulated tested configurations of selected_features vs. classif.ce and blue dots and a blue line along the bottom-left of the plot shows the Pareto front.
