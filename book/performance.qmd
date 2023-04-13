@@ -70,47 +70,30 @@ If the training data is too small, the intermediate model learns less complex re
 On the other hand, we also want as much test data as possible to reliably estimate the generalization performance.
 However, both goals are not possible to achieve at the same time if we have only access to a limited amount of data.
 In practice, it is common to use 2/3 of the data as training set and 1/3 as test set for the holdout strategy as this provides a reasonable trade-off between bias and variance of the generalization performance estimate (see also @kohavi1995 and @dobbin2011).
-<!-- FIXME: ^ citations from HPO paper re: holdout, not sure if we'd rather present them differently. -->
 
 In @sec-basics, we have already applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
-Below, we again summarize the entire performance estimation process of the holdout method, from partitioning the task and choosing a performance measure to calculating the score to estimate the generalization performance.
-
-We first define the `r ref("mlr_tasks_penguins")` task and use the `r ref("partition()")` function to randomly create two disjoint sets containing the row indices which are used to partition the data into training and test set:
+In the following we will go into more detail regarding the evaluation process, so let us set up a learner and task again:
 
 ```{r performance-003}
 task = tsk("penguins")
 splits = partition(task, ratio = 2/3)
-str(splits)
-```
-
-We then create a `r ref("Learner")` object (here a decision tree from the `r ref_pkg("rpart")` package) and train the intermediate model using only the training set.
-After training, we can use the `$predict` method of the `r ref("Learner")` object to make predictions based on the test set and store the resulting `r ref("Prediction")` object which will be later used to calculate the performance measure:
-
-```{r}
 learner = lrn("classif.rpart")
 learner$train(task, splits$train)
 pred = learner$predict(task, splits$test)
-pred
 ```
 
 The next step is to select a suitable performance measure from the many possibilities available in `r mlr3` in the `r ref("mlr_measures")` dictionary.
 <!-- TODO: Some practical hints on how to choose a perf. measure here? E.g., mse when outliers should be avoided and large absolute errors should be penalized more, mae when errors should be penalized proportionally to the magnitude of the error -->
 Passing the dictionary to the `as.data.table` function provides an overview of implemented measures with additional information from which we can select a suitable performance measure (see also the link provided under *Measures overview* in @sec-appendix-overview-tables).
-For a compact and summarized overview, we print the first 5 performance measures from the dictionary in a `data.table`:
 
 ```{r performance-004}
 msr_tbl = as.data.table(mlr_measures)
-msr_tbl[1:5, .(key, label, task_type, predict_type, task_properties)]
+msr_tbl[1:5, .(key, task_type, predict_type, task_properties)]
 ```
 
 <!-- ::: {.callout-tip} -->
 We will typically look for a measure that fits our `task_type` at hand (e.g., `"classif"` for the `penguins` task).
 Looking at the `task_properties` columns is useful to identify performance measures that support only binary classification tasks (indicated by `"twoclass"` in the `task_properties` column) such as the `"classif.auc"` measure (see also @sec-roc-space for more details on the AUC).
-
-::: {.callout-tip}
-For multiclass classification tasks, generalizations of the AUC measure are also available but need to be selected explicitly (e.g., `"classif.mauc_au1p"`).
-:::
-
 Similarly, some measures require the learner to predict probabilities (indicated by `"prob"` in the `predict_type` column), while others require predicting discrete class labels (indicated by `"response"`).
 When constructing a learner, we could specify `predict_type = "prob"` to support measures that are not defined on class labels but on probabilities, such as the aforementioned AUC.
 <!-- An overview of common performance measures implemented in `r mlr3`, including a short description can also be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables. -->
@@ -189,7 +172,7 @@ The best we can do if we only have access to a limited amount of data is to esti
 #| label: fig-ml-abstraction
 #| fig-cap: "A general abstraction of the performance estimation process: The available data is (repeatedly) split into (a set of) training data and test data (data splitting / resampling process). The learner is applied to each training data and produces intermediate models (learning process). Each intermediate model along with its associated test data produces predictions. The performance measure compares these predictions with the associated actual target values from each test data and computes a performance value for each test data. All performance values are aggregated into a scalar value to estimate the generalization performance (evaluation process)."
 #| fig-align: "center"
-#| fig-alt: "A general abstraction of the performance estimation process: The available data is (repeatedly) split into (a set of) training data and test data (data splitting / resampling process). The learner is applied to each training data and produces intermediate models (learning process). Each intermediate model along with its associated test data produces predictions. The performance measure compares these predictions with the associated actual target values from each test data and computes a performance value for each test data. All performance values are aggregated into a scalar value to estimate the generalization performance (evaluation process)."
+#| fig-alt: "A flowchart-like diagram with 3 overlapping boxes. Left box (red) has the caption 'Data splitting / resampling process', right box (blue) has caption 'Learning process', and bottom box (yellow) has caption 'Evaluation process'. The process starts in the left box with 'Data' and an arrow to 'Resampling Strategy', which bifurcates into two elements stacked vertically: 'Train Set(s)' above and 'Test Set(s)' below. The 'Train set(s)' element leads to a large blue box with the caption 'Learning process'. There, the 'Train set(s)' flows into the Learner, together with 'Hyperparameters'. An arrow points from the 'Learner' to a stack of 'Intermediate Model(s)'. One thick arrow goes down into the yellow box to a stack of 'Prediction(s)'. And arrow goes from there to 'Performance measure'. The 'Test set(s)' from earlier also have an arrow to 'Performance measure'. From there, a thick arrow goes to 'Performance Value(s)', which has a final dashed arrow to 'Aggregated Performance'."
 knitr::include_graphics("Figures/ml_abstraction-2.svg")
 ```
 
@@ -877,11 +860,8 @@ Similar to the test output before, this visualization leads to the conclusion th
 
 ## Evaluation of Binary Classifiers {#sec-roc}
 
-<!-- So far we have focused on methods applicable to general classification and regression tasks. -->
-<!-- For the special case of binary classification, there are specialized performance measures and methods to analyze and compare the performance. -->
-<!-- Binary classification is unique because of the presence of a positive and negative class and a threshold probability to distinguish between the two. -->
 
-For the special case of binary classification, there are specialized performance measures and visualization tools to analyze and compare the performance of classifiers.
+We will now look at specialized performance measures for binary classification implemented in `r mlr3`.
 We start introducing the confusion matrix and some useful performance measures that can be derived from it to evaluate binary classifiers when the focus is on accurately predicting the two discrete classes.
 We also describe a trade-off between two important measures and illustrate how different thresholds to cut-off predicted probabilities into discrete classes affect these measures.
 In @sec-roc-space, we then put special emphasis on a method to visually compare the performance of classifiers.
@@ -1054,7 +1034,11 @@ ggplot(rocvals, aes(FPR, TPR)) +
 A natural performance measure that can be derived from the ROC curve is the area under the curve (AUC).
 The higher the AUC value, the better the performance, whereas a random classifier would result in an AUC of 0.5  (see @fig-roc, panel (b) for an illustration).
 The AUC can be interpreted as the probability that a randomly chosen positive instance is ranked higher (in the sense that it gets a higher predicted probability of belonging to the positive class) by the classification model than a randomly chosen negative instance.
-<!-- ROC curves for different labels are symmetric with respect to the diagonal, so  -->
+
+::: {.callout-tip}
+For multiclass classification tasks, generalizations of the AUC measure are also available. 
+See e.g. `"classif.mauc_au1p"`.
+:::
 
 ```{r performance-054, echo = FALSE}
 #| label: fig-roc
