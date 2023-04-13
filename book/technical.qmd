@@ -51,16 +51,17 @@ An important step in parallel programming involves the identification of section
 The key characteristic is that these sections do not depend on each other, i.e. section A can be ran without waiting for results from section B.
 Fortunately, these sections are comparably easy to spot for machine learning experiments:
 
-1. The learning algorithm (or other computationally intensive parts of a machine learning pipeline, c.f. @sec-pipelines) *may* contain independent sections which can run in parallel, e.g.
+1. The training of a learning algorithm (or other computationally intensive parts of a machine learning pipeline, c.f. @sec-pipelines) *may* contain independent sections which can run in parallel, e.g.
     * A single decision tree iterates over all features to find the best split point, for each feature independently.
     * A random forest usually fits hundreds of trees independently.
     * Many feature filters work in a univariate fashion, i.e. calculate a numeric score for each feature independently.
 
    Parallelization of learning algorithms is covered in @sec-parallel-learner.
-2. A resampling consists of independent repetitions of train-test-splits (@sec-parallel-resample).
-3. A benchmark consists of multiple independent resamplings (@sec-parallel-benchmark).
-4. Tuning (@sec-optimization) is repeated benchmarking, embedded in a sequential procedure which determines the hyperparameter configuration to try next.
+1. A resampling consists of independent repetitions of train-test-splits (@sec-parallel-resample).
+1. A benchmark consists of multiple independent resamplings (@sec-parallel-benchmark).
+1. Tuning (@sec-optimization) is repeated benchmarking, embedded in a sequential procedure which determines the hyperparameter configuration to try next.
    In addition to parallelization of the benchmark, some tuners propose multiple configurations to evaluate independently in each sequential step, which provides a second level for parallelization discussed in @sec-nested-resampling-parallelization.
+1. The predictions of a single learner for multiple observations is independent (@sec-parallel-predict).
 
 When computational problems are so easy to parallelize like the examples listed in (1)-(4), they are often referred to as `r define("embarrassingly parallel")`.
 Whenever you can put the heavy lifting into a function and call it with a map-like function like `lapply()`, you are facing an embarrassingly parallel problem.
@@ -319,8 +320,14 @@ resample(
 )
 ```
 
-Here, we have two opportunities to parallelize: the inner cross-validation of the auto tuner with 2 folds, or the outer cross-validation of the resampling with 5 folds.
-Let's say that we have a single CPU with four cores available.
+Here, we have three opportunities to parallelize:
+
+1. the inner cross-validation of the auto tuner with 2 folds,
+2. the outer cross-validation of the resampling with 5 folds, and
+3. the 20 points proposed by the random search in a single batch.
+
+Because the third opportunity is not always applicable, especially for many advanced tuning algorithms which propose only a single points in each iteration, we will focus on the first two opportunities.
+Furthermore, we assume that we have a single CPU with four cores available.
 
 If we opt to parallelize the outer CV, all four cores would be utilized first with the computation of the first 4 resampling iterations.
 The computation of the fifth iteration has to wait.
@@ -435,7 +442,7 @@ This occurs frequently, especially in tuning, when a hyperparameter strongly inf
 Examples are the number of trees for random forests or the number of regularization values to be tested in penalized regression.
 
 How efficient the parallelization turns out depends in particular on the scheduling strategy of the backend.
-After the first batch of jobs is send to the worker, the next jobs are either started
+After the first batch of jobs is sent to the worker, the next jobs are either started
 
 (a) as soon as all results have been collectively reported back to the main process, or
 (b) as soon as the first job reports back.
@@ -444,6 +451,32 @@ Method (a) usually comes with less synchronization overhead and is best suited f
 Method (b) is faster if the runtimes are heterogeneous, especially if the parallelization overhead is neglectable in comparison with the runtime for the computation.
 E.g., for `r ref("parallel::mclapply()")`, the behavior of the scheduler can be controlled with the `mc.preschedule` option and `r ref("parallel::parSapply()")` implements Method (a) while `r ref("parallel::parSapplyLB()")` implements scheduling according to method (b).
 FIXME: future options
+
+
+### Parallelization of Predictions {#sec-parallel-predict}
+
+Finally, also the prediction of a single learner can be parallelized as the predictions of two observations are independent.
+For most learners, training is the bottleneck and parallelizing the prediction is not a worthwhile endeavor, but of course there are exceptions.
+
+Technically, the test data is first split into multiple groups and the predict-method of the learner is applied to each group in parallel using active backend configured via `r ref("future::plan()")`.
+The resulting predictions are then combined internally in a second step.
+However, to avoid predicting in parallel accidentally, parallel predictions must first be enabled in the learner via the `parallel_predict` field:
+
+```{r}
+# train random forest on spam task
+task = tsk("spam")
+learner = lrn("classif.ranger")
+learner$train(task)
+
+# set up parallel predict on 4 workers
+future::plan("multisession", workers = 4)
+learner$parallel_predict = TRUE
+
+# perform prediction
+prediction = learner$predict(task)
+```
+
+The resulting `r ref("Prediction")` is identical to the one computed sequentially.
 
 
 ### Reproducibility
@@ -520,8 +553,9 @@ If this flag is set, `r mlr3` does not call into the `r ref_pkg("future")` packa
 Since ML algorithms are confronted with arbitrary, often messy data, errors are not uncommon here, and we often just need to move on during benchmarking or tuning.
 Thus, we need a mechanism to
 
-  1. capture all signaled conditions such as messages, warnings and errors so that we can analyze them post-hoc (called "encapsulation", covered in this section), and
-  2. a statistically sound way to proceed while being able to aggregate over partial results (next @sec-fallback).
+  1. capture all signaled conditions such as messages, warnings and errors so that we can analyze them post-hoc (called "encapsulation", covered in this section),
+  1. deal with algorithms which do not terminate in a reasonable time, and
+  1. a statistically sound way to proceed while being able to aggregate over partial results (next @sec-fallback).
 
 Encapsulation ensures that signaled conditions (such as messages, warnings and errors) are intercepted: all conditions raised during the training or predict step are logged into the learner, and errors do not interrupt the program flow.
 I.e., the execution of the calling function or package (here: `r mlr3`) continues as if there had been no error, though the result (fitted model during `train()`, predictions during `predict()`) are missing.
@@ -551,7 +585,7 @@ learner$errors
 
 Another method for encapsulation is implemented in the `r ref_pkg("callr")` package.
 In contrast to `r ref_pkg("evaluate")`, the computation is taken out in a separate R process.
-This guards the calling session against segfaults which otherwise would tear down the complete main R session.
+This guards the calling session against segmentation faults which otherwise would tear down the complete main R session.
 On the downside, starting new processes comes with comparably more computational overhead.
 
 ```{r technical-017}
@@ -562,7 +596,16 @@ learner$errors
 ```
 
 With either of these encapsulation methods, we can now catch errors and post-hoc analyze the messages, warnings and error messages.
-Unfortunately, this is only half the battle.
+Additionally, a timeout can be set so that learners do not run for an indefinite time but are terminated after a specified time.
+Interrupting learners works differently depending on the encapsulation (see `r ref("mlr3misc::encapsulate()"`) and, when viewed from the outside, behave as if they would signal an error after reaching the timeout.
+The timeout can be set separately for training and prediction and must be provided in seconds:
+
+```{r}
+# 5 minute timeout for training, no timeout for predict
+learner$timeout = c(train = 5 * 60, predict = Inf)
+```
+
+Unfortunately, catching errors and ensuring an upper time limit is only half the battle.
 Without a model, it is not possible to get predictions:
 
 ```{r technical-018, error = TRUE}
@@ -652,7 +695,7 @@ Imagine again that our goal is to benchmark two algorithms using cross-validatio
   If the logistic regression is rather certain about the predicted label (> 90% probability), it returns the label and returns a missing value otherwise.
 
 At its core, this is the same problem as outlined before.
-If we would measure the performance using only the non-missing predictions, Algorithm B would likely outperform algorithm A.
+If we measure the performance using only the non-missing predictions, Algorithm B would likely outperform algorithm A.
 However, this approach does not factor in that you can not generate predictions for all observations.
 Long story short, if a fallback learner is specified, missing predictions of the base learner will be automatically replaced with predictions from the fallback learner.
 This is illustrated in the following example:
@@ -796,7 +839,7 @@ In the following, we will show how to work with data backends that are available
 ### Databases with DataBackendDplyr
 
 To demonstrate the `r ref("mlr3db::DataBackendDplyr")` we use the NYC flights data set from the `r ref_pkg("nycflights13")` package and move it into a SQLite database.
-Although `r ref("as_sqlite_backend")` provides a convenient function to perform this step, we construct the database manually here.
+Although `r ref("as_sqlite_backend()")` provides a convenient function to perform this step, we construct the database manually here.
 
 ```{r technical-025, message = FALSE}
 # load data
@@ -831,7 +874,7 @@ library("dbplyr")
 tbl = tbl(con, "flights")
 ```
 
-First, we select a subset of columns to work on:
+We now build up an SQL query in a step-wise fashion using `r ref_pkg("dplyr")` verbs and start by selecting a subset of columns to work on:
 
 ```{r technical-027}
 keep = c("row_id", "year", "month", "day", "hour", "minute", "dep_time",
@@ -845,7 +888,7 @@ Additionally, we remove those observations where the arrival delay (`arr_delay`)
 tbl = filter(tbl, !is.na(arr_delay))
 ```
 
-To keep runtime reasonable for this toy example, we filter the data to only use every second row:
+To reduce the runtime for this example, we also filter the data to only use every second row:
 
 ```{r technical-029}
 tbl = filter(tbl, row_id %% 2 == 0)
@@ -876,26 +919,22 @@ b$head()
 
 Note that the `r ref("DataBackendDplyr")` does not know about any rows or columns we have filtered out with `r ref_pkg("dplyr")` before, it just operates on the view we provided.
 
-As we now have constructed a backend, we can switch over to `r mlr3` for model fitting and create the following `r mlr3` objects:
-
-* A regression task, based on the previously created `r ref("mlr3db::DataBackendDplyr")`.
-* A regression learner (`lrn("regr.rpart")).
-* A resampling strategy: 3 times repeated subsampling using 2\% of the observations for training ("`r ref("mlr_resamplings_subsampling")`")
-* Measures `"regr.mse"`, `"time_train"`, and `"time_predict"`
+As we now have constructed a backend, we can switch over to `r mlr3` for model fitting on a task based on the previously created `r ref("mlr3db::DataBackendDplyr")`:
 
 ```{r technical-033}
 task = as_task_regr(b, id = "flights_sqlite", target = "arr_delay")
 learner = lrn("regr.rpart")
-measures = mlr_measures$mget(c("regr.mse", "time_train", "time_predict"))
-resampling = rsmp("subsampling", repeats = 3, ratio = 0.02)
+resampling = rsmp("subsampling", ratio = 0.02, repeats = 3)
 ```
 
-We pass all these objects to `r ref("resample()")` to perform a simple resampling with three iterations.
+We pass all these objects to `r ref("resample()")` to perform a subsampling on 2% of the observations three times.
 In each iteration, only the required subset of the data is queried from the SQLite database and passed to `r ref("rpart::rpart()")`:
 
 ```{r technical-034}
 rr = resample(task, learner, resampling)
 print(rr)
+
+measures = mlr_measures$mget(c("regr.mse", "time_train", "time_predict"))
 rr$aggregate(measures)
 ```
 
