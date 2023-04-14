@@ -46,7 +46,7 @@ A performance measure typically computes a numeric score indicating how well the
 However, it may also reflect other qualities such as the time for training a model or predicting.
 Once we have decided on a performance measure, the next step is to adopt a strategy that defines how to use the available data to estimate the generalization performance.
 Unfortunately, using the same data to train and test a model is a bad strategy as it would lead to an overly optimistic performance estimate.
-For example, an overfitted model may perfectly fit the data on which it was trained, but may not generalize well to new data.
+For example, an overfitted model may perfectly fit the data on which it was trained by merely memorizing it, but it will then only guess randomly on new data.
 Assessing its performance using the same data it was trained would misleadingly suggest a well-performing model.
 This makes it necessary to test a model on independent data that has not been used to train the model.
 However, we typically train a deployed model on all available data, which leaves no further data to assess its generalization performance.
@@ -95,6 +95,7 @@ msr_tbl[1:5, .(key, task_type, predict_type, task_properties)]
 We will typically look for a measure that fits our `task_type` at hand (e.g., `"classif"` for the `penguins` task).
 Looking at the `task_properties` columns is useful to identify performance measures that support only binary classification tasks (indicated by `"twoclass"` in the `task_properties` column) such as the `"classif.auc"` measure (see also @sec-roc-space for more details on the AUC).
 Similarly, some measures require the learner to predict probabilities (indicated by `"prob"` in the `predict_type` column), while others require predicting discrete class labels (indicated by `"response"`).
+Note that some measures list a `NA` as `task_type`, or do not list any `task_properties`, which indicates that they do not have specific requirements in that regard.
 When constructing a learner, we could specify `predict_type = "prob"` to support measures that are not defined on class labels but on probabilities, such as the aforementioned AUC.
 <!-- An overview of common performance measures implemented in `r mlr3`, including a short description can also be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables. -->
 <!-- ::: -->
@@ -178,7 +179,7 @@ knitr::include_graphics("Figures/ml_abstraction-2.svg")
 
 <!-- Existing resampling strategies differ in how they partition the available data into training and test set. -->
 A variety of resampling strategies exist, each with their respective advantages and disadvantages, which depend on the number of available samples, the task complexity, and the type of model.
-For example, the $k$-fold `r index("cross-validation")` method randomly partitions the data into $k$ subsets, called folds (see @fig-cv-illustration).
+For example, the $k$-fold `r index("cross-validation")` method randomly partitions the data into $k$ non-overlapping subsets, called folds (see @fig-cv-illustration).
 Then $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as test data exactly once in each of the $k$ iterations.
 The $k$ performance estimates resulting from each fold are then aggregated to obtain a more reliable performance estimate.
 This makes cross-validation a popular strategy, as each observation is guaranteed to be used in one of the test sets throughout the procedure, making efficient use of the available data for performance estimation.
@@ -233,7 +234,8 @@ Passing the dictionary to the `as.data.table` function provides a more structure
 as.data.table(mlr_resamplings)
 ```
 
-For example, the column `params` shows the parameters of each resampling strategy (e.g., the train-test splitting `ratio` or the number of `repeats`) and the column `iters` shows the default value for the number of performed resampling iterations (i.e., the number of model fits).
+For example, the column `params` shows the parameters of each resampling strategy (e.g., the train-test splitting `ratio` or the number of `repeats`) and the column `iters` is corresponds to the number of performed resampling iterations, i.e. parameters `folds` for cross-validation or `repeats` for bootstrapping, etc.
+Holdout for example shows `iters = 1`, whereas repeated application of the holdout strategy would be identical to choosing the subsampling strategy.
 
 ### Construction {#sec-resampling-construct}
 
@@ -283,7 +285,7 @@ When a `r ref("Resampling")` object is constructed, it does not yet contain a co
 Instead, it merely defines how the data splitting process will be performed on the task when actually running the resampling strategy.
 To actually generate the train-test splits for a given task, we can manually instantiate a resampling strategy by calling the `$instantiate()` method of the previously constructed `r ref("Resampling")` object on the `r ref("mlr_tasks_penguins")` task.
 This will manifest a fixed partition and store the row indices for the training and test sets directly in the `r ref("Resampling")` object.
-We can access these rows via the `$train_set()` and `$test_set()` methods:
+We can access these row IDs via the `$train_set()` and `$test_set()` methods:
 
 ```{r performance-012}
 task = tsk("penguins")
@@ -309,8 +311,9 @@ This will ensure a fair comparison by making use of the exact same training and 
 
 The `r ref("resample()")` function is used to run the resampling strategy defined by a `r ref("Resampling")` object on a task for a given learner.
 It repeatedly fits a model on training sets and stores the predictions made on the corresponding test sets.
-Calling `r ref("resample()")` on a task, learner, and resampling object returns a `r ref("ResampleResult")` which contains all information needed to estimate the generalization performance.
-We can `print` the `r ref("ResampleResult")` object to see its contents:
+The `r ref("Resampling")` does not have to be instantiated before being passed to `resample()`, it takes care of that for us.
+Calling `resample()` on a task, learner, and resampling object returns a `r ref("ResampleResult")` which contains all information needed to estimate the generalization performance.
+We can print the `r ref("ResampleResult")` to see its contents:
 
 ```{r performance-013}
 resampling = rsmp("cv", folds = 4)
@@ -339,14 +342,16 @@ acc = rr$score(msr("classif.acc"))
 acc[, .(iteration, classif.acc)]
 ```
 
+<!-- Already a box in previous chapter
 ::: {.callout-tip}
 If we do not explicitly pass a `r ref("Measure")` object to the `$score()` method, the classification error (`classif.ce`) and the mean squared error (`regr.mse`) are used as defaults for classification and regression tasks respectively.
 :::
+-->
 
 Similarly, we can pass `r ref("Measure")` objects to the `$aggregate()` method to calculate an aggregated score across all resampling iterations.
 There are two approaches for aggregating scores across resampling iterations: The first is referred to as the `r index("macro average")`, which first calculates the measure in each resampling iteration separately, and then averages these scores across all iterations.
 The second approach is the `r index("micro average")`, which pools all predictions across resampling iterations into one `r ref("Prediction")` object and computes the measure on this directly.
-The classification accuracy `msr("classif.acc")` uses the macro-average by default, but the micro-average can be computed as well by specifying the `average` argument:
+The classification accuracy `msr("classif.acc")` uses the macro average by default, but the micro average can be computed as well by specifying the `average` argument:
 
 ```{r performance-015}
 #| eval: true
@@ -356,9 +361,9 @@ rr$aggregate(msr("classif.acc", average = "micro"))
 
 ::: {.callout-tip}
 The classification accuracy compares the predicted class and the ground truth class of a single observation (point-wise loss) and calculates the proportion of correctly classified observations (average of point-wise loss).
-For performance measures that simply take the (unweighted) average of point-wise losses such as the classification accuracy, macro-averaging and micro-averaging will be equivalent unless the test sets in each resampling iteration have different sizes.
-For example, in the code example above, macro-averaging and micro-averaging yield the same classification accuracy because the `r ref("mlr_tasks_penguins")` task (consisting of 344 observations) is split into 4 equally-sized test sets (consisting of 86 observations each) for the 4-fold cross-validation.
-When using 5-fold cross-validation instead, macro-averaging and micro-averaging can lead to a (slightly) different performance estimate as the test sets can not all have the same size:
+For performance measures that simply take the (unweighted) average of point-wise losses such as the classification accuracy, macro averaging and micro averaging will be equivalent unless the test sets in each resampling iteration have different sizes.
+For example, in the code example above, macro averaging and micro averaging yield the same classification accuracy because the `r ref("mlr_tasks_penguins")` task (consisting of 344 observations) is split into 4 equally-sized test sets (consisting of 86 observations each) for the 4-fold cross-validation.
+When using 5-fold cross-validation instead, macro averaging and micro averaging can lead to a (slightly) different performance estimate as the test sets can not all have the same size:
 
 ```{r performance-016}
 rr5 = resample(task, learner, rsmp("cv", folds = 5))
@@ -366,7 +371,17 @@ rr5$aggregate(msr("classif.acc"))
 rr5$aggregate(msr("classif.acc", average = "micro"))
 ```
 
-For other performance measures that are not defined on observation level but rather on a set of observations such as the area under the ROC curve `msr("classif.auc")`, macro-averaging and micro-averaging will usually always lead to different values.
+As an intuition regarding the different approaches, consider what happens in calculating the mean of a vector compared to the mean of two group-wise means:
+
+```{r}
+mean(c(3, 5, 9, 1, 5, 3))
+mean(mean(c(3, 5, 9)), mean(c(1, 5, 3)))
+```
+
+We can see that the results differ, and are easily affected by the sizes of each subgroup.
+
+
+For other performance measures that are not defined on observation level but rather on a set of observations such as the area under the ROC curve `msr("classif.auc")`, macro averaging and micro averaging will usually lead to different values.
 Note that the default type of aggregation is determined by the `r ref("Measure")` object, see also the fields `$average` and `$aggregator` the in help page of `r ref("Measure")` for more details.
 :::
 
@@ -377,7 +392,7 @@ While we are usually interested in this aggregated score, it can be useful to lo
 ```{r performance-017}
 #| echo: false
 #| label: fig-score-aggregate-resampling
-#| fig-cap: "An example of the difference between `$score()` and `$aggregate()`: The former aggregates predictions to a single score within each resampling iteration, and the former aggregates scores across all resampling folds"
+#| fig-cap: "An example of the difference between `$score()` and `$aggregate()`: The former aggregates predictions to a single score within each resampling iteration, and the latter aggregates scores across all resampling folds"
 #| fig-align: "center"
 #| fig-alt: "A funnel-shaped diagram. Left: Each resampling iteration contains multiple rows of predictions, with 3 iterations total. Middle: $score() reduces those to one performance score per resampling iteration, which leaves 3 scores. Right: $aggregate() reduces predictions across all resampling iterations to a single performance score."
 knitr::include_graphics("Figures/predict-score-aggregate-resampling.drawio.svg")
@@ -386,9 +401,10 @@ knitr::include_graphics("Figures/predict-score-aggregate-resampling.drawio.svg")
 ### Inspecting ResampleResult Objects {#sec-resampling-inspect}
 
 Now we will take a look at some important fields and methods of a `r ref("ResampleResult")` object.
-We first take a glimpse at what is actually contained in the object by converting it to a `r ref("data.table")`:
+We first take a glimpse at what is actually contained in the object before converting it to a `r ref("data.table")` for further inspection:
 
 ```{r performance-018}
+rr
 rrdt = as.data.table(rr)
 rrdt
 ```
@@ -396,18 +412,10 @@ rrdt
 We can see that the `r ref("Task")`, `r ref("Learner")`, and `r ref("Resampling")` objects we previously passed to the `r ref("resample()")` function are stored in list columns of the `r ref("data.table")`.
 In addition, we also have an integer column `iteration` that indicates the resampling iteration and another list column that contains the corresponding `r ref("Prediction")` objects of each iteration.
 We can access the respective `prediction` column or directly use the `$predictions()` method of the `r ref("ResampleResult")` object (without converting it to a `r ref("data.table")` first) to obtain a list of `r ref("Prediction")` objects of each resampling iteration.
-<!-- For example, the code below shows the first list element and shows that we get the same result using the `$predictions()` method: -->
 
-
-<!-- ```{r performance-019} -->
-<!-- #| eval: true -->
-<!-- rrdt$prediction[[1]] -->
-<!-- rr$predictions()[[1]] -->
-<!-- ``` -->
-
-This allows us to analyze the predictions of individual intermediate models from each resampling iteration and, e.g., to manually compute a macro-averaged performance estimate.
+This allows us to analyze the predictions of individual intermediate models from each resampling iteration and, e.g., to manually compute a macro averaged performance estimate.
 Instead, we can use the `$prediction()` method to extract a single `r ref("Prediction")` object that combines the predictions of each intermediate model across all resampling iterations.
-The combined prediction object can be used to manually compute a micro-averaged performance estimate, for example:
+The combined prediction object can be used to manually compute a micro averaged performance estimate, for example:
 
 ```{r performance-020}
 #| eval: true
@@ -432,9 +440,6 @@ As models fitted by `r ref_pkg("rpart")` provide information on how important fe
 ```{r performance-022}
 lapply(rr$learners, function(x) x$model$variable.importance)
 ```
-
-
-<!-- - Filter the result and keep only results of certain resampling iterations, e.g., use `$filter(c(1, 3))` to discard the results of the second resampling iteration. -->
 
 Every resampling iteration involves a training step and a prediction step.
 Learner-specific error or warning messages may occur during both of these two steps.
@@ -605,10 +610,16 @@ table(task$data(cols = c("species", "year")))
 
 ### Plotting Resample Results {#sec-autoplot-resampleresult}
 
-`r mlr3viz` provides a `r ref("autoplot()")` method to automatically visualize the resampling results either in a boxplot or histogram:
+`r mlr3viz` provides an `r ref("autoplot()")` function to automatically visualize the resampling results either in a boxplot or histogram:
+
+<!-- Note: using `fig-subcap` here as `fig-cap` would duplicate the captions. Plots are simple enough to not warrant individual captions though :/ -->
 
 ```{r performance-035}
 #| layout-ncol: 2
+#| fig-subcap:
+#|   - "Boxplot of accuracy scores."
+#|   - "Histogram of accuracy scores."
+#| message: false
 resampling = rsmp("bootstrap")
 rr = resample(task, learner, resampling)
 
@@ -621,6 +632,8 @@ The histogram is useful to visually gauge the variance of the performance result
 We can also visualize a 2-dimensional prediction surface of individual models in each resampling iteration if the task is restricted to two features:
 
 ```{r performance-036}
+#| warning: false
+#| fig-cap: "Decision boundaries of a decision tree learner across 4 cross-validation folds"  
 task$select(c("bill_length", "flipper_length"))
 resampling = rsmp("cv", folds = 4)
 rr = resample(task, learner, resampling, store_models = TRUE)
@@ -653,8 +666,8 @@ This means that all provided learners use the same train-test splits for each ta
 For illustration, we show a minimal code example that compares the classification accuracy of the decision tree against a featureless learner which always predicts the majority class:
 
 ```{r performance-006}
-lrns = c(learner, lrn("classif.featureless"))
-d = benchmark_grid(task = task, learner = lrns, resampling = resampling)
+learners = c(learner, lrn("classif.featureless"))
+d = benchmark_grid(tasks = task, learners = learners, resamplings = resampling)
 bmr = benchmark(design = d)
 acc = bmr$aggregate(msr("classif.acc"))
 acc[, .(task_id, learner_id, classif.acc)]
@@ -679,28 +692,28 @@ To construct a list of `r ref("Task")`, `r ref("Learner")` and `r ref("Resamplin
 
 <!-- We also set them up to predict for the observations of both the training and test set by (`predict_sets = c("train", "test")`), rather than only making predictions on the test data. -->
 
-We design an exemplary benchmark experiment and train a classification tree from the `r ref_pkg("rpart")` package, a random forest from the `r ref_pkg("ranger")` package and a featureless learner serving as a baseline on four different binary classification tasks.
+We design an example benchmark experiment and train a classification tree from the `r ref_pkg("rpart")` package, a random forest from the `r ref_pkg("ranger")` package and a featureless learner serving as a baseline on four different binary classification tasks.
 The constructed `r index("benchmark design")` is a `data.table` containing the task, learner, and resampling combinations in each row that should be performed:
 
 ```{r performance-037}
-#library("mlr3verse")
-
-tsks = tsks(c("german_credit", "sonar", "breast_cancer"))
-lrns = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"),
+tasks = tsks(c("german_credit", "sonar", "breast_cancer"))
+learners = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"),
   predict_type = "prob")
-rsmp = rsmps("cv", folds = 5)
+resampling = rsmps("cv", folds = 5)
 
-design = benchmark_grid(tsks, lrns, rsmp)
+design = benchmark_grid(tasks, learners, resampling)
 head(design)
 ```
 <!-- Note: Raphael's chapter comments were against printing the design grid, whereas Bernd in a later meeting was explicitly for printing it. -->
 
+<!-- No longer needed as new printer makes this superfluous
 Since the `r ref("data.table")` contains R6 objects within list-columns, we unfortunately can not infer too much about the `task` column, but the `r ref("ids")` utility function can be used for quick inspection or subsetting:
 
 ```{r performance-038}
 mlr3misc::ids(design$task)
 design[mlr3misc::ids(task) == "sonar", ]
 ```
+-->
 
 It is also possible to subset the design, e.g., to exclude a specific task-learner combination by manually removing a certain row from the design which is a `data.table`.
 Alternatively, we can construct a custom benchmark design by manually defining a `data.table` containing task, learner, and resampling objects (see also the examples section in the help page of `r ref("benchmark_grid()")`).
@@ -822,12 +835,13 @@ Similar to creating automated visualizations for tasks, [predictions](#autoplot-
 ```{r performance-046}
 #| fig-height: 5
 #| fig-width: 6
+#| fig-cap: "Boxplots of accuracy scores for each learner across resampling iterations and the three tasks. Random forests (`classif.ranger`) consistently performs outperforms the other learners."
 autoplot(bmr, measure = msr("classif.acc"))
 ```
 
 Such a plot summarizes the benchmark experiment across all tasks and learners.
 Visualizing performance scores across all learners and tasks in a benchmark helps identifying potentially unexpected behavior, such as a learner performing reasonably well for most tasks, but yielding noticeably worse scores in one task.
-In the case of our example above, the three learners show consistent relative performance to each other, in the order we would expect.
+In the case of our example above, the three learners show consistent relative performance to each other, in the order we would expect: Random forest performs best, then the single decision tree, and the featureless learner in last place.
 
 **TODO:** We will expand on benchmark experiments in more depth in chapter (insert ref to batchtools/benchmark chapter once finalized).
 
@@ -859,7 +873,6 @@ Similar to the test output before, this visualization leads to the conclusion th
 -->
 
 ## Evaluation of Binary Classifiers {#sec-roc}
-
 
 We will now look at specialized performance measures for binary classification implemented in `r mlr3`.
 We start introducing the confusion matrix and some useful performance measures that can be derived from it to evaluate binary classifiers when the focus is on accurately predicting the two discrete classes.
@@ -960,7 +973,7 @@ mlr3measures::confusion_matrix(truth = pred$truth,
   response = pred$response, positive = task$positive)
 ```
 
-If a binary classifier predicts probabilities instead of discrete classes, we could arbitrarily set a threshold to cut-off the probabilities and assign them to the positive and negative class.
+If a binary classifier predicts probabilities instead of discrete classes, we could arbitrarily set a threshold to cut-off the probabilities and assign them to the positive and negative class (see @sec-thresholding).
 When it comes to classification performance, it is generally difficult to achieve a high TPR and low FPR simultaneously because there is often a trade-off between the two rates.
 Increasing the threshold for identifying the positive cases, leads to a higher number of negative predictions and fewer positive predictions.
 As a consequence, the FPR is usually better (lower), but at the cost of a worse (lower) TPR.
@@ -1004,6 +1017,7 @@ In this case, we can characterize the behavior of a binary classifier for differ
 For example, we can use the previous `r ref("Prediction")` object, compute all possible TPR and FPR combinations if we use all predicted probabilities as possible threshold, and visualize them to manually create a ROC curve:
 
 ```{r performance-053}
+#| fig-cap: "Manually constructed ROC-curve based on the `german_credit` dataset and the `classif.ranger` Random Forest learner."
 thresholds = sort(pred$prob[,1])
 
 rocvals = data.table::rbindlist(lapply(thresholds, function(t) {
@@ -1024,7 +1038,7 @@ ggplot(rocvals, aes(FPR, TPR)) +
   geom_abline(linetype = "dashed") +
   coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
   labs(
-    title = "Manually constructed ROC curve",
+    title = NULL,
     x = "1 - Specificity (FPR)",
     y = "Sensitivity (TPR)"
   ) +
@@ -1148,6 +1162,7 @@ For `r mlr3` prediction objects, the ROC curve can be constructed with the previ
 The x-axis showing the FPR is labelled "1 - Specificity" by convention, whereas the y-axis shows "Sensitivity" for the TPR.
 
 ```{r performance-055}
+#| fig-cap: "ROC-curve based on the `german_credit` dataset and the `classif.ranger` Random Forest learner."
 autoplot(pred, type = "roc")
 ```
 
@@ -1160,6 +1175,7 @@ As a result, the ROC curve may not provide a good assessment of the classifier's
 See also @davis2006relationship for a detailed discussion about the relationship between the PRC and ROC curves.
 
 ```{r performance-056}
+#| fig-cap: "Precision-Recall curve based on the `german_credit` dataset and the `classif.ranger` Random Forest learner."
 autoplot(pred, type = "prc")
 ```
 
@@ -1168,6 +1184,9 @@ For example, if we want to see the FPR and accuracy across all possible threshol
 
 ```{r performance-057}
 #| layout-ncol: 2
+#| fig-subcap: 
+#|   - "Threshold vs. FPR plot on `german_credit` with `classif.ranger`."
+#|   - "Threshold vs. accuracy plot on `german_credit` with `classif.ranger`."
 autoplot(pred, type = "threshold", measure = msr("classif.fpr"))
 autoplot(pred, type = "threshold", measure = msr("classif.acc"))
 ```
@@ -1175,10 +1194,13 @@ autoplot(pred, type = "threshold", measure = msr("classif.acc"))
 This visualization would show us that it would not matter if we picked a threshold of 0.5 or 0.75, since neither FPR nor accuracy changes in that range.
 
 These visualizations are also available for `r ref("ResampleResult")`.
-Here, the predictions of individual resampling iterations are merged prior to calculating a ROC or PR curve (micro-averaged):
+Here, the predictions of individual resampling iterations are merged prior to calculating a ROC or PR curve (micro averaged):
 
 ```{r performance-058}
 #| layout-ncol: 2
+#| fig-subcap: 
+#|   - "ROC-curve across resampling iterations."
+#|   - "Precision-Recall curve across resampling iterations."
 rr = resample(
   task = tsk("german_credit"),
   learner = lrn("classif.ranger", predict_type = "prob"),
@@ -1192,6 +1214,9 @@ We can also visualize a `r ref("BenchmarkResult")` to compare multiple learners 
 
 ```{r performance-059}
 #| layout-ncol: 2
+#| fig-subcap: 
+#|   - "ROC-curve comparing two learners."
+#|   - "Precision-Recall curve comparing two learners."
 design = benchmark_grid(
   tasks = tsk("german_credit"),
   learners = lrns(c("classif.rpart", "classif.ranger"), predict_type = "prob"),
