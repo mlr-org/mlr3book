@@ -4,7 +4,7 @@
 \alias{link}
 \title{Create markdown and print-friendly link}
 \usage{
-link(url, text = url)
+link(url, text = NULL)
 }
 \arguments{
 \item{url}{URL to link to}
