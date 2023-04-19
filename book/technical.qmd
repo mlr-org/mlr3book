@@ -29,6 +29,7 @@ This includes the following topics:
 * how to handle errors and troubleshoot (@sec-error-handling),
 * adjust the logger to your needs (@sec-logging), and
 * working with out-of-memory data, e.g., data stored in databases (@sec-backends).
+* adding new classes to mlr3 (@sec-extending)
 
 ## Parallelization {#sec-parallelization}
 
@@ -978,6 +979,105 @@ After the retrieved data is processed, the garbage collector can release the occ
 The backend can also operate on a folder with multiple parquet files, which is documented in `r ref("as_duckdb_backend()")`.
 
 
+## Extending mlr3 {#sec-extending}
+
+Hopefully having read the rest of this book you are now on the way to being an `r mlr3` expert.
+Maybe you will even want to extend the universe with new classes for more learners, measures, tuners, pipeops, and more; if so, read on.
+
+{{< include _optional.qmd >}}
+
+In this chapter we will show how to extend `r mlr3` using the simple example of creating a custom `r ref("Measure")`.
+If you are interested in implementing new learners, pipeops, and tuners, then check out the vignettes in the respective packages: `r mlr3extralearners`, `r mlr3pipelines`, or `r mlr3tuning`.
+Or if you are considering adding a new machine learning task then please contact us on GitHub, email, or Mattermost.
+This section assumes good knowledge of `R6`, see @sec-r6 for a brief introduction and references to further resources.
+
+We welcome contributions from all levels of developers and if you want to add any of your new classes to our universe then please make pull requests to aligning packages, for example tuners and filters would go to `r mlr3tuning` and `r mlr3filters` respectively, a new survival measure would go to `r mlr3proba`, and *all* new learners go to `r mlr3extralearners`.
+Do not worry if you make a PR to the wrong repository, we will transfer it to the right one.
+Please read the `r link("https://github.com/mlr-org/mlr3/wiki", "mlr3 Wiki")` for coding conventions that we use if you want to add code to our organisation.
+
+We will now turn to extending the `r ref("Measure")` class to implement new metrics.
+As an example, let's consider a regression measure that scores a prediction as $1$ if the difference between the true and predicted values are less than one standard deviation of the truth, or scores the prediction as $0$ otherwise.
+In maths this would be defined as $f(y, \hat{y}) = \frac{1}{n} \sum_{i=1}^n \mathbb{I}(|y_i - \hat{y}_i| < \sigma(y))$, where $y$ contains the true values and $\hat{y}$ the predicted values for observations $i = 1, ..., n$.
+In code this may be written as:
+
+```{r extending-015}
+threshold_acc = function(truth, response) {
+  score = numeric(length(truth))
+  score[abs(truth - response) < sd(truth)] = 1
+  mean(score)
+}
+
+threshold_acc(c(100, 0, 1), c(1, 11, 6))
+```
+
+This measure is then bounded in [0, 1] and a larger score is better.
+
+To implement this measure, we need to create a new `r ref("R6::R6Class")`, which will inherit from `r ref("Measure")` and in this case specifically inheriting from `r ref("MeasureRegr")`.
+We will now demonstrate what the final code for this new measure would look like and then explain each line, this can be used as a template for most performance measures.
+
+```{r extending-016}
+MeasureRegrThresholdAcc = R6::R6Class("MeasureRegrThresholdAcc",
+  inherit = mlr3::MeasureRegr, # regression measure
+  public = list(
+    initialize = function() { # initialize class
+      super$initialize(
+        id = "thresh_acc", # unique ID
+        packages = character(), # no dependencies
+        properties = character(), # no special properties
+        predict_type = "response", # measures response prediction
+        range = c(0, 1), # results in values between (0, 1)
+        minimize = FALSE # larger values are better
+      )
+    }
+  ),
+
+  private = list(
+    .score = function(prediction, ...) { # define score as private method
+      # define loss
+      threshold_acc = function(truth, response) {
+        score = numeric(length(truth))
+        score[abs(truth - response) < sd(truth)] = 1
+        mean(score)
+      }
+      # call loss function
+      threshold_acc(prediction$truth, prediction$response)
+    }
+  )
+)
+```
+
+1. In the first two lines we name the class, here "MeasureRegrThresholdAcc", and then state this is a regression measure that inherits from `r ref("MeasureRegr")`.
+2. We initialize the class by stating its unique ID is "thresh_acc", that it does not require any external packages (`packages = character()`) and that it has no special properties (`properties = character()`).
+3. We then pass specific details of the loss function which are: it measures the quality of a "response" type prediction, its values range between (0, 1), and that the loss is optimised as its maximum.
+4. Finally we define the score itself as a private method called `.score` and simply pass the predictions to the function we defined earlier.
+
+Sometimes measures require data from the training set, the task, or the learner.
+These are usually complex edge-cases examples so we will not go into detail here, for working examples we suggest looking at the code for `r ref("mlr3proba::MeasureSurvSongAUC")` and `r ref("mlr3proba::MeasureSurvAUC")`.
+You can also consult the manual page of the `r ref("Measure")` for an overview of other properties and meta-data that can be specified.
+
+Once you have defined your measure you can either use it with the `R6` constructor, or by adding it to the `r ref("mlr_measures")` dictionary:
+
+```{r}
+library(mlr3verse)
+
+t = tsk("boston_housing")
+s = partition(t)
+p = lrn("regr.featureless")$train(t, s$train)$predict(t, s$test)
+p$score(MeasureRegrThresholdAcc$new())
+
+# or add to dictionary
+mlr3::mlr_measures$add("regr.thresh_acc", MeasureRegrThresholdAcc)
+p$score(msr("regr.thresh_acc"))
+```
+
+Even though we only showed how to create a custom measure, the process of adding other objects is in essence the same:
+
+1. Find the right class to inherit from 
+2. Add methods that:
+    a) Initialize the object with the correct properties (`$initialize()`).
+    b) Implement the public and private methods that do the actual computation. In the above example this was the private `$.score()` method.
+
+As a lot of classes already exist in `r mlr3`, we recommend looking at similar classes that are already available.
 
 ## Exercises
 
