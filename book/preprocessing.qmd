@@ -17,16 +17,19 @@ abstract: TODO (150-200 WORDS)
 
 {{< include _setup.qmd >}}
 
-The last chapter (@sec-pipelines) gave an technical introduction to `r mlr3pipelines`, this chapter will show important concepts and typical problems when working with data for machine learning.
+The last chapter (@sec-pipelines) gave an technical introduction to `r mlr3pipelines`, this chapter will show important concepts and typical problems when preprocessing data for machine learning.
 
 In the realm of machine learning, there exist various definitions for preprocessing, data cleaning and feature engineering.
 To clarify, preprocessing refers here to everything that happens with the data before it is used to fit the model, while postprocessing encompasses everything that occurs with predictions after the model is fitted.
 Data cleaning is an important aspect of preprocessing as it involves the removal of errors, noise, and redundancy in the data.
-There is little ambiguity in what needs to be done here, and it is generally straightforward.
+There is usually little ambiguity in what needs to be done here, and it is generally straightforward.
 Feature engineering, on the other hand, covers all other transformations of data before it is fed to the machine learning model.
 It involves the creation of useful features from possibly unstructured data, such as written text, sequences or images.
+We will focus less on data cleaning as this process does not necessitate `r mlr3pipelines` and is intertwined with exploratory data analysis (EDA).
 
-It's often said that deep learning automates feature engineering, but this mainly refers to feature extraction from written text and images.
+Although deep learning has shown promising results in automating feature engineering, its effectiveness depends on the complexity and nature of the data being processed, as well as the specific problem being addressed.
+Typically it is applicable to natural language processing (NLP) and computer vision (CV) problems, while standard tabular data is lacking in structure for deep learning models to extract meaningful features automatically.
+Furthermore, different problems require different features to be extracted, and deep learning models may not always be able to identify the most relevant features for a given problem without human guidance.
 
 The goal of feature engineering is to prepare the data so that a model can be trained on it, and/or to further improve predictive performance.
 
@@ -62,7 +65,9 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-ames = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv",
+url <- "https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
+
+ames <- fread(url,
     stringsAsFactors = TRUE
 )
 
@@ -70,11 +75,24 @@ ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
 ```
 
-## Data Cleaning
+## Data Cleaning and Exploratory Data Analysis
 
 In a first step we explore the data and look for simple problems such as constant or duplicated features.
 This can be done quite efficiently with a package like `DataExplorer`.
-The full report can be found in Appendix XXX.
+
+```{r preproc-0002, echo = TRUE, eval = TRUE, message=FALSE}
+library(DataExplorer)
+library(skimr)
+
+skim(ames)
+plot_intro(ames)
+plot_bar(ames)
+plot_density(ames)
+plot_missing(ames)
+plot_correlation(ames, type="continuous")
+
+
+```
 
 Here we just summarize the important findings:
 
@@ -102,7 +120,7 @@ For all three cases simple removal is sufficient.
 
 ```{r preproc-0045, echo = TRUE, eval = TRUE, message=FALSE}
 
-to_remove = c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
+to_remove <- c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
 ```
 
 Next to constant or identical features, further typical problems that should be checked for are
@@ -110,8 +128,10 @@ Next to constant or identical features, further typical problems that should be 
 1) ID columns, i.e., columns that are unique for every observations should be removed or tagged.
 2) `NA`s not correctly encoded, e.g. as `"NA"` or `""`
 3) Semantic errors in the data, e.g., negative `Lot_Area`
-4) Numeric features encoded as categorical
+4) Numeric features encoded as categorical for learners that can not handle such features.
 5) ...
+
+We will check most of these in the next sections.
 
 Before we continue with feature engineering we create a task, choose a suitable performance measure and resampling strategy.
 
@@ -119,7 +139,7 @@ Before we continue with feature engineering we create a task, choose a suitable 
 library(mlr3verse)
 
 
-ames_task = TaskRegr$new(
+ames_task <- TaskRegr$new(
     backend = ames,
     target = "Sale_Price",
     id = "ames"
@@ -127,9 +147,9 @@ ames_task = TaskRegr$new(
 
 ames_task$select(setdiff(ames_task$feature_names, to_remove))
 
-measure = msr("regr.mae")
+measure <- msr("regr.mae")
 
-cv10 = rsmp("cv")
+cv10 <- rsmp("cv")
 
 cv10$instantiate(ames_task)
 
@@ -140,9 +160,9 @@ Lastly we want to compute a simple featureless baseline, i.e., always predicting
 
 ```{r preproc-007, echo = TRUE, eval = TRUE, message=FALSE}
 
-baseline_lrn = lrn("regr.featureless", robust = TRUE)
+baseline_lrn <- lrn("regr.featureless", robust = TRUE)
 
-baseline_res = resample(ames_task, baseline_lrn, cv10)
+baseline_res <- resample(ames_task, baseline_lrn, cv10)
 baseline_res$aggregate(measure)
 ```
 
@@ -150,7 +170,7 @@ baseline_res$aggregate(measure)
 
 In machine learning, categorical features are variables that can take on a limited set of values, such as `Paved_Drive` with possible values of `Dirt_Gravel`, `Partial_Pavement`, `Paved` in the Ames housing data.
 
-However, many machine learning algorithms require numerical inputs to function properly.
+However, many machine learning algorithms such as support vector machines (SVM) require numerical inputs to function properly.
 
 As shown in the Introduction (@sec-lrns-add-list), we can easily list learners that directly support categorical features.
 
@@ -164,19 +184,9 @@ For other learners we need to convert categorical features into numerical ones t
 Categorical features can be distinguished by their cardinality, which refers to the number of levels they contain.
 There are three types of categorical features: binary, low-cardinality, and high-cardinality.
 
-Let us have a look at the number of levels of each categorical feature.
-
-```{r preproc-008, echo = TRUE, eval = TRUE, message=FALSE}
-
-n_lvls = sapply(
-    ames[, .SD, .SDcols = sapply(ames, is.factor)],
-    function(x) length(levels(x))
-)
-sort(n_lvls)
-```
-
 Generally, no universal threshold exist when a feature should be considered high-cardinality.
 
+In the EDA section we see the number of levels for each categorical feature.
 For the Ames housing data, we assume `Exterior_1st `, `Exterior_2nd`, `MS_SubClass` and `Neighborhood` to be high-cardinality by assuming a threshold of 10.
 Generally, this threshold can be considered a hyperparameter and can be tuned jointly with all other hyperparameters.
 
@@ -210,40 +220,46 @@ First we collapse all levels that occur less than 1% of the time and build a sim
 
 ```{r preproc-009, echo = TRUE, eval = TRUE, message=FALSE}
 
-factor_pipeline =
+factor_pipeline <-
     po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
-    po("encodeimpact", affect_columns = selector_cardinality_greater_than(10), id = "high_card_enc") %>>%
-    po("encode", method = "one-hot", affect_columns = selector_cardinality_greater_than(2), id = "low_card_enc") %>>%
-    po("encode", method = "treatment", affect_columns = selector_type("factor"), id = "binary_enc")
+    po("encodeimpact", affect_columns = selector_cardinality_greater_than(10),
+        id = "high_card_enc") %>>%
+    po("encode", method = "one-hot", affect_columns = selector_cardinality_greater_than(2),
+        id = "low_card_enc") %>>%
+    po("encode", method = "treatment", affect_columns = selector_type("factor"),
+        id = "binary_enc")
 
 factor_pipeline$plot()
 ```
 
-While many implementations of tree based algorithms, such as `rpart` or `ranger` are able to handle categorical features, `xgboost` cannot and requires a preprocessing step.
+While many implementations of tree based algorithms, such as `rpart` or `ranger` are able to handle categorical features, `xgboost` can not and requires a preprocessing step.
 
 ```{r preproc-010, echo = TRUE, eval = TRUE, message=FALSE}
 
-xgboost_preproc = GraphLearner$new(
+xgboost_preproc <- GraphLearner$new(
     factor_pipeline %>>%
         lrn("regr.xgboost", nrounds = 100),
     id = "regr.xgboost_enc"
 )
 
-learners = list(
+learners <- list(
     baseline = baseline_lrn,
     tree = lrn("regr.rpart"),
     xgboost = xgboost_preproc
 )
 
-design = benchmark_grid(ames_task, learners = learners, cv10)
-bmr = benchmark(design)
+design <- benchmark_grid(ames_task, learners = learners, cv10)
+bmr <- benchmark(design)
 plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
 
+For further readings and a benchmark study on different encoding strategies we refer to [@pargent2022regularized].
+
+
 ## Missing Values
 
-Referring again to our `DataExplorer` report in Appendix XXX, we can see that most features contain no missing values, while 7 features contain a substantial amount of missings.
+In the EDA section we can see that most features contain no missing values, while 7 features contain a substantial amount of missing values.
 
 While both `rpart` and `xgboost` from the previous section could handle missing values automatically, both `ranger` and `lm` that we would like to consider do not.
 
@@ -251,9 +267,14 @@ For simple imputation techniques, missing values can be replaced with the mean, 
 For categorical features, missing values can easily be replaced by a new separate level, e.g. called `.MISSING`.
 To keep track of the imputation, binary indicator features are added.
 
+[@ding2010investigation] show that for binary classification and tree-based models a *"separate class is clearly
+the best method to use when the testing set has missing values and the missingness is related to
+the response variable"*.
+For numeric features this means that encoding missing values out-of-range, e.g. as two times the largest observed value is a reasonable approach.
+
 ```{r preproc-011, echo = TRUE, eval = TRUE, message=FALSE}
 
-impute_pipeline = list(
+impute_pipeline <- list(
     po("missind",
         type = "integer",
         affect_columns = selector_type("integer")
@@ -272,43 +293,59 @@ impute_pipeline$plot()
 
 ```{r preproc-012, echo = TRUE, eval = TRUE, message=FALSE}
 
-ranger_preproc = GraphLearner$new(
+ranger_preproc <- GraphLearner$new(
     impute_pipeline %>>%
         lrn("regr.ranger"),
     id = "regr.ranger_imp"
 )
 ```
 
+Many more advanced imputation strategies exist.
+For example, in model based imputation, additional machine learning models are trained to predict missing values from other features.
+Multiple imputation resamples the data and imputes each value multiple time to attain more robust estimates.
+These more advanced techniques very rarely improve the model substantially and the simple imputation techniques introduced before are usually sufficient.
+
 `r mlr3pipelines` offers a simple and reusable pipeline for (among other things) imputation and factor encoding called `pipeline_robustify`.
 
-```{r preproc-013, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+```{r preproc-0135, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-robustify = mlr3pipelines::pipeline_robustify()
+robustify <- mlr3pipelines::pipeline_robustify()
 robustify$plot()
+```
 
-lm_preproc = GraphLearner$new(
+*Robustify* does the following steps:
+
+1) Constant features are removed
+2) Character features are cast to categorical features
+3) Date/time features are encoded as numeric features
+4) Ordinal features are encoded as categorical features
+5) Numeric features are imputed by sampling from the empirical distribution and missingness indicators are added
+6) Categorical features are encoded with a new level
+7) Factor levels of categorical features are fixed such that during prediction they are the same as during training; possibly dropping empty training factor levels before
+8) Since the previous step can introduce new missing values at prediction time due to non existing factor levels they are imputed with random factor levels
+9) Categorical features levels are collapsed (starting from the rarest factors in the training data) until there are no more than 1000 levels
+10) Categorical features are encoded by one-hot encoding
+11) Constant features that might have been created in the previous steps are again removed
+
+```{r preproc-013, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+lm_preproc <- GraphLearner$new(
     robustify %>>%
         lrn("regr.lm"),
     id = "regr.lm_preproc"
 )
 
-design = benchmark_grid(ames_task,
+design <- benchmark_grid(ames_task,
     learners = list(
         ranger_preproc,
         lm_preproc
     ),
     cv10
 )
-bmr_new = benchmark(design)
+bmr_new <- benchmark(design)
 bmr$combine(bmr_new)
 plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
-
-Many more advanced imputation strategies exist.
-For example, in model based imputation, additional machine learning models are trained to predict missing values from other features.
-Multiple imputation resamples the data and imputes each value multiple time to attain more robust estimates.
-These more advanced techniques very rarely improve the model substantially and the simple imputation techniques introduced before are usually sufficient.
 
 ## Scaling Features and Targets
 
@@ -319,27 +356,27 @@ This is typically useful when the data is skewed, as some machine learning algor
 Thus, log transformation can help reduce the impact of outliers and improve the accuracy of the model.
 Similarly, log transformation of skew features can help to reduce the influence of outliers and very large models.
 
-For distance based methods such as K-nearest neighbor models, normalization is required as otherwise features with larger scale would have an higher impact on the neighborhood estimation.
-Luckily, most distance based models internally scale the data so most of the time we do not need to manually do this in preprocessing.
+For distance based methods such as K-nearest neighbor models or regularized parametric models such as Lasso or Elastic net, normalization is required as otherwise features with larger scale would have an higher impact.
+Luckily, most based models internally scale the data if required by the algorithm so most of the time we do not need to manually do this in preprocessing.
 
 ```{r preproc-014, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-log_lm_preproc = ppl("targettrafo", graph = lm_preproc)
-log_lm_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
-log_lm_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
+log_lm_preproc <- ppl("targettrafo", graph = lm_preproc)
+log_lm_preproc$param_set$values$targetmutate.trafo <- function(x) log(x)
+log_lm_preproc$param_set$values$targetmutate.inverter <- function(x) list(response = exp(x$response))
 
 log_lm_preproc$plot()
 
-log_lm_preproc = GraphLearner$new(
+log_lm_preproc <- GraphLearner$new(
     log_lm_preproc,
     id = "regr.log_lm_preproc"
 )
 
-design = benchmark_grid(ames_task,
+design <- benchmark_grid(ames_task,
     learners = log_lm_preproc,
     cv10
 )
-bmr_new = benchmark(design)
+bmr_new <- benchmark(design)
 bmr$combine(bmr_new)
 plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
@@ -347,17 +384,48 @@ bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 
 ## Feature Extraction
 
-* Unfortunately we don't have information about the quality and number of kitchen appliances, which can have an effect on the sales price.
-* But we have information on power consumption in the kitchen over an average day in 2-Minute intervals
-* We cannot directly add these features to our data
-* Some information about the curves should give information about the kitchen:
-    * Max-used wattage
-    * Overall used wattage
-    * Number of peaks
-    * ...
-* Which features to use? Extract a large number of features and use feature selection methods, or include extraction strategies in pipeline definition.
-* Some features are easily interpretable and domain knowledge can help to define meaningful extractions.
-* More complex features, e.g. wavelets, allow to capture more complex structures, but are not interpretable anymore.
+Unfortunately, we don't have any information about the quality or number of kitchen appliances, which can have a significant impact on the sale price.
+However, we do have some data on the power consumption in the kitchen over an average day in 2-minute intervals.
+
+```{r preproc-015, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+
+energy_data <- fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/energy_usage.csv",
+    stringsAsFactors = FALSE
+)
+
+plot(as.numeric(energy_data[1, ]), type = "l")
+```
+
+Although we should not directly add these 720 features to our data, we can use some information about the curves to gain insights into the kitchen's overall energy usage.
+For example, we can look at the maximum used wattage, overall used wattage, number of peaks, and other similar features.
+
+This is what is typically called feature extraction.
+
+```{r preproc-016, echo = TRUE, eval = FALSE, message=FALSE, warning=FALSE}
+
+ames_task_ext <- cbind(ames, energy_data)
+
+ames_task_ext <- TaskRegr$new(
+    backend = ames_task_ext,
+    target = "Sale_Price",
+    id = "ames"
+)
+
+ames_task$select(setdiff(ames_task$feature_names, to_remove))
+
+operators <- c("min", "max", "mean")
+
+mutators <- lapply(operators, function(op) {
+    as.formula(paste("~", op, "(", paste0("att", c(1:720), collapse = ", "), ")"))
+})
+
+names(mutators) <- operators
+
+pom <- po("mutate")
+
+pom$param_set$values$mutation <- mutators
+```
+
 
 ## Multiple Data Sources
 
