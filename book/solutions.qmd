@@ -396,6 +396,8 @@ bmr$aggregate(msr("classif.bbrier"))[, c(4, 7)]
 
 ## Solutions to @sec-technical
 
+### Parallel {.unnumbered .unlisted}
+
 Not all CPUs would be utilized in the example.
 All 4 of them are occupied for the first 4 iterations of the cross validation.
 The 5th iteration, however, only runs in parallel to the 6th fold, leaving 2 cores ilde.
@@ -416,6 +418,68 @@ system.time(resample(task, learner, resampling))
 
 If possible, the number of resampling iterations should be an integer multiple of the number of workers.
 Therefore, a simple adaptation either increases the number of folds for improved accuracy of the error estimate or reduces the number of folds for improved runtime.
+
+### Custom Measures {.unnumbered .unlisted}
+
+The rules can easily be translated to R code where we expect `truth` and `prediction` to be factor vectors of the same length with levels `"A"` and `"B"`:
+
+```{r}
+costsens = function(truth, prediction) {
+    score = numeric(length(truth))
+    score[truth == "A" & prediction == "B"] = 10
+    score[truth == "B" & prediction == "A"] = 1
+
+    mean(score)
+}
+```
+
+This function can be embedded in the `Measure` class accordingly.
+
+```{r}
+MeasureCustom = R6::R6Class("MeasureCustom",
+  inherit = mlr3::MeasureClassif, # classification measure
+  public = list(
+    initialize = function() { # initialize class
+      super$initialize(
+        id = "custom", # unique ID
+        packages = character(), # no dependencies
+        properties = character(), # no special properties
+        predict_type = "response", # measures response prediction
+        range = c(0, Inf), # results in values between (0, 1)
+        minimize = TRUE # smaller values are better
+      )
+    }
+  ),
+
+  private = list(
+    .score = function(prediction, ...) { # define score as private method
+      # define loss
+      costsens = function(truth, prediction) {
+        score = numeric(length(truth))
+        score[truth == "A" & prediction == "B"] = 10
+        score[truth == "B" & prediction == "A"] = 1
+
+        mean(score)
+      }
+
+      # call loss function
+      costsens(prediction$truth, prediction$response)
+    }
+  )
+)
+```
+
+An alternative (as pointed to by the hint) can be constructed by first translating the rules to a matrix of misclassification costs, and then feeding this matrix to the
+ constructor of the `r ref("mlr_measures_classif.costs")` measure:
+
+```{r}
+# truth in columns, prediction in rows
+C = matrix(c(0, 10, 1, 0), nrow = 2)
+rownames(C) = colnames(C) = c("A", "B")
+print(C)
+
+msr("classif.costs", costs = C)
+```
 
 
 ## Solutions to @sec-interpretation
