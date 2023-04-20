@@ -506,3 +506,130 @@ plot(ranger_ceteris, variables = num_features) +
 
 
 ## Solutions to @sec-extending
+
+## Solutions to @sec-fairness
+
+1. Load the `"adult_train"` task and try to build a first model. 
+  Train a simple model and evaluate it on the `"adult_test"` task that is also available with `mlr3fairness`.
+
+For now we simply load the data and look at the data.
+
+```{r}
+library("mlr3")
+library("mlr3fairness")
+set.seed(8)
+
+trn = tsk("adult_train")
+tst = tsk("adult_test")
+trn
+```
+
+We can now train a simple model, e.g., a decision tree and evaluate for accuracy.
+
+```{r}
+l = lrn("classif.rpart")
+l$train(trn)
+prd = l$predict(tst)
+prd$score()
+```
+
+
+2. Assume our goal is to achieve parity in *false omission rates*. 
+  Construct a fairness metric that encodes this and againg evaluate your model.
+  In order to get a deeper understanding, look at the `groupwise_metrics` function to obtain performance in each group.
+
+The metric is available via the key `"fairness.fomr"`. 
+Note, that evaluating our prediction now requires that we also provide the task.
+
+```{r}
+m = msr("fairness.fomr")
+prd$score(m, tst)
+```
+
+The `groupwise_metrics` function creates a metric for each group specified in the `pta` column role:
+
+```{r}
+tst$col_roles$pta
+```
+
+```{r}
+m2 = groupwise_metrics(base_measure = msr("classif.fomr"), task = tst)
+```
+
+We can then use this metric to evaluate our model again. 
+This gives us the false omission rates for male and female individuals separately.
+
+```{r}
+prd$score(m2, tst)
+```
+
+3. Now try to improve your model, e.g. by employing pipelines that use pre- or post-processing methods for fairness. 
+  Evaluate your model along the two metrics and visualize the results.
+  Compare the different models using an appropriate visualization.
+
+First we can again construct the learners above.
+```{r}
+library("mlr3pipelines")
+l1 = po("reweighing_wts") %>>% lrn("classif.rpart")
+l2 = po("learner_cv", lrn("classif.rpart")) %>>%
+  po("EOd")
+```
+
+And run the benchmark again. Note, that we use 3-fold cross-validation this time for comparison.
+
+```{r}
+lrns = list(l, l1, l2)
+grd = benchmark_grid(trn, lrns, rsmp("cv", folds = 3L))
+bmr = benchmark(grd)
+bmr$aggregate(msrs(c("classif.acc", "fairness.fomr")))
+```
+
+We can now again visualize the result.
+
+```{r}
+library("ggplot2")
+fairness_accuracy_tradeoff(bmr, msr("fairness.fomr")) +
+scale_color_viridis_d("Learner") +
+theme_minimal()
+```
+
+4. Now we want to add a second sensitive attribute to your dataset, in this case `"race"`. 
+  Add the information to your task and evaluate for the initial model again. What changes? 
+  Again study the `groupwise_metrics`.
+  
+This can be achieved by adding "race" to the `"pta"` col_role.
+
+```{r}
+trn$set_col_roles("race", add_to = "pta")
+trn
+```
+
+```{r}
+tst$set_col_roles("race", add_to = "pta")
+prd$score(m, tst)
+```
+
+If we now evaluate for the intersection, we obtain a large deviation from `0`.
+Note, that the metric by default computes the maximum discrepancy between all metrics for the non-binary case.
+
+If we now get the `groupwise_metrics`, we will get a metric for the intersection of each group.
+
+```{r}
+m3 = groupwise_metrics(msr("classif.fomr"),  trn)
+unname(sapply(m3, function(x) x$id))
+```
+
+```{r}
+prd$score(m3, tst)
+```
+
+And we can see, that the reason might be, that the false omission rate for female Amer-Indian-Eskimo is at `1.0`!
+We can investigate this further by looking at actual counts:
+
+```{r}
+table(tst$data(cols = c("race", "sex", "target")))
+```
+
+One of the reasons might be that there are only 3 individuals in the ">50k" category!
+This is an often encountered problem, as error metrics have a large variance when samples are small.
+Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
