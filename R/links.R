@@ -14,10 +14,11 @@ update_db = function() {
 #' @param topic Name of the topic to link against.
 #' @param text Text to use for the link. Defaults to the topic name.
 #' @param format Either markdown or HTML.
+#' @param aside If `TRUE` calls `aside(topic)`
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = NULL, format = "markdown") {
+ref = function(topic, text = NULL, format = "markdown", aside = FALSE) {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
@@ -63,10 +64,14 @@ ref = function(topic, text = NULL, format = "markdown") {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  switch(format,
+  out = switch(format,
     "markdown" = sprintf("[`%s`](%s)", text, url),
     "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
   )
+  if (aside) {
+    out = paste0(out, aside(text))
+  }
+  out
 }
 
 #' @title Hyperlink to Package

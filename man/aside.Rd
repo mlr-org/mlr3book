@@ -4,7 +4,7 @@
 \alias{aside}
 \title{Add term to margin and index but not text}
 \usage{
-aside(margin = margin, index = toproper(margin))
+aside(margin = margin, index = margin)
 }
 \arguments{
 \item{margin}{Text to show in margin}
