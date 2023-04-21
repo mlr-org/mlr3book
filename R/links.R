@@ -166,12 +166,13 @@ toproper = function(str) {
 #' @param main Text to show in book
 #' @param index Text to show in index
 #' @param margin Text to show in margin
+#' @param code If TRUE tells function to wrap in ``
 #' @export
-define = function(main, margin = NULL, index = NULL) {
-  if (grepl("`", main, fixed = TRUE)) {
-    strip_main = gsub("`", "", main, fixed = TRUE)
-    if (is.null(margin)) margin = strip_main
-    if (is.null(index)) index = strip_main
+define = function(main, margin = NULL, index = NULL, code = FALSE) {
+  if (code) {
+    if (is.null(margin)) margin = main
+    if (is.null(index)) index = main
+    main = sprintf("`%s`", main)
   } else {
     if (is.null(margin)) margin = toproper(main)
     if (is.null(index)) index = toproper(main)
