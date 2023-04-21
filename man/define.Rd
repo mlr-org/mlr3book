@@ -4,7 +4,7 @@
 \alias{define}
 \title{Add term to index and margin}
 \usage{
-define(main, margin = toproper(main), index = toproper(main))
+define(main, margin = NULL, index = NULL, code = FALSE)
 }
 \arguments{
 \item{main}{Text to show in book}
@@ -12,6 +12,8 @@ define(main, margin = toproper(main), index = toproper(main))
 \item{margin}{Text to show in margin}
 
 \item{index}{Text to show in index}
+
+\item{code}{If TRUE tells function to wrap in ``}
 }
 \description{
 Add term to index and margin

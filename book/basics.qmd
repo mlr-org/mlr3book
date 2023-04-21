@@ -17,7 +17,7 @@ abstract:
     After reading this chapter, you will be able to use mlr3 for most machine learning workflows.
 ---
 
-# Fundamentals {#sec-basics}
+# Fundamentals of mlr3 {#sec-basics}
 
 {{< include _setup.qmd >}}
 
@@ -47,9 +47,11 @@ The simplest way to determine if a model will generalize to make 'good' predicti
 This evaluation procedure estimates a model's `r define('generalization error')`, i.e., how well we expect the model to perform in general.
 There are many ways to evaluate models (@sec-eval) and to split data for estimating generalization error (@sec-resampling).
 
-This whistlestop tour of machine learning provides the basic knowledge required to use software in `mlr3` and is sumamrised in @fig-ml-abstraction.
+This whistlestop tour of machine learning provides the basic knowledge required to use software in `mlr3` and is summarized in @fig-ml-abstraction.
 In the rest of this book we will also provide introductions to methodology when relevant and in @sec-special we will also provide introduction to applications in other tasks.
 However for detailed texts about machine learning, including different algorithms, we recommend @hastie2001, @james_introduction_2014, and @bishop_2006.
+
+In the next few sections we will look at the building blocks of `r mlr3` using regression as an example, we will then consider how to extend this to classification in @sec-classif, for other tasks see @sec-special.
 
 ```{r basics-fig-1, echo=FALSE}
 #| label: fig-ml-abstraction
@@ -236,101 +238,165 @@ task_mtcars_small$data()
 ## Learners {#sec-learners}
 
 Objects of class `r ref("Learner")` provide a unified interface to many popular machine learning algorithms in R.
-They are available through the `mlr_learners` dictionary.
-The list of learners supported in the base package `r mlr3` is deliberately small to avoid dependencies; support for additional learners is provided by the `r mlr3learners` and `r mlr3extralearners` packages.
-
-Learners encapsulate methods to train a model and make predictions using it given a `r ref("Task")` and provide metadata about the learners.
-The base class of each learner is `r ref("Learner")`.
-
-To retrieve a `r ref("Learner")` from the `mlr_learners` dictionary, use the function `r ref("lrn()")`:
+The `r ref("mlr_learners")` dictionary contains all the learners available in `mlr3`, we will discuss the available learners in @sec-lrns-add, for now we will just use a decision tree regression learner as an example to discuss the `Learner` interface.
+As with tasks, you can access learners from the dictionary with a single sugar function, in this case `r ref("lrn()")` `r aside("lrn()")`.
 
 ```{r basics-023}
-learner_rpart = lrn("regr.rpart")
+lrn("regr.rpart")
 ```
 
-Each learner provides the following metadata:
+All `Learner` objects include the following metadata, which can be seen in the output above:
 
-* `$feature_types`: the type of features the learner can deal with.
-* `$packages`: the packages required to train a model with this learner and make predictions.
-* `$properties`: additional properties and capabilities.
-  For example, a learner has the property "missings" if it is able to handle missing feature values, and "importance" if it computes and allows to extract data on the relative importance of the features.
-* `$predict_types`: possible prediction types.
-  For example, a regression learner can predict numerical values ("response") and may be able to predict the standard error of a prediction ("se").
-* `$param_set`: the set of hyperparameters. See @sec-param-set.
+* `$feature_types`: the type of features the learner can handle.
+* `$packages`: the packages required to be installed to use the learner.
+* `$properties`: special properties the model can handle, for example the "missings" properties means a model can handle missing data, and "importance" means it can compute the relative importance of each feature.
+* `$predict_types`: the types of prediction that the model can make (@sec-predicting).
+* `$param_set`: the set of model hyperparameters (@sec-param-set).
 
-This information can be queried through these slots, or seen at a glance when printing the learner:
-```{r basics-024}
-learner_rpart
-```
+To run a machine learning experiment, learners pass through two stages (@fig-basics-learner):
 
-All learners work in two stages:
-
-* **Training**: A training task (features and target data) is passed to the learner's `$train()` function which trains and stores a model, i.e. the learned relationship of the features to the target.
-* **Prediction**: New data, usually a different partition of the original dataset, is passed to the `$predict()` method of the trained learner.
-  The model trained in the first step is used to predict the target values, e.g. the numerical value for regression problems.
-
-:::{.callout-warning}
-A learner that has not been trained cannot make predictions and will throw an error if `$predict()` is called on it.
-:::
+* `r define('Training')`: A training `Task` is passed to the learner's `$train()`  function which trains and stores a `r index('model')`, i.e., the learned relationship of the features to the target.
+* `r define('Predicting')`: New data, often a different partition of the original dataset, is passed to the `$predict()` method of the trained learner to predict the target values.
 
 ```{r basics-022, echo=FALSE, fig.align="center"}
 #| label: fig-basics-learner
-#| fig-cap: Overview of the different stages of a learner.
-#| fig-alt: Diagram showing the different stages of a learner, their interactions, and consumed data.
+#| fig-cap: Overview of the different stages of a learner. Top - data (split into features and a target) is passed to an (untrained learner). Bottom - new data is passed to the train learner (model) which makes predictions for the 'missing' target column.
+#| fig-alt: Diagram shows two boxes, the first is labelled "$train()" and shows data being passed to a Learner. The second is labelled "$predict()" and shows "Inference Data" being passed to the "Learner" which now include a "$model", an arrow then shows predictions being made.
 knitr::include_graphics("Figures/learner.svg")
 ```
 
-### Training the learner {#sec-training}
+### Training {#sec-training}
 
-We train the model by giving a task to the learner.
-It is a good idea to hold back some data from the training process used to assess the quality of the predictions made by the trained model.
-The `r ref("partition()")` function randomly splits the task into two disjoint sets: a training set (67% of the total data, the default) and a test set (33% of the total data, the data not part of the training set).
+In the simplest use-case, models are trained by passing a task to a learner with the `r define("$train()", code = TRUE)` method:
 
-```{r basics-025}
-splits = partition(task_mtcars)
-splits
+```{r}
+# load mtcars task
+task = tsk("mtcars")
+# load a regression tree
+learner_rpart = lrn("regr.rpart")
+# pass the task to the learner via $train()
+learner_rpart$train(task)
 ```
 
-We learn a regression tree by calling the `$train()` method of the learner, specifying the task and the part of it to use for training (`splits$train`).
-This operation adds the learned model to the existing `r ref("Learner")` object.
-We can now access the stored model via the field `$model`.
+After training, the fitted model is stored in the `r define("$model", code = TRUE)` field for future inspection and prediction:
 
-```{r basics-025-1}
-learner_rpart$train(task_mtcars, splits$train)
+```{r}
+# inspect the trained model
 learner_rpart$model
 ```
 
 We see that the learner has identified features in the task that are predictive of the target (`mpg`) and uses them to partition observations in the tree.
 The textual representation of the model depends on the type of learner.
-For more information on this particular type of model and how it is printed, see `r ref ("rpart::print.rpart()")`.
+For more information on any model see the learner help page, which can be accessed in the same way as tasks with the `help()` field, e.g., `learner_rpart$help()`.
 
-#### Hyperparameters {#sec-param-set}
+#### Partitioning data
 
-The model seems rather simplistic, using only a single feature and a single set of branches.
-Each learner has hyperparameters that control its behavior and allow to influence the way a model is learned.
-Setting hyperparameters to values appropriate for a given machine learning task is crucial for good predictive performance.
-The field `param_set` stores a description of the hyperparameters the learner has, their ranges, defaults, and current values:
+When performing simple examples to assess the quality of a model's predictions, you will likely want to partition your dataset to get a fair and unbiased estimate of a model's generalization error.
+In the next chapter we will look at resampling and benchmark experiment which will go into more detail about unbiased estimation but for now we will just discuss the simplest method of splitting data using the `r ref("partition()", aside = TRUE)` function.
+This function randomly splits the given task into two disjoint sets: a training set (67% of the total data, the default) and a test set (33% of the total data, the data not part of the training set).
 
-```{r basics-026}
+```{r basics-025}
+# changing default to a 70:30 train:test split
+splits = partition(task_mtcars, ratio = 0.7)
+splits
+```
+
+Now when training we will tell the model to only use the training data by passing the row IDs from `partition` to the `row_ids` argument of `$train()`:
+
+```{r basics-025-1}
+learner_rpart$train(task_mtcars, splits$train)
+```
+
+Now we can use our trained learner to make predictions on new data.
+
+### Predicting {#sec-predicting}
+
+Predicting from trained models is as simple as passing your data to the `r define("$predict()", code=TRUE)` method of the trained `Learner`.
+
+Carrying straight on from our last example, we will call the `$predict()` method from our trained learner and again will use the `row_ids` argument, but this time to pass the IDs of our `r index("test set")`:
+
+```{r basics-030}
+predictions = learner_rpart$predict(task_mtcars, splits$test)
+```
+
+The `$predict()` method returns an object inheriting from `r ref("Prediction")`, in this case `r ref("PredictionRegr")` as this is a regression task.
+
+```{r}
+predictions
+```
+
+The `row_ids` column corresponds to the row IDs of the predicted observations.
+The `truth` column contains the ground truth data, which the object extracts from the task, in this case: `task_mtcars$truth(splits$test)`.
+Finally, the `response` column contains the values predicted by the model.
+The `r ref("Prediction")` object can easily be converted into a `data.table` or `data.frame` using `as.data.table()`/`as.data.frame()` respectively.
+
+All data in the above columns can be accessed directly, for example to get the first two predicted responses:
+
+```{r basics-access-pred}
+predictions$response[1:2]
+```
+
+Similarly to plotting `Task`s, `r mlr3viz` provides an `r ref("ggplot2::autoplot()", text = "autoplot()")` method for `r ref("Prediction")` objects.
+
+```{r basics-035, message = FALSE, warning = FALSE}
+#| fig-cap: "Comparing predicted and ground truth values for the mtcars dataset."
+#| fig-alt: "A scatter plot of predicted values on one axis and ground truth values on the other. A trend line is fit to show that in general there is good agreement between predicted and ground truth values."
+library(mlr3viz)
+predictions = learner_rpart$predict(task_mtcars, splits$test)
+autoplot(predictions)
+```
+
+In the examples above we made predictions by passing a task to `$predict()`, instead if you would rather pass a `data.frame` type object directly then you can use `r define("$predict_newdata()", code=TRUE)`:
+
+```{r basics-032}
+mtcars_new = data.table(cyl = c(5, 6), disp = c(100, 120),
+  hp = c(100, 150), drat = c(4, 3.9), wt = c(3.8, 4.1),
+  qsec = c(18, 19.5), vs = c(1, 0), am = c(1, 1),
+  gear = c(6, 4), carb = c(3, 5))
+predictions = learner_rpart$predict_newdata(mtcars_new)
+predictions
+```
+
+
+#### Changing the Prediction Type {.unnumbered .unlisted}
+
+Whilst predicting a single numeric quantity is the most common prediction type in regression, it is not the only prediction possible.
+Several regression models can also predict standard errors, which are computed during training.
+To predict these, the `predict_type` field of a `r ref("LearnerRegr")` must be changed from "response" (the default) to "se" before training, and most simply during construction.
+The `rpart` learner we used above does not support predicting standard errors, so in the example below we will use a linear regression model implemented in `r ref("mlr3learners::LearnerRegrLm")`, note how the output now includes standard errors.
+
+```{r basics-033}
+library(mlr3learners)
+learner_lm = lrn("regr.lm", predict_type = "se")
+learner_lm$train(task_mtcars, splits$train)
+learner_lm$predict(task_mtcars, splits$test)
+```
+
+The last element of `Learners` we will consider for now are hyperparameters, which are important for ensuring the predictions a `Learner` make are actually good (we will return to what 'good' means in @sec-eval).
+
+### Hyperparameters {#sec-param-set}
+
+`Learner`s encapsulate a machine learning algorithm and its `r index('hyperparameters')`, which are free parameters that can be set by the user to affect *how* the algorithm is run.
+Hyperparameters may affect how a model is trained or how it makes predictions and deciding which hyperparameters to set can require expert knowledge though often there is an element of trial and error.
+In this book we do not make any recommendation for which hyperparameters to set (manually or with tuning) but in @sec-tuning-spaces we briefly discuss predefined '`r index('tuning spaces')`'.
+Hyperparameters are hugely important to a model performing well and therefore setting hyperparameters manually is rarely a good idea.
+In practice, automated hyperparameter optimization is more common, which we will return to in @sec-optimization.
+For this chapter we will refer to manual setting of hyperparameters for the sake of brevity.
+We will first look at `r ref_pkg("paradox")` and `r ref("ParamSet")` objects which are used to store learner hyperparameters, and then we will look at getting and setting these values.
+
+#### Paradox and parameter sets
+
+We will continue our running example with a decision tree regression learner.
+To access the hyperparameters in the decision tree, we use `r define("$param_set", code=TRUE)`:
+
+```{r basics}
 learner_rpart$param_set
 ```
 
-The set of current hyperparameter values is stored in the `values` field of the `param_set` field.
-You can access and change the current hyperparameter values by accessing this field, which stores a named list:
-
-```{r basics-027}
-learner_rpart$param_set$values
-```
-
-`mlr3` manages hyperparameters through the `r ref_pkg("paradox")` package, developed by the mlr3 team.
-Hyperparameters affect the way a model is fit to the given data by a learner.
-For example, the `xval` hyperparameter for the `rpart` learner controls the number of internal cross-validations.
-The `mlr3` universe provides information on possible hyperparameter settings for all its learners, which has the following advantages:
-
-1. Available hyperparameter settings, their data types, and accepted ranges can easily be listed without having to look through the respective manual pages.
-1. Hyperparameters can be tuned automatically; covered in [Hyperparameter Tuning](#tuning).
-
-The following table lists the available hyperparameter types, all of which derive from the `r ref("Param")` base class that represents a single hyperparameter.
+The output above is a `r ref("paradox::ParamSet")` object from the package `r ref_pkg("paradox")`.
+These objects provide information on hyperparameters including their name (`id`), data types (`class`), acceptable ranges for hyperparameter values (`lower`, `upper`), the number of levels possible if the data type is categorical (`nlevels`), the default value from the underlying package (`default`), and finally the set value if different from the default (`value`).
+The second column references classes defined in `r ref_pkg("paradox")` that determine the class of the parameter and the possible values it can take.
+@tbl-parameters-classes lists the possible hyperparameter types, all of which inherit from `r ref("paradox::Param")`.
 
 | Hyperparameter Class | Description                          |
 | :-----------------:  | :----------------------------------: |
@@ -342,191 +408,109 @@ The following table lists the available hyperparameter types, all of which deriv
 
 : Hyperparameter Classes and the type of hyperparameter they represent. {#tbl-parameters-classes}
 
-Individual hyperparameters can be combined into `r ref("ParamSet")` objects.
-Every [learner](#sec-learners) has a `r ref("ParamSet")` that defines the hyperparameter values to use when training a model.
-You can access this object using the `$param_set` field.
+Let's carry on the example above and consider some specific hyperparameters.
+From the decision tree `ParamSet` output we can infer the following:
 
-Continuing the example above, we focus on a subset of the hyperparameters for the sake of brevity:
+* `cp` must be a "double" (`ParamDbl`) taking values between 0 (`lower`) and 1 (`upper`) with a default of 0.01 (`default`).
+* `keep_model` must be a "logical" (`ParamLgl`) taking values `TRUE` or `FALSE` with default `FALSE`
+* `xval` must be an "integer" (`ParamInt`) taking values between 0 and `Inf` with a default of 10 and a set value of `0`.
+
+In rare cases (we try to minimize it as much as possible), we alter hyperparameter values in construction.
+When we do this the reason will always be given in the learner help page.
+In the case of `regr.rpart`, we change the `xval` default to `0` because `xval` controls internal cross-validations and if a user accidentally leaves this at 10 then model training can take a long time.
+
+With the changed hyperparameters, we have a more complex (and more reasonable) model.
+
+#### Getting and setting hyperparameter values
+
+Now we have looked at how parameter sets are stored, we can now think about getting and setting parameters.
+Returning to our decision tree, say we are interested in growing a tree with depth 1, which means a tree where data is split once into two terminal nodes.
+From the parameter set output, we know that the `maxdepth` parameter has a default of 30 and that it takes integer values.
+There are a few different ways we could change this hyperparameter.
+The simplest way to set a hyperparameter is in construction of the learner by simply passing the hyperparameter name and new value to `lrn()`:
+
 ```{r}
-all_params = learner_rpart$param_set
-subset = all_params$subset(c("cp", "keep_model", "minsplit", "xval"))
-subset
+learner_rpart = lrn("regr.rpart", maxdepth = 1)
 ```
 
-The printed output above informs us what values are expected:
+We can view the set of non-default hyperparameters (i.e., those changed by the user) by using `$param_set$values`:
 
-* `cp` must be a "double" between 0 and 1 with a default of 0.01.
-* `keep_model` is a logical flag with default `FALSE`.
-* `minsplit` must be an integer greater than 0 with a default of 20.
-* `xval` must be 0 or a positive integer with a default of 10, but was set to 0.
+```{r basics-027}
+learner_rpart$param_set$values
+```
 
-Most learners do not have hyperparameter values set unless explicitly specified when instantiating the learner, i.e. the *value* column is empty.
-Some learners, such as `r ref("LearnerClassifRpart")`, automatically initialize some of their hyperparameters to values that differ from the default, as shown above.
+Now we can see that `maxdepth = 1` (as we discussed above `xval = 0` is changed in construction).
+This `values` field simply returns a `list` of set hyperparameters, so another way to update hyperparameters is by updating an element in the list:
 
-In more complex hyperparameter spaces, there may be additional columns.
-For example, the hyperparameter set of `r ref("LearnerClassifSVM")` from the `r mlr3learners` package has conditional dependencies:
+```{r}
+learner_rpart$param_set$values$maxdepth = 2
+learner_rpart$param_set$values
+```
+
+Finally, to set multiple values at once we recommend either setting these in construction or using `$set_values`.
+
+```{r}
+learner_rpart = lrn("regr.rpart", maxdepth = 3, xval = 1)
+learner_rpart$param_set$values
+# or with set_values
+learner_rpart$param_set$set_values(xval = 2, cp = 0.5)
+learner_rpart$param_set$values
+```
+
+:::{.callout-warning}
+As `learner_rpart$param_set$values` returns a `list`, some users may be tempted to set hyperparameters by passing a new `list` to `$values` -- this would work but **we do not recommend it**.
+This is because passing a `list` will wipe any existing hyperparameter values if they are not included in the list.
+So by example:
+```{r}
+rpart_params = lrn("regr.rpart")
+# values at construction
+rpart_params$param_set$values
+# passing maxdepth the wrong way
+rpart_params$param_set$values = list(maxdepth = 1)
+# we have removed xval by mistake
+rpart_params$param_set$values
+# now with set_values
+rpart_params = lrn("regr.rpart")
+rpart_params$param_set$set_values(maxdepth = 1)
+rpart_params$param_set$values
+```
+:::
+
+All methods will ensure your new values fall within the allowed parameter range:
+
+```{r, error=TRUE}
+lrn("regr.rpart", cp = 2, maxdepth = 2)
+```
+
+#### Parameter dependencies
+
+{{< include _optional.qmd >}}
+
+More complex hyperparameter spaces may include parameter dependencies, which occur when setting a hyperparameter is conditional on the value of another hyperparameter.
+One such example is an SVM classifier, implemented in `r ref("mlr3learners::LearnerClassifSVM")`.
+The parameter set of this model has an additional column called 'parents', which tells us there are parameter dependencies in the learner.
 
 ```{r}
 lrn("classif.svm")$param_set
 ```
 
-The additional column *parents* indicate which other hyperparameters a `r ref("Param")` depends.
-The field `$deps` lists the hyperparameters that have such dependencies, and the field `$cond` the conditional expressions:
+To view exactly what the dependency is we can use `$deps`, this returns a `data.table` which can queried in the usual way.
+So to see the dependencies of the SVM and to inspect the conditions we could do the following:
 
 ```{r}
 lrn("classif.svm")$param_set$deps
-lrn("classif.svm")$param_set$deps$cond
+lrn("classif.svm")$param_set$deps[1, cond]
+lrn("classif.svm")$param_set$deps[4, cond]
 ```
 
-For example, the hyperparameter `cost` can only be set if `type` is set to `"C-classification"`; otherwise it does not apply.
-Similarly, the (polynomial) `degree` can only be specified if the `kernel` is `"polynomial"`.
+This tells us that the parameter `cost` should only be set if the `type` parameter is set to `"C-classification"`.
+Similarly, the `coef0` parameter should be set only if `"polynomial"`, `"radial"`, or `"sigmoid"`.
 
-#### Setting Hyperparameter Values {#sec-parameters-setting}
-
-To change the hyperparameters of a learner, the `$values` field of the `r ref("ParamSet")` must be changed.
-There are three ways to change the values of an existing hyperparameter set:
-
-| Method                                                      | Description                                        |
-| :---------------------------------------------------------  | :-------------------------------------------------- |
-| `param_set$values$<par> = <value>`                          | Changes only a single value                         |
-| `param_set$values = list(<par1> = <value1>, ...)`           | Replace all parameter values with the given list  |
-| `param_set$set_values(<par1> = <value1>, ...)`              | Changes only the provided values                    |
-
-: Ways of setting hyperparameter values. {#tbl-parameters-configure}
-
-All of these methods check that the new hyperparameter setting is valid, i.e. if falls within the allowed range or options and satisfies the conditional expressions.
-
-```{r}
-# Change a single hyperparameter
-subset$values$minsplit = 10
-
-# Change all hyperparameter values
-subset$values = list(
-  cp = 0.05,
-  keep_model = TRUE,
-  minsplit = 10,
-  xval = 5)
-
-# Change only the given values
-subset$set_values(minsplit = 10)
-```
-
-We do not recommend using the second method as it clears all meta information (e.g. initial values; more on this here: `r ref_pkg("paradox")`).
-We recommend the `$set_values()` method.
-
-While there are different methods for changing parameter values, we recommend to use the `$set_values()` method.
-
-```{r basics-027-1}
-learner_rpart$param_set$set_values(minsplit = 10)
-learner_rpart$param_set$values
-```
-
-The `r ref("lrn()")` function also accepts additional arguments to set hyperparameters when constructing it:
-
-```{r basics-028}
-learner_rpart = lrn("regr.rpart", minsplit = 10)
-learner_rpart$param_set$values
-```
-
-```{r basics-029}
-learner_rpart$train(task_mtcars, splits$train)
-learner_rpart$model
-```
-
-With the changed hyperparameters, we have a more complex (and more reasonable) model.
-
-:::{.callout-note}
-Details on the hyperparameters of our `rpart` learner can be found in the documentation of `r ref ("rpart::rpart.control()")`.
-Hyperparameters in general are discussed in more detail in the section on [Hyperparameter Tuning](#tuning).
-:::
-
-### Predicting {#sec-predicting}
-
-After the model has been created, we can use it to make predictions.
-We can give the test partition to the `$predict()` function with the second argument being the testing set (`splits$test`) defined in `splits` by `partition()` earlier in this chapter.
-This `$predict()` function takes the `row_ids` given by `splits$test` and returns predictions for those `row_ids` in the given task (first argument) and the model stored in the learner (`learner_rpart`).
-
-```{r basics-030}
-predictions = learner_rpart$predict(task_mtcars, splits$test)
-predictions
-```
-
-The `$predict()` method returns a `r ref("Prediction")` object, in this case a `r ref("PredictionRegr")` for predicting a numeric quantity.
-The "truth" column contains the ground truth data, which was not given to the model to get a prediction.
-The "response" column contains the value predicted by the model, allowing for easy comparison with the ground truth data.
-
-The `r ref("Prediction")` object can easily be converted into a `data.table` or `data.frame` using the appropriate function:
-```{r}
-as.data.table(predictions)
-```
-
-We can also use separate data to make predictions, which can be part of a separate task or simply a separate `data.table` or `data.frame`:
-
-```{r basics-031}
-mtcars_new = data.table(cyl = c(5, 6),
-                        disp = c(100, 120),
-                        hp = c(100, 150),
-                        drat = c(4, 3.9),
-                        wt = c(3.8, 4.1),
-                        qsec = c(18, 19.5),
-                        vs = c(1, 0),
-                        am = c(1, 1),
-                        gear = c(6, 4),
-                        carb = c(3, 5))
-mtcars_new
-```
-
-The learner does not need to know more metadata about this data to make predictions, as this was given when training the model.
-We can use the `$predict_newdata()` method to make predictions for our separate dataset:
-
-```{r basics-032}
-predictions = learner_rpart$predict_newdata(mtcars_new)
-predictions
-```
-
-Note that the "truth" column is now `NA`, as we did not give the ground truth data.
-
-We can also access the predictions directly:
-
-```{r basics-access-pred}
-predictions$response
-```
-
-Similar to plotting tasks, `r mlr3viz` provides an `r ref("ggplot2::autoplot()", text = "autoplot()")` method for `r ref("Prediction")` objects.
-
-```{r basics-035, message = FALSE, warning = FALSE}
-#| fig-cap: "Comparing predicted and ground truth values for the mtcars dataset."
-#| fig-alt: "A scatter plot of predicted values on one axis and ground truth values on the other. A trend line is fit to show that in general there is good agreement between predicted and ground truth values."
-library("mlr3viz")
-predictions = learner_rpart$predict(task_mtcars, splits$test)
-autoplot(predictions)
-```
-
-### Changing the Prediction Type {#sec-predict-type}
-
-Regression learners default to predicting a numeric quantity.
-However, many regression models can also give you bounds on the prediction by providing the standard error.
-To predict these standard errors, the `predict_type` field of a `r ref("LearnerRegr")` must be changed from "response" (the default) to "se" before training.
-The `rpart` learner we used above does not support predicting standard errors, so we use the `lm` model from the `r ref("mlr3learners")` package instead:
-
-```{r basics-033}
-library(mlr3learners)
-
-learner_lm = lrn("regr.lm")
-learner_lm$predict_type = "se"
-learner_lm$train(task_mtcars, splits$train)
-predictions = learner_lm$predict(task_mtcars, splits$test)
-predictions
-```
-
-:::{.callout-tip}
-@sec-lrns-add-list shows how to list learners that support the standard error prediction type.
-:::
-
-The prediction object now contains the standard error for the predictions.
-
-```{r basics-034}
-predictions
+```{r, error=TRUE}
+# errors as type is not C-classification
+lrn("classif.svm", type = "eps-classification", cost = 0.5)
+# works because type is C-classification
+lrn("classif.svm", type = "C-classification", cost = 0.5)
 ```
 
 ## Evaluation {#sec-eval}
@@ -551,7 +535,7 @@ measure = msr("regr.rmse")
 measures = msrs(c("regr.rmse", "regr.sse"))
 ```
 
-At the core of all performance measures is a quantification of the difference between the predicted value and the ground truth value (except for unsupervised tasks, see @sec-task-types-add).
+At the core of all performance measures is a quantification of the difference between the predicted value and the ground truth value (except for unsupervised tasks, see @sec-special).
 This means that in order to assess performance, we usually need the ground truth data -- observations for which we do not know the true value cannot be used to assess the quality of the predictions of a model.
 This is why we make predictions on the data the model did not use during training (the test set).
 
@@ -561,6 +545,9 @@ We choose root mean squared error (`r ref("mlr_measures_regr.rmse", text = "regr
 Once the measure is created, we can pass it to the `$score()` method of the `r ref("Prediction")` object to quantify the predictive performance of our model.
 
 ```{r basics-038}
+task = tsk("mtcars")
+splits = partition(task)
+predictions = lrn("regr.rpart")$train(task, splits$train)$predict(task, splits$test)
 measure = msr("regr.rmse")
 measure
 predictions$score(measure)
@@ -939,66 +926,56 @@ task_cancer$set_col_roles("weights", roles = "weight")
 task_cancer$col_roles[c("feature", "target", "weight")]
 ```
 
-## Supported Learners {#sec-lrns-add}
+## Supported Algorithms {#sec-lrns-add}
 
-`mlr3` supports many learners.
+`mlr3` supports many algorithms (some through multiple implementations) as `Learner`s.
 These are primarily accessed through `r mlr3`, `r mlr3learners` and `r mlr3extralearners` package, however all packages that implement new tasks (@sec-special) also include a handful of simple algorithms.
 
 The list of learners included in `r mlr3` is deliberately small to avoid large sets of dependencies:
 
-* Featureless learner `regr.featureless`/`classif.featureless`: Simple baseline regression/classification learner. The former predicts the mean of the target values in the training set for all new observations, the latter predicts the most frequent label. Featureless learners are commonly used as fallbacks (@sec-fallback).
-* Classification and regression tree (CART) `regr.rpart`/`classif.rpart` from `r ref_pkg("rpart")`
-* Debug learners `regr.debug`/`classif.debug` used to debug code (@sec-error-handling)
+* Featureless learner (`regr.featureless`/`classif.featureless`), which are implemented in `r mlr3` and are baseline learners used for model comparison or as `r index('fallback learners')` (@sec-fallback). The former predicts the mean of the target values in the training set for all new observations, the latter predicts the most frequent label.
+* Debug learners (`regr.debug`/`classif.debug`), which are implemented in `r mlr3` and used only to debug code (@sec-error-handling).
+* Classification and regression trees (CART) (`regr.rpart`/`classif.rpart`).
 
-The `r mlr3learners` package contains cherry-picked implementations of the most popular ML methods:
+The `r mlr3learners` package contains select implementations of the most popular ML methods:
 
-* Linear (`r ref("mlr_learners_regr.lm", text = "regr.lm")`) and logistic (`r ref("mlr_learners_classif.log_reg", text = "classif.log_reg")`) regression.
-* Penalized Generalized Linear Models (`r ref("mlr_learners_regr.glmnet", text = "regr.glmnet")`, `r ref("mlr_learners_classif.glmnet", text = "classif.glmnet")`), possibly with built-in optimization of the penalization parameter (`r ref("mlr_learners_regr.cv_glmnet", text = "regr.cv_glmnet")`, `r ref("mlr_learners_classif.cv_glmnet", text = "classif.cv_glmnet")`).
-* (Kernelized) $k$-Nearest Neighbors regression (`r ref("mlr_learners_regr.kknn", text = "regr.kknn")`) and classification (`r ref("mlr_learners_classif.kknn", text = "classif.kknn")`).
-* Kriging / Gaussian Process Regression (`r ref("mlr_learners_regr.km", text = "regr.km")`).
-* Linear (`r ref("mlr_learners_classif.lda", text = "classif.lda")`) and Quadratic (`r ref("mlr_learners_classif.qda", text = "classif.qda")`) Discriminant Analysis.
-* Naïve Bayes Classification (`r ref("mlr_learners_classif.naive_bayes", text = "classif.naive_bayes")`).
-* Support-Vector machines (`r ref("mlr_learners_regr.svm", text = "regr.svm")`, `r ref("mlr_learners_classif.svm", text = "classif.svm")`).
-* Gradient Boosting (`r ref("mlr_learners_regr.xgboost", text = "regr.xgboost")`, `r ref("mlr_learners_classif.xgboost", text = "classif.xgboost")`).
-* Random Forests for regression and classification (`r ref("mlr_learners_regr.ranger", text = "regr.ranger")`, `r ref("mlr_learners_classif.ranger", text = "classif.ranger")`).
+* Linear (`regr.lm`) and logistic (`classif.log_reg`) regression.
+* Penalized Generalized Linear Models (`regr.glmnet`/`classif.glmnet`) and with built-in optimization of the penalization parameter (`regr.cv_glmnet`/classif.cv_glmnet`).
+* Weighted $k$-Nearest Neighbors regression (`regr.kknn`/`classif.kknn`).
+* Kriging / Gaussian Process Regression (`regr.km`).
+* Linear (`classif.lda`) and Quadratic (`classif.qda`) Discriminant Analysis.
+* Naïve Bayes Classification (`classif.naive_bayes`).
+* Support-Vector machines (`regr.svm`/`classif.svm`).
+* Gradient Boosting (`regr.xgboost`/`classif.xgboost`).
+* Random Forests for regression and classification (`regr.ranger`/`classif.ranger`).
 
-A complete list of supported learners across all `r mlr3` packages is hosted on `r link("https://mlr-org.com/learners.html", "our website")`.
+The majority of other learners are all in `r mlr3extralearners`.
+You can find an up-to-date list of learners here: `r link("https://mlr-org.com/learners.html")`.
 
-The dictionary `r ref("mlr_learners")` contains the supported learners and changes as packages are loaded.
-At the time of writing, `r mlr3` supports six learners, `r ref("mlr3learners")` 21 learners, `r ref("mlr3extralearners")` 88 learners, `r ref("mlr3proba")` five learners, and `r ref("mlr3cluster")` 19 learners.
-
-### Listing Learners {#sec-lrns-add-list}
-
+The dictionary `r ref("mlr_learners")` contains learners that are supported in loaded packages.
 You can list all learners by converting the `r ref("mlr_learners")` dictionary into a `data.table`:
 
 ```{r basics-learners-list}
 as.data.table(mlr_learners)
 ```
 
-The resulting `data.table` contains a lot of metadata that is useful for identifying learners that have particular properties.
+The resulting `data.table` contains a lot of metadata that is useful for identifying learners with particular properties.
 For example, we can list all learners that support regression problems:
 
 ```{r basics-learners-list-regr}
-as.data.table(mlr_learners)[task_type == "regr"]
+as.data.table(mlr_learners)[task_type == "classif"]
 ```
 
-We can check multiple conditions, to for example find all learners that support regression problems and can predict standard errors:
+We can filter by multiple conditions, for example to list all regression learners that and can predict standard errors:
 
 ```{r basics-learners-regr-se}
 as.data.table(mlr_learners)[task_type == "regr" &
     sapply(predict_types, function(x) "se" %in% x)]
 ```
 
-Or we can list all learners that support classification problems and missing feature values:
-
-```{r basics-learners-classif-missings}
-as.data.table(mlr_learners)[task_type == "classif" &
-    sapply(properties, function(x) "missings" %in% x)]
-```
-
 ## Exercises
 
-1. Using the `r ref("mlr_tasks_sonar", text = "Sonar dataset")`, measure the classification error (`classif.ce`) of a classification tree model (`classif.rpart`) trained with default hyperparameters on 80% of the data and tested on the remaining 20%.
-1. Give the true positive, false positive, true negative, and false negative rates of the predictions made by the model in exercise 1.
-1. Change the threshold of the model from exercise 1 such that the false positive rate is lower than the false negative rate.
-Give a reason why you might do this.
+1. Set the seed to `124` then train a classification tree model with `classif.rpart` and default hyperparameters on 80% of the data in the predefined `sonar` task. Evaluate the model's performance with the classification error measure on the remaining data. Also think about why we need to set the seed in this example.
+2. Calculate the true positive, false positive, true negative, and false negative rates of the predictions made by the model in exercise 1.
+3. Change the threshold of the model from exercise 1 such that the false positive rate is lower than the false negative rate.
+What is one reason you might do this in practice?
