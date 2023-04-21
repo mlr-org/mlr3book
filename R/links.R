@@ -166,6 +166,15 @@ define = function(main, margin = toproper(main), index = toproper(main)) {
   sprintf("\\index{%s}%s[%s]{.aside}", index, main, margin)
 }
 
+#' @title Add term to margin and index but not text
+#' @param index Text to show in index
+#' @param margin Text to show in margin
+#' @export
+aside = function(margin = margin, index = toproper(margin)) {
+  margin = toproper(margin)
+  sprintf("\\index{%s}[%s]{.aside}", index, margin)
+}
+
 #' @title Add term to index
 #' @param main Text to show in book
 #' @param index Index entry if different from `main
