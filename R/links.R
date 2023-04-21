@@ -105,13 +105,14 @@ cran_pkg = function(pkg, format = "markdown") {
   pkg = trimws(pkg)
 
   if (pkg %in% c("stats", "graphics", "datasets")) {
-    return(pkg)
+    sprintf("`%s`", pkg)
+  } else {
+    url = sprintf("https://cran.r-project.org/package=%s", pkg)
+    switch(format,
+      "markdown" = sprintf("[`%s`](%s)", pkg, url),
+      "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
+    )
   }
-  url = sprintf("https://cran.r-project.org/package=%s", pkg)
-  switch(format,
-    "markdown" = sprintf("[`%s`](%s)", pkg, url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
-  )
 }
 
 mlr_pkg = function(pkg, format = "markdown") {
