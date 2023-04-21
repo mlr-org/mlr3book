@@ -170,8 +170,7 @@ define = function(main, margin = toproper(main), index = toproper(main)) {
 #' @param index Text to show in index
 #' @param margin Text to show in margin
 #' @export
-aside = function(margin = margin, index = toproper(margin)) {
-  margin = toproper(margin)
+aside = function(margin = margin, index = margin) {
   sprintf("\\index{%s}[%s]{.aside}", index, margin)
 }
 
