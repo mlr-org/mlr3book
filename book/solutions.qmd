@@ -396,154 +396,90 @@ bmr$aggregate(msr("classif.bbrier"))[, c(4, 7)]
 
 ## Solutions to @sec-technical
 
-## Solutions to @sec-large-benchmarking
+### Parallel {.unnumbered .unlisted}
 
-1. In this exercise, we will learn how to work with OpenML
+Not all CPUs would be utilized in the example.
+All 4 of them are occupied for the first 4 iterations of the cross validation.
+The 5th iteration, however, only runs in parallel to the 6th fold, leaving 2 cores ilde.
+This is supported by the elapsed time of roughly 6 seconds for 6 jobs compared to also roughly 6 seconds for 8 jobs:
 
-a. Look at the OpenML dataset with ID 31 on the `r link("https://openml.org", "OpenML website")`.
-    Then load it into R and create an mlr3 task from it.
+```{r, eval = FALSE}
+task = tsk("penguins")
+learner = lrn("classif.debug", sleep_train = function() 3)
 
-You can access the dataset through the link <https://openml.org/d/31>.
+future::plan("multisession", workers = 4)
 
-```{r}
-library("mlr3oml")
-odata = odt(id = 31)
-odata
+resampling = rsmp("cv", folds = 6)
+system.time(resample(task, learner, resampling))
+
+resampling = rsmp("cv", folds = 8)
+system.time(resample(task, learner, resampling))
 ```
 
-Because the dataset has a default target, we can simply call `r ref("as_task")` without providing a target column.
+If possible, the number of resampling iterations should be an integer multiple of the number of workers.
+Therefore, a simple adaptation either increases the number of folds for improved accuracy of the error estimate or reduces the number of folds for improved runtime.
+
+### Custom Measures {.unnumbered .unlisted}
+
+The rules can easily be translated to R code where we expect `truth` and `prediction` to be factor vectors of the same length with levels `"A"` and `"B"`:
 
 ```{r}
-task = as_task(odata)
+costsens = function(truth, prediction) {
+    score = numeric(length(truth))
+    score[truth == "A" & prediction == "B"] = 10
+    score[truth == "B" & prediction == "A"] = 1
+
+    mean(score)
+}
 ```
 
-b. One OpenML dataset can be associated with many tasks.
-   Find one classification task that is associated with the dataset from the previous exercise (you can use the `r ref("list_oml_tasks()")` function for that).
-   Construct an mlr3 task and resampling from this OpenML task.
+This function can be embedded in the `Measure` class accordingly.
 
 ```{r}
-task_list = list_oml_tasks(data_id = 31, limit = 10)
+MeasureCustom = R6::R6Class("MeasureCustom",
+  inherit = mlr3::MeasureClassif, # classification measure
+  public = list(
+    initialize = function() { # initialize class
+      super$initialize(
+        id = "custom", # unique ID
+        packages = character(), # no dependencies
+        properties = character(), # no special properties
+        predict_type = "response", # measures response prediction
+        range = c(0, Inf), # results in values between (0, 1)
+        minimize = TRUE # smaller values are better
+      )
+    }
+  ),
 
-head(task_list)
+  private = list(
+    .score = function(prediction, ...) { # define score as private method
+      # define loss
+      costsens = function(truth, prediction) {
+        score = numeric(length(truth))
+        score[truth == "A" & prediction == "B"] = 10
+        score[truth == "B" & prediction == "A"] = 1
 
-otask = otsk(id = 261)
+        mean(score)
+      }
 
-task = as_task(otask)
-resampling  = as_resampling(otask)
-```
-
-c. List 10 OpenML datasets that have less than 5000 observations, no missing values, and less than 10 features.
-
-```{r}
-data_list = list_oml_data(
-  number_instances = c(0, 5000), 
-  number_features = c(0, 10),
-  number_missing_values = 0, 
-  limit = 10
-)
-
-head(data_list)
-```
-
-2. In this exercise, we are investigating the effect of the number of folds on the performance estimate and we will execute the experiment using `r ref_pkg("batchtools")`.
-   We are therefore changing the perspective and consider the resampling method the algorithm.
-
-a. Create an experiment registry.
-
-```{r}
-library("batchtools")
-reg = makeExperimentRegistry(NA, seed = 1)
-```
-
-b. Add a problem to the registry that accepts problem parameters `learner_id`, `task_id` and `measure_id` and returns a list with the corresponding learner, task, and measure, retrieved from the mlr3 dictionary.
-
-```{r}
-addProblem("my_problem", data = NULL, function(data, learner_id, task_id, measure_id, ...) {
-  library(mlr3verse)
-  list(
-    learner = lrn(learner_id),
-    task = tsk(task_id),
-    measure = msr(measure_id)
+      # call loss function
+      costsens(prediction$truth, prediction$response)
+    }
   )
-})
-```
-
-
-
-c. Add an algorithm for the cross-validation method that takes in parameter `folds`, evaluates the resampling and returns the scalar performance measure.
-
-```{r}
-addAlgorithm("cv", function(instance, folds, ...) {
-  learner = instance$learner
-  task = instance$task
-  resampling = rsmp("cv", folds = folds)
-  measure = instance$measure
-
-  rr = resample(task, learner, resampling)
-
-  rr$aggregate(measure)
-})
-```
-
-
-d. Add an experiment using the penguins task, the `classif.rpart` learner and the accuracy measure. 
-    Add experiments for 2, 5, and 10 folds and repeat each experiment 12 times (read the documentation of `r ref("addExperiments")` on how to add repetitions of an experiment).
-
-```{r}
-addExperiments(
-  prob.designs = list(my_problem = data.frame(
-    learner_id = "classif.rpart",
-    task_id = "penguins",
-    measure_id = "classif.acc"
-  )), 
-  algo.designs = list(cv = data.frame(folds = c(2, 5, 10))),
-  repls = 12
 )
 ```
 
-
-e. Test one of the defined jobs using the batchtools function `r ref("testJob")`.
-
-```{r}
-testJob(1)
-```
-
-
-f. Set the `cluster.function` of the registry to multicore `r ref("makeClusterFunctionsMulticore")` and save the registry.
+An alternative (as pointed to by the hint) can be constructed by first translating the rules to a matrix of misclassification costs, and then feeding this matrix to the
+ constructor of the `r ref("mlr_measures_classif.costs")` measure:
 
 ```{r}
-reg$cluster.functions = makeClusterFunctionsMulticore()
-saveRegistry()
+# truth in columns, prediction in rows
+C = matrix(c(0, 10, 1, 0), nrow = 2)
+rownames(C) = colnames(C) = c("A", "B")
+print(C)
 
+msr("classif.costs", costs = C)
 ```
-
-
-g. Submit the jobs to the cluster and wait until they are finished. Chunk the jobs so that 3 computational jobs run for roughly the same amount of time.
-
-```{r}
-chunks = data.frame(
-  job.id = getJobTable()$job.id,
-  chunk = rep(1:3, times = 12)
-)
-
-submitJobs(chunks)
-waitForJobs()
-```
-
-
-h. Load and plot the experiment results using a box-plot that compares the results for the different number of folds.
-```{r}
-library("ggplot2")
-accuracy = sapply(1:18, loadResult)
-folds = unlist(getJobTable()$algo.pars)
-
-tbl = data.frame(accuracy = accuracy, folds = as.factor(folds))
-    
-ggplot(tbl, aes(x = folds, y = accuracy)) + 
-  geom_boxplot()
-```
-
-Explanation: With an increasing number of folds, the performance improves, as there is more training data in each fold.
 
 
 ## Solutions to @sec-interpretation
