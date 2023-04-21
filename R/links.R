@@ -167,7 +167,16 @@ toproper = function(str) {
 #' @param index Text to show in index
 #' @param margin Text to show in margin
 #' @export
-define = function(main, margin = toproper(main), index = toproper(main)) {
+define = function(main, margin = NULL, index = NULL) {
+  if (grepl("`", main, fixed = TRUE)) {
+    strip_main = gsub("`", "", main, fixed = TRUE)
+    if (is.null(margin)) margin = strip_main
+    if (is.null(index)) index = strip_main
+  } else {
+    if (is.null(margin)) margin = toproper(main)
+    if (is.null(index)) index = toproper(main)
+  }
+
   sprintf("\\index{%s}%s[%s]{.aside}", index, main, margin)
 }
 
