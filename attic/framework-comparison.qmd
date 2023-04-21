@@ -1,0 +1,346 @@
+# Framework Comparison {#compare-frameworks}
+
+```{r appendix-001, include = FALSE}
+library(mlr3pipelines)
+```
+
+Below, we collected some examples, where **`r cran_pkg("mlr3pipelines")`** is compared to different other software packages,
+such as **`r cran_pkg("mlr")`**, **`r cran_pkg("recipes")`** and **[sklearn](https://scikit-learn.org/stable/)**.
+
+Before diving deeper, we give a short introduction to PipeOps.
+
+### An introduction to "PipeOp"s
+
+In this example, we create a linear Pipeline.
+After scaling all input features, we rotate our data using principal component analysis.
+After this transformation, we use a simple Decision Tree learner for classification.
+
+As exemplary data, we will use the "`iris`" classification task.
+This object contains the famous iris dataset and some meta-information, such as the target variable.
+
+```{r appendix-002}
+library("mlr3")
+task = tsk("iris")
+```
+
+We quickly split our data into a train and a test set:
+
+```{r appendix-003}
+test.idx = sample(seq_len(task$nrow), 30)
+train.idx = setdiff(seq_len(task$nrow), test.idx)
+# Set task to only use train indexes
+task$row_roles$use = train.idx
+```
+
+A Pipeline (or `r ref("Graph")`) contains multiple pipeline operators ("`r ref("PipeOp")`"s), where each `r ref("PipeOp")` transforms the data when it flows through it.
+For this use case, we require 3 transformations:
+
+* A `r ref("PipeOp")` that scales the data
+* A `r ref("PipeOp")` that performs PCA
+* A `r ref("PipeOp")` that contains the **Decision Tree** learner
+
+A list of available `r ref("PipeOp")`s can be obtained from
+
+```{r appendix-004}
+library("mlr3pipelines")
+po()
+```
+
+First we define the required `r ref("PipeOp")`s:
+
+```{r appendix-005}
+op1 = po("scale")
+op2 = po("pca")
+op3 = po("learner", learner = lrn("classif.rpart"))
+```
+
+#### A quick glance into a PipeOp
+
+In order to get a better understanding of what the respective PipeOps do, we quickly look at one of them in detail:
+
+The most important slots in a PipeOp are:
+
+* `$train()`: A function used to train the PipeOp.
+* `$predict()`: A function used to predict with the PipeOp.
+
+The `$train()` and `$predict()` functions define the core functionality of our PipeOp.
+In many cases, in order to not leak information from the training set into the test set it is imperative to treat train and test data separately.
+For this we require a `$train()` function that learns the appropriate transformations from the training set and a `$predict()` function that applies the transformation on future data.
+
+In the case of `PipeOpPCA` this means the following:
+
+* `$train()` learns a rotation matrix from its input and saves this matrix to an additional slot, `$state`.
+  It returns the rotated input data stored in a new `r ref("Task")`.
+* `$predict()` uses the rotation matrix stored in `$state` in order to rotate future, unseen data.
+  It returns those in a new `r ref("Task")`.
+
+#### Constructing the Pipeline
+
+We can now connect the `r ref("PipeOp")`s constructed earlier to a **Pipeline**.
+We can do this using the `%>>%` operator.
+
+```{r appendix-006}
+linear_pipeline = op1 %>>% op2 %>>% op3
+```
+
+The result of this operation is a "`r ref("Graph")`".
+A `r ref("Graph")` connects the input and output of each `r ref("PipeOp")` to the following `r ref("PipeOp")`.
+This allows us to specify linear processing pipelines.
+In this case, we connect the output of the **scaling** PipeOp to the input of the **PCA** PipeOp and the output of the **PCA** PipeOp to the input of **PipeOpLearner**.
+
+We can now train the `r ref("Graph")` using the `iris` `r ref("Task")`.
+
+```{r appendix-007}
+linear_pipeline$train(task)
+```
+
+When we now train the graph, the data flows through the graph as follows:
+
+* The Task flows into the `r ref("PipeOpScale")`.
+  The `r ref("PipeOp")` scales each column in the data contained in the Task and returns a new Task that contains the scaled data to its output.
+* The scaled Task flows into the `PipeOpPCA`.
+  PCA transforms the data and returns a (possibly smaller) Task, that contains the transformed data.
+* This transformed data then flows into the learner, in our case **classif.rpart**.
+  It is then used to train the learner, and as a result saves a model that can be used to predict new data.
+
+In order to predict on new data, we need to save the relevant transformations our data went through while training.
+As a result, each `r ref("PipeOp")` saves a state, where information required to appropriately transform future data is stored.
+In our case, this is **mean** and **standard deviation** of each column for `r ref("PipeOpScale")`, the PCA rotation matrix for `PipeOpPCA` and the learned model for `r ref("PipeOpLearner")`.
+
+```{r appendix-008}
+# predict on test.idx
+task$row_roles$use = test.idx
+linear_pipeline$predict(task)
+```
+
+### mlr3pipelines vs. mlr
+
+In order to showcase the benefits of `r cran_pkg("mlr3pipelines")` over `r cran_pkg("mlr")`'s `Wrapper` mechanism, we compare the case of imputing missing values before filtering the top 2 features and then applying a learner.
+
+While `r cran_pkg("mlr")` wrappers are generally less verbose and require a little less code, this heavily inhibits flexibility.
+As an example, wrappers can generally not process data in parallel.
+
+#### mlr
+
+```{r appendix-009, eval = FALSE}
+library("mlr")
+# We first create a learner
+lrn = makeLearner("classif.rpart")
+# Wrap this learner in a FilterWrapper
+lrn.wrp = makeFilterWrapper(lrn, fw.abs = 2L)
+# And wrap the resulting wrapped learner into an ImputeWrapper.
+lrn.wrp = makeImputeWrapper(lrn.wrp, classes = list(factor = imputeConstant("missing")))
+
+# Afterwards, we can train the resulting learner on a task
+train(lrn, iris.task)
+```
+
+#### mlr3pipelines
+
+```{r appendix-010, eval = FALSE}
+library("mlr3")
+library("mlr3pipelines")
+library("mlr3filters")
+
+impute = po("imputeoor")
+filter = po("filter", filter = flt("variance"), filter.nfeat = 2L)
+rpart = po("learner", lrn("classif.rpart"))
+
+# Assemble the Pipeline
+pipeline = impute %>>% filter %>>% rpart
+# And convert to a 'GraphLearner'
+learner = as_learner(pipeline)
+```
+
+The fact that **mlr's** wrappers have to be applied inside-out, i.e. in the reverse order is often confusing.
+This is way more straight-forward in `r mlr_pkg("mlr3pipelines")`, where we simply chain the different methods using `%>>%`.
+Additionally, `r mlr_pkg("mlr3pipelines")` offers way greater possibilities with respect to the kinds of Pipelines that can be constructed.
+In `r mlr_pkg("mlr3pipelines")`, we allow for the construction of parallel and conditional pipelines.
+This was previously not possible.
+
+### mlr3pipelines vs. sklearn.pipeline.Pipeline
+
+In order to broaden the horizon, we compare to **Python** [sklearn's](https://scikit-learn.org/stable/) `Pipeline` methods.
+`sklearn.pipeline.Pipeline` sequentially applies a list of transforms before fitting a final estimator.
+Intermediate steps of the pipeline are `transforms`, i.e. steps that can learn from the data, but also transform the data while it flows through it.
+The purpose of the pipeline is to assemble several steps that can be cross-validated together while setting different parameters.
+For this, it enables setting parameters of the various steps.
+
+It is thus conceptually very similar to `r cran_pkg("mlr3pipelines")`.
+Similarly to `r cran_pkg("mlr3pipelines")`, we can tune over a full `Pipeline` using various tuning methods.
+`Pipeline` mainly supports linear pipelines.
+This means, that it can execute parallel steps, such as for example **Bagging**, but it does not support conditional execution, i.e. `r ref("PipeOpBranch")`.
+At the same time, the different `transforms` in the pipeline can be cached, which makes tuning over the configuration space of a `Pipeline` more efficient, as executing some steps multiple times can be avoided.
+
+We compare functionality available in both `r cran_pkg("mlr3pipelines")` and `sklearn.pipeline.Pipeline` to give a comparison.
+
+The following example obtained from the [sklearn](https://scikit-learn.org/stable/) documentation showcases a **Pipeline** that first Selects a feature and performs PCA on the original data, concatenates the resulting datasets and applies a Support Vector Machine.
+
+#### sklearn
+
+```{python 98-appendix-comparison-010-1, eval = FALSE, python.reticulate = FALSE}
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.model_selection import GridSearchCV
+from sklearn.svm import SVC
+from sklearn.datasets import load_iris
+from sklearn.decomposition import PCA
+from sklearn.feature_selection import SelectKBest
+
+iris = load_iris()
+
+X, y = iris.data, iris.target
+
+# This dataset is way too high-dimensional. Better do PCA:
+pca = PCA(n_components=2)
+
+# Maybe some original features where good, too?
+selection = SelectKBest(k=1)
+
+# Build estimator from PCA and Univariate selection:
+combined_features = FeatureUnion([("pca", pca), ("univ_select", selection)])
+
+# Use combined features to transform dataset:
+X_features = combined_features.fit(X, y).transform(X)
+
+svm = SVC(kernel="linear")
+
+# Do grid search over k, n_components and C:
+pipeline = Pipeline([("features", combined_features), ("svm", svm)])
+
+param_grid = dict(features__pca__n_components=[1, 2, 3],
+                  features__univ_select__k=[1, 2],
+                  svm__C=[0.1, 1, 10])
+
+grid_search = GridSearchCV(pipeline, param_grid=param_grid, cv=5, verbose=10)
+grid_search.fit(X, y)
+```
+
+#### mlr3pipelines
+
+```{r appendix-011, eval = FALSE}
+library("mlr3verse")
+iris = tsk("iris")
+
+# Build the steps
+copy = po("copy", 2)
+pca = po("pca")
+selection = po("filter", filter = flt("variance"))
+union = po("featureunion", 2)
+svm = po("learner", lrn("classif.svm", kernel = "linear", type = "C-classification"))
+
+# Assemble the Pipeline
+pipeline = copy %>>% gunion(list(pca, selection)) %>>% union %>>% svm
+learner = as_learner(pipeline)
+
+# For tuning, we define the resampling and the Parameter Space
+resampling = rsmp("cv", folds = 5L)
+
+library("paradox")
+search_space = ps(
+  classif.svm.cost = p_dbl(lower = 0.1, upper = 1),
+  pca.rank. = p_int(lower = 1, upper = 3),
+  variance.filter.nfeat = p_int(lower = 1, upper = 2)
+)
+
+instance = TuningInstanceSingleCrit$new(
+  task = iris,
+  learner = learner,
+  resampling = resampling,
+  measure = msr("classif.ce"),
+  terminator = trm("none"),
+  search_space = search_space
+)
+
+tuner = tnr("grid_search", resolution = 10)
+tuner$optimize(instance)
+
+Set the learner to the optimal values and train
+learner$param_set$values = instance$result_learner_param_vals
+```
+
+In summary, we can achieve similar results with a comparable number of lines, while at the same time offering greater flexibility with respect to which kinds of pipelines we want to optimize over.
+At the same time, experiments using `r mlr_pkg("mlr3")` can now be arbitrarily parallelized using `futures`.
+
+### mlr3pipelines vs recipes
+
+`r cran_pkg("recipes")` is a new package, that covers some of the same applications steps as `r cran_pkg("mlr3pipelines")`.
+Both packages feature the possibility to connect different pre- and post-processing methods using a pipe-operator.
+As the `r cran_pkg("recipes")` package tightly integrates with the `r cran_pkg("tidymodels")` ecosystem, much of the functionality integrated there can be used in `recipes`.
+We compare `r cran_pkg("recipes")` to `r cran_pkg("mlr3pipelines")` using an example from the `r cran_pkg("recipes")` vignette.
+
+The aim of the analysis is to predict whether customers pay back their loans given some information on the customers.
+In order to do this, we build a model that does the following:
+
+1. It first imputes missing values using k-nearest neighbors
+2. All factor variables are converted to numerics using dummy encoding
+3. The data is first centered then scaled.
+
+In order to validate the algorithm, data is first split into a train and test set using `initial_split`, `training`, `testing`.
+The recipe trained on the train data (see steps above) is then applied to the test data.
+
+#### recipes
+
+```{r appendix-012, eval = FALSE}
+library("tidymodels")
+library("rsample")
+data("credit_data", package = "modeldata")
+
+set.seed(55)
+train_test_split = initial_split(credit_data)
+credit_train = training(train_test_split)
+credit_test = testing(train_test_split)
+
+rec = recipe(Status ~ ., data = credit_train) %>%
+  step_knnimpute(all_predictors()) %>%
+  step_dummy(all_predictors(), -all_numeric()) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric())
+
+trained_rec = prep(rec, training = credit_train)
+
+# Apply to train and test set
+train_data <- bake(trained_rec, new_data = credit_train)
+test_data  <- bake(trained_rec, new_data = credit_test)
+```
+
+Afterwards, the transformed data can be used during train and predict:
+
+```{r appendix-013, eval = FALSE}
+# Train
+rf = rand_forest(mtry = 12, trees = 200, mode = "classification") %>%
+  set_engine("ranger", importance = 'impurity') %>%
+  fit(Status ~ ., data = train_data)
+
+# Predict
+prds = predict(rf, test_data)
+```
+
+#### mlr3pipelines
+
+The same analysis can be performed in `r cran_pkg("mlr3pipelines")`.
+Note, that for now we do not impute via `knn` but instead via sampling.
+
+```{r appendix-014, eval = FALSE}
+library("data.table")
+library("mlr3")
+library("mlr3learners")
+library("mlr3pipelines")
+data("credit_data", package = "modeldata")
+set.seed(55)
+
+# Create the task
+task = as_task_classif(credit_data, target = "Status")
+
+# Build up the Pipeline:
+g = po("imputesample", id = "impute") %>>%
+  po("encode", method = "one-hot") %>>%
+  po("scale") %>>%
+  po("learner", lrn("classif.ranger", num.trees = 200, mtry = 12))
+
+# We can visualize what happens to the data using the `plot` function:
+g$plot()
+
+# And we can use `mlr3's` full functionality be wrapping the Graph into a GraphLearner.
+glrn = as_learner(g)
+resample(task, glrn, rsmp("holdout"))
+```

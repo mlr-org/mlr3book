@@ -4,10 +4,12 @@
 \alias{ref_pkg}
 \title{Hyperlink to Package}
 \usage{
-ref_pkg(pkg, format = "markdown")
+ref_pkg(pkg, runiverse = TRUE, format = "markdown")
 }
 \arguments{
 \item{pkg}{Name of the package.}
+
+\item{runiverse}{If \code{TRUE} (default) then creates R-universe link instead of GH}
 
 \item{format}{Either markdown or HTML.}
 }

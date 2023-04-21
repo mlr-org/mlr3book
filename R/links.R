@@ -17,15 +17,19 @@ update_db = function() {
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = topic, format = "markdown") {
+ref = function(topic, text = NULL, format = "markdown") {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
-  checkmate::assert_string(text, min.chars = 1L)
+  checkmate::assert_string(text, min.chars = 1L, null.ok = TRUE)
   checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
-  text = trimws(text)
+  text = if (is.null(text)) {
+    topic
+  } else {
+    trimws(text)
+  }
 
   if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
@@ -35,9 +39,14 @@ ref = function(topic, text = topic, format = "markdown") {
   } else {
     update_db()
     matched = db$base[db$aliases[list(strip_parenthesis(topic)), c("Alias", "ID"), on = "Alias", nomatch = 0L], on = "ID", nomatch = NULL]
+
+    # remove mlr3verse matches - these are just reexports with no helpful information on the man page
+    matched = matched[get("Package") != "mlr3verse"]
+
     if (nrow(matched) == 0L) {
       stop(sprintf("Could not find help page for topic '%s'", topic))
     }
+
     if (nrow(matched) >= 2L) {
       lgr$warn("Ambiguous link to '%s': %s", topic, paste0(paste(matched$Package, matched$Name, sep = "::"), collapse = " | "))
       matched = head(matched, 1L)
@@ -66,17 +75,23 @@ ref = function(topic, text = topic, format = "markdown") {
 #' Links either to respective mlr3 website or to CRAN page.
 #'
 #' @param pkg Name of the package.
+#' @param runiverse If `TRUE` (default) then creates R-universe link instead of GH
 #' @inheritParams ref
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref_pkg = function(pkg, format = "markdown") {
-  checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
+ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
+  checkmate::assert_string(pkg, pattern = "(^[[:alnum:]._-]+$)|(^[[:alnum:]_-]+/[[:alnum:]._-]+$)")
   checkmate::assert_choice(format, c("markdown", "html"))
   pkg = trimws(pkg)
 
   if (grepl("/", pkg, fixed = TRUE)) {
-    gh_pkg(pkg, format = format)
+    if (runiverse) {
+      ru_pkg(pkg, format = format)
+    } else {
+      gh_pkg(pkg, format = format)
+    }
+
   } else if (pkg %in% db$hosted) {
     mlr_pkg(pkg, format = format)
   } else {
@@ -84,39 +99,22 @@ ref_pkg = function(pkg, format = "markdown") {
   }
 }
 
-#' @title Hyperlink to CRAN Package
-#'
-#' @description
-#' Creates a markdown link to a CRAN package.
-#'
-#' @inheritParams ref_pkg
-#'
-#' @return (`character(1)`) markdown link.
-#' @export
 cran_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
   pkg = trimws(pkg)
 
   if (pkg %in% c("stats", "graphics", "datasets")) {
-    return(pkg)
+    sprintf("`%s`", pkg)
+  } else {
+    url = sprintf("https://cran.r-project.org/package=%s", pkg)
+    switch(format,
+      "markdown" = sprintf("[`%s`](%s)", pkg, url),
+      "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
+    )
   }
-  url = sprintf("https://cran.r-project.org/package=%s", pkg)
-  switch(format,
-    "markdown" = sprintf("[%s](%s)", pkg, url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
-  )
 }
 
-#' @title Hyperlink to mlr3 Package
-#'
-#' @description
-#' Creates a markdown link to a mlr3 package with a "mlr-org.com" subdomain.
-#'
-#' @inheritParams ref_pkg
-#'
-#' @return (`character(1)`) markdown link.
-#' @export
 mlr_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
@@ -124,21 +122,11 @@ mlr_pkg = function(pkg, format = "markdown") {
 
   url = sprintf("https://%1$s.mlr-org.com", pkg)
   switch(format,
-    "markdown" = sprintf("[%s](%s)", pkg, url),
+    "markdown" = sprintf("[`%s`](%s)", pkg, url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
   )
 }
 
-#' @title Hyperlink to GitHub Repository
-#'
-#' @description
-#' Creates a markdown link to GitHub repository.
-#'
-#' @param pkg Name of the repository specified as "{repo}/{name}".
-#' @inheritParams ref_pkg
-#'
-#' @return (`character(1)`) markdown link.
-#' @export
 gh_pkg = function(pkg, format = "markdown") {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
   checkmate::assert_choice(format, c("markdown", "html"))
@@ -147,7 +135,183 @@ gh_pkg = function(pkg, format = "markdown") {
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://github.com/%s", pkg)
   switch(format,
-    "markdown" = sprintf("[%s](%s)", parts[2L], url),
+    "markdown" = sprintf("[`%s`](%s)", parts[2L], url),
     "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
   )
 }
+
+ru_pkg = function(pkg, format = "markdown") {
+  checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
+  checkmate::assert_choice(format, c("markdown", "html"))
+
+  parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
+  url = sprintf("https://%s.r-universe.dev/ui#package:%s", parts[1L], parts[2L])
+  switch(format,
+    "markdown" = sprintf("[`%s`](%s)", parts[2L], url),
+    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
+  )
+}
+
+toproper = function(str) {
+  str = strsplit(str, " ", TRUE)[[1]]
+  paste0(toupper(substr(str, 1, 1)), tolower(substr(str, 2, 100)), collapse = " ")
+}
+
+#' @title Add term to index and margin
+#' @param main Text to show in book
+#' @param index Text to show in index
+#' @param margin Text to show in margin
+#' @export
+define = function(main, margin = toproper(main), index = toproper(main)) {
+  sprintf("\\index{%s}%s[%s]{.aside}", index, main, margin)
+}
+
+#' @title Add term to index
+#' @param main Text to show in book
+#' @param index Index entry if different from `main
+#' @export
+index = function(main, index = toproper(main)) {
+  sprintf("\\index{%s}%s", index, main)
+}
+
+#' @title Create markdown and print-friendly link
+#'
+#' @description
+#' Creates markdown link and footnote with full link
+#'
+#' @param url URL to link to
+#' @param text Text to display in main text
+#'
+#' @export
+link = function(url, text = NULL) {
+  if (is.null(text)) {
+    sprintf("[%s](%s)", url, url)
+  } else {
+    sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
+  }
+}
+
+#' @name paradox
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3misc
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3data
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3db
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3proba
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3pipelines
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3learners
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3filters
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name bbotk
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3tuning
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3fselect
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3cluster
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3spatiotempcv
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3spatial
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3extralearners
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3tuningspaces
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3hyperband
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3mbo
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3viz
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3verse
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3benchmark
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3oml
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3batchmark
+#' @title Helper mlr links
+#' @export
+NULL
+
+#' @name mlr3fairness
+#' @title Helper mlr links
+#' @export
+NULL

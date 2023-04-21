@@ -1,0 +1,293 @@
+## Define Tuning Spaces** {#searchspace}
+
+When running an optimization, it is important to inform the tuning algorithm about what hyperparameters are valid.
+Here the names, types, and valid ranges of each hyperparameter are important.
+All this information is communicated with objects of the class `r ref("ParamSet")`, which is defined in `r mlr_pkg("paradox")`.
+While it is possible to create `r ref("ParamSet")`-objects using its `$new`-constructor, it is much shorter and readable to use the `r ref("ps")`-shortcut, which will be presented here.
+For an in-depth description of `r mlr_pkg("paradox")` and its classes, see the [`r mlr_pkg("paradox")` chapter](#paradox).
+
+Note, that `r ref("ParamSet")` objects exist in two contexts.
+First, `r ref("ParamSet")`-objects are used to define the space of valid parameter settings for a learner (and other objects).
+Second, they are used to define a search space for tuning.
+We are mainly interested in the latter.
+For example we can consider the `minsplit` parameter of the `r ref("mlr_learners_classif.rpart", "classif.rpart Learner")`.
+The `r ref("ParamSet")` associated with the learner has a lower but *no* upper bound.
+However, for tuning the value, a lower *and* upper bound must be given because tuning search spaces need to be bounded.
+For `r ref("Learner")` or `r ref("PipeOp")` objects, typically "unbounded" `r ref("ParamSet", text = "ParamSets")` are used.
+Here, however, we will mainly focus on creating "bounded" `r ref("ParamSet", text = "ParamSets")` that can be used for tuning.
+See the [in-depth `r mlr_pkg("paradox")` chapter](#paradox) for more details on using `r ref("ParamSet", text = "ParamSets")` to  define parameter ranges for use-cases besides tuning.
+
+### Creating `r ref("ParamSet")`s
+
+An empty `"ParamSet")` -- not yet very useful -- can be constructed using just the `"ps")` call:
+
+```{r optimization-027}
+search_space = ps()
+print(search_space)
+```
+
+`r ref("ps")` takes named `r ref("Domain")` arguments that are turned into parameters.
+A possible search space for the `"classif.svm"` learner could for example be:
+
+```{r optimization-028}
+search_space = ps(
+  cost = p_dbl(lower = 0.1, upper = 10),
+  kernel = p_fct(levels = c("polynomial", "radial"))
+)
+print(search_space)
+```
+
+There are five domain constructors that produce a parameters when given to `r ref("ps")`:
+
+| Constructor               | Description                          | Is bounded?                        | Underlying Class    |
+| :-----------------------: | :----------------------------------: | :--------------------------------: | :-----------------: |
+| `r ref("p_dbl")`                   | Real valued parameter ("double")     | When `upper` and `lower` are given | `r ref("ParamDbl")` |
+| `r ref("p_int")`                  | Integer parameter                    | When `upper` and `lower` are given | `r ref("ParamInt")` |
+| `r ref("p_fct")`                   | Discrete valued parameter ("factor") | Always                             | `r ref("ParamFct")` |
+| `r ref("p_lgl")`                 | Logical / Boolean parameter          | Always                             | `r ref("ParamLgl")` |
+| `r ref("p_uty")`                   | Untyped parameter                    | Never                              | `r ref("ParamUty")` |
+
+These domain constructors each take some of the following arguments:
+
+* **`lower`**, **`upper`**: lower and upper bound of numerical parameters (`r ref("p_dbl")` and `r ref("p_int")`). These need to be given to get bounded parameter spaces valid for tuning.
+* **`levels`**: Allowed categorical values for `p_fct` parameters.
+  Required argument for `r ref("p_fct")`.
+  See [below](#autolevel) for more details on this parameter.
+* **`trafo`**: transformation function, see [below](#searchspace-trafo).
+* **`depends`**: dependencies, see [below](#searchspace-depends).
+* **`tags`**: Further information about a parameter, used for example by the [`hyperband`](#hyperband) tuner.
+* **`default`**: Value corresponding to default behavior when the parameter is not given.
+  Not used for tuning search spaces.
+* **`special_vals`**: Valid values besides the normally accepted values for a parameter.
+  Not used for tuning search spaces.
+* **`custom_check`**: Function that checks whether a value given to `r ref("p_uty")` is valid.
+  Not used for tuning search spaces.
+
+The `lower` and `upper` parameters are always in the first and second position respectively, except for `r ref("p_fct")` where `levels` is in the first position.
+It is preferred to omit the labels (ex: upper = 0.1 becomes just 0.1). This way of defining a `r ref("ParamSet")` is more concise than the equivalent definition above.
+Preferred:
+
+```{r optimization-029}
+search_space = ps(cost = p_dbl(0.1, 10), kernel = p_fct(c("polynomial", "radial")))
+```
+
+### Transformations (`trafo`) {#searchspace-trafo}
+
+We can use the `r mlr_pkg("paradox")` function `r ref("generate_design_grid")` to look at the values that would be evaluated by grid search.
+(We are using `r ref("rbindlist()")` here because the result of `$transpose()` is a list that is harder to read.
+If we didn't use `$transpose()`, on the other hand, the transformations that we investigate here are not applied.) In `generate_design_grid(search_space, 3)`, `search_space` is the `r ref("ParamSet")` argument and 3 is the specified resolution in the parameter space.
+The resolution for categorical parameters is ignored; these parameters always produce a grid over all of their valid levels.
+For numerical parameters the endpoints of the params are always included in the grid, so if there were 3 levels for the kernel instead of 2 there would be 9 rows, or if the resolution was 4 in this example there would be 8 rows in the resulting table.
+
+```{r optimization-030}
+library("data.table")
+rbindlist(generate_design_grid(search_space, 3)$transpose())
+```
+
+We notice that the `cost` parameter is taken on a linear scale.
+We assume, however, that the difference of cost between `0.1` and `1` should have a similar effect as the difference between `1` and `10`.
+Therefore it makes more sense to tune it on a *logarithmic scale*.
+This is done by using a **transformation** (`trafo`).
+This is a function that is applied to a parameter after it has been sampled by the tuner.
+We can tune `cost` on a logarithmic scale by sampling on the linear scale `[-1, 1]` and computing `10^x` from that value.
+```{r optimization-031}
+search_space = ps(
+  cost = p_dbl(-1, 1, trafo = function(x) 10^x),
+  kernel = p_fct(c("polynomial", "radial"))
+)
+rbindlist(generate_design_grid(search_space, 3)$transpose())
+```
+
+It is even possible to attach another transformation to the `r ref("ParamSet")` as a whole that gets executed after individual parameter's transformations were performed.
+It is given through the `.extra_trafo` argument and should be a function with parameters `x` and `param_set` that takes a list of parameter values in `x` and returns a modified list.
+This transformation can access all parameter values of an evaluation and modify them with interactions.
+It is even possible to add or remove parameters.
+(The following is a bit of a silly example.)
+
+```{r optimization-032}
+search_space = ps(
+  cost = p_dbl(-1, 1, trafo = function(x) 10^x),
+  kernel = p_fct(c("polynomial", "radial")),
+  .extra_trafo = function(x, param_set) {
+    if (x$kernel == "polynomial") {
+      x$cost = x$cost * 2
+    }
+    x
+  }
+)
+rbindlist(generate_design_grid(search_space, 3)$transpose())
+```
+
+The available types of search space parameters are limited: continuous, integer, discrete, and logical scalars.
+There are many machine learning algorithms, however, that take parameters of other types, for example vectors or functions.
+These can not be defined in a search space `r ref("ParamSet")`, and they are often given as `r ref("ParamUty")` in the `r ref("Learner")`'s `r ref("ParamSet")`.
+When trying to tune over these hyperparameters, it is necessary to perform a Transformation that changes the type of a parameter.
+
+An example is the `class.weights` parameter of the [Support Vector Machine](https://machinelearningmastery.com/cost-sensitive-svm-for-imbalanced-classification/) (SVM), which takes a named vector of class weights with one entry for each target class.
+The trafo that would tune `class.weights` for the `r ref("mlr_tasks_spam")`, `'tsk("spam")` dataset could be:
+
+```{r optimization-033}
+search_space = ps(
+  class.weights = p_dbl(0.1, 0.9, trafo = function(x) c(spam = x, nonspam = 1 - x))
+)
+generate_design_grid(search_space, 3)$transpose()
+```
+
+(We are omitting `r ref("rbindlist()")` in this example because it breaks the vector valued return elements.)
+
+### Automatic Factor Level Transformation {#autolevel}
+
+A common use-case is the necessity to specify a list of values that should all be tried (or sampled from).
+It may be the case that a hyperparameter accepts function objects as values and a certain list of functions should be tried.
+Or it may be that a choice of special numeric values should be tried.
+For this, the `r ref("p_fct")` constructor's `level` argument may be a value that is not a `character` vector, but something else.
+If, for example, only the values `0.1`, `3`, and `10` should be tried for the `cost` parameter, even when doing random search, then the following search space would achieve that:
+
+```{r optimization-034}
+search_space = ps(
+  cost = p_fct(c(0.1, 3, 10)),
+  kernel = p_fct(c("polynomial", "radial"))
+)
+rbindlist(generate_design_grid(search_space, 3)$transpose())
+```
+
+This is equivalent to the following:
+```{r optimization-035}
+search_space = ps(
+  cost = p_fct(c("0.1", "3", "10"),
+    trafo = function(x) list(`0.1` = 0.1, `3` = 3, `10` = 10)[[x]]),
+  kernel = p_fct(c("polynomial", "radial"))
+)
+rbindlist(generate_design_grid(search_space, 3)$transpose())
+```
+
+Note: Though the resolution is 3 here, in this case it doesn't matter because both `cost` and `kernel` are factors (the resolution for categorical variables is ignored, these parameters always produce a grid over all their valid levels).
+
+This may seem silly, but makes sense when considering that factorial tuning parameters are always `character` values:
+
+```{r optimization-036}
+search_space = ps(
+  cost = p_fct(c(0.1, 3, 10)),
+  kernel = p_fct(c("polynomial", "radial"))
+)
+typeof(search_space$params$cost$levels)
+```
+
+Be aware that this results in an "unordered" hyperparameter, however.
+Tuning algorithms that make use of ordering information of parameters, like genetic algorithms or model based optimization, will perform worse when this is done.
+For these algorithms, it may make more sense to define a `r ref("p_dbl")` or `r ref("p_int")` with a more fitting trafo.
+
+The `class.weights` case from above can also be implemented like this, if there are only a few candidates of `class.weights` vectors that should be tried.
+Note that the `levels` argument of `r ref("p_fct")` must be named if there is no easy way for `as.character()` to create names:
+
+```{r optimization-037}
+search_space = ps(
+  class.weights = p_fct(
+    list(
+      candidate_a = c(spam = 0.5, nonspam = 0.5),
+      candidate_b = c(spam = 0.3, nonspam = 0.7)
+    )
+  )
+)
+generate_design_grid(search_space)$transpose()
+```
+
+### Parameter Dependencies (`depends`) {#searchspace-depends}
+
+Some parameters are only relevant when another parameter has a certain value, or one of several values.
+The [Support Vector Machine](https://machinelearningmastery.com/cost-sensitive-svm-for-imbalanced-classification/) (SVM), for example, has the `degree` parameter that is only valid when `kernel` is `"polynomial"`.
+This can be specified using the `depends` argument.
+It is an expression that must involve other parameters and be of the form `<param> == <scalar>`, `<param> %in% <vector>`, or multiple of these chained by `&&`.
+To tune the `degree` parameter, one would need to do the following:
+
+```{r optimization-038}
+search_space = ps(
+  cost = p_dbl(-1, 1, trafo = function(x) 10^x),
+  kernel = p_fct(c("polynomial", "radial")),
+  degree = p_int(1, 3, depends = kernel == "polynomial")
+)
+rbindlist(generate_design_grid(search_space, 3)$transpose(), fill = TRUE)
+```
+
+### Creating Tuning ParamSets from other ParamSets {#tune-token}
+
+Having to define a tuning `r ref("ParamSet")` for a `r ref("Learner")` that already has parameter set information may seem unnecessarily tedious, and there is indeed a way to create tuning `r ref("ParamSet", "ParamSets")` from a `r ref("Learner")`'s `r ref("ParamSet")`, making use of as much information as already available.
+
+This is done by setting values of a `r ref("Learner")`'s `r ref("ParamSet")` to so-called `r ref("TuneToken")`s, constructed with a `r ref("to_tune")` call.
+This can be done in the same way that other hyperparameters are set to specific values.
+It can be understood as the hyperparameters being tagged for later tuning.
+The resulting `r ref("ParamSet")` used for tuning can be retrieved using the `$search_space()` method.
+
+```{r optimization-039}
+learner = lrn("classif.svm")
+learner$param_set$values$kernel = "polynomial" # for example
+learner$param_set$values$degree = to_tune(lower = 1, upper = 3)
+
+print(learner$param_set$search_space())
+
+rbindlist(generate_design_grid(
+  learner$param_set$search_space(), 3)$transpose()
+)
+```
+
+It is possible to omit `lower` here, because it can be inferred from the lower bound of the `degree` parameter itself.
+For other parameters, that are already bounded, it is possible to not give any bounds at all, because their ranges are already bounded.
+An example is the logical `shrinking` hyperparameter:
+```{r optimization-040}
+learner$param_set$values$shrinking = to_tune()
+
+print(learner$param_set$search_space())
+
+rbindlist(generate_design_grid(
+  learner$param_set$search_space(), 3)$transpose()
+)
+```
+
+`"to_tune")` can also be constructed with a `r ref("Domain")` object, i.e. something constructed with a `p_***` call.
+This way it is possible to tune continuous parameters with discrete values, or to give trafos or dependencies.
+One could, for example, tune the `cost` as above on three given special values, and introduce a dependency of `shrinking` on it.
+Notice that a short form for `to_tune(<levels>)` is a short form of `to_tune(p_fct(<levels>))`.
+
+:::{.callout-note}
+When introducing the dependency, we need to use the `degree` value from *before* the implicit trafo, which is the name or `as.character()` of the respective value, here `"val2"`!
+:::
+
+```{r optimization-041}
+learner$param_set$values$type = "C-classification" # needs to be set because of a bug in paradox
+learner$param_set$values$cost = to_tune(c(val1 = 0.3, val2 = 0.7))
+learner$param_set$values$shrinking = to_tune(p_lgl(depends = cost == "val2"))
+
+print(learner$param_set$search_space())
+
+rbindlist(generate_design_grid(learner$param_set$search_space(), 3)$transpose(), fill = TRUE)
+```
+
+The `"search_space()` picks up dependencies fromt the underlying `r ref("ParamSet")` automatically.
+So if the `kernel` is tuned, then `degree` automatically gets the dependency on it, without us having to specify that.
+(Here we reset `cost` and `shrinking` to `NULL` for the sake of clarity of the generated output.)
+
+```{r optimization-042}
+learner$param_set$values$cost = NULL
+learner$param_set$values$shrinking = NULL
+learner$param_set$values$kernel = to_tune(c("polynomial", "radial"))
+
+print(learner$param_set$search_space())
+
+rbindlist(generate_design_grid(learner$param_set$search_space(), 3)$transpose(), fill = TRUE)
+```
+
+It is even possible to define whole `r ref("ParamSet")`s that get tuned over for a single parameter.
+This may be especially useful for vector hyperparameters that should be searched along multiple dimensions.
+This `r ref("ParamSet")` must, however, have an `.extra_trafo` that returns a list with a single element, because it corresponds to a single hyperparameter that is being tuned.
+Suppose the `class.weights` hyperparameter should be tuned along two dimensions:
+
+```{r optimization-043}
+learner$param_set$values$class.weights = to_tune(
+  ps(spam = p_dbl(0.1, 0.9), nonspam = p_dbl(0.1, 0.9),
+    .extra_trafo = function(x, param_set) list(c(spam = x$spam, nonspam = x$nonspam))
+))
+head(generate_design_grid(learner$param_set$search_space(), 3)$transpose(), 3)
+```
+
+
+
