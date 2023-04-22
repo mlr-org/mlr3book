@@ -372,7 +372,9 @@ learner_lm$train(task_mtcars, splits$train)
 learner_lm$predict(task_mtcars, splits$test)
 ```
 
-The last element of `Learners` we will consider for now are hyperparameters, which are important for ensuring the predictions a `Learner` make are actually good (we will return to what 'good' means in @sec-eval).
+The final step of the basic ML workflow (@fig-ml-abstraction) is to evaluate the quality of predictions to see if our trained model is any 'good'.
+We will cover basic evaluation in @sec-eval and then more advanced evaluation for data resampling and model comparison in @sec-performance.
+But first we will cover the final element that makes ML models powerful predictive tools, which is their hyperparameters that give users control over the fitting and predicting process and ultimately result in more powerful models.
 
 ### Hyperparameters {#sec-param-set}
 
@@ -515,56 +517,64 @@ lrn("classif.svm", type = "C-classification", cost = 0.5)
 
 ## Evaluation {#sec-eval}
 
-An important step of modeling is evaluating the performance of the trained model.
-We have seen how to inspect the model and plot its predictions above, but a more rigorous way that allows to compare different types of models more easily is to compute a performance measure.
-`r mlr3` offers many performance measures, which can be created with the `r ref("msr()")` function.
-Measures are stored in the dictionary `r ref("mlr_measures")`, and a measure has to be supported by `r mlr3` to be used, just like learners.
-For example, we can list all measures that are available for regression tasks:
+Perhaps *the most* important  step of the ML workflow is evaluating model performance.
+Without this step, we would have no way to know if our trained model makes very accurate predictions, is worse than randomly guessing, or somewhere in between.
+We will continue with our decision tree example to establish if the quality of our predictions is 'good', first we will rerun the above code so it is easier to follow along.
 
-```{r basics-036}
-mlr_measures$keys("regr")
+```{r}
+learner_rpart = lrn("regr.rpart")
+task_mtcars = tsk("mtcars")
+splits = partition(task_mtcars)
+learner_rpart$train(task_mtcars, splits$train)
+predictions = learner_rpart$predict(task_mtcars, splits$test)
 ```
 
-For example, `regr.mape` is the mean absolute percent error, `regr.rmse` is the root of the mean squared error, and `regr.sse` is the sum of squared errors.
-The documentation for each measure, which contains its formula and more details, is available through the `$help()` function of the measure object.
+Analogously to `Task`s and `Learner`s, the available measures in `mlr3` are stored in a dictionary called `r ref("mlr_measures")`, which can be converted to a `data.table` to view all available measures; we have a sugar function `r define("msr()", code = TRUE)` to simplify retrieving a measure for you and again you can use the `$help()` method to find documentation for any measure.
 
-Measure objects can be created with a single performance measure (`r ref("msr()")`) or multiple (`r ref("msrs()")`):
-
-```{r basics-037}
-measure = msr("regr.rmse")
-measures = msrs(c("regr.rmse", "regr.sse"))
+```{r}
+as.data.table(mlr_measures)
 ```
 
-At the core of all performance measures is a quantification of the difference between the predicted value and the ground truth value (except for unsupervised tasks, see @sec-special).
-This means that in order to assess performance, we usually need the ground truth data -- observations for which we do not know the true value cannot be used to assess the quality of the predictions of a model.
-This is why we make predictions on the data the model did not use during training (the test set).
+All measures implemented in `mlr3` are defined primarily but three elements: 1) the function that defines the measure; 2) whether a lower or higher value is consider 'good'; and 3) the range of possible values the measure can take.
+As well as these defining elements, other metadata are important to consider when selecting and using a `Measure`, including if the measure has any special properties (e.g., requires training data), the type of predictions the measure can evaluate, and whether the measure has any hyperparameters.
+All this information is encapsulated in the `r ref("Measure")` object.
+By example let's consider the mean absolute error (`regr.mae`):
 
-As we have seen above, `r mlr3`'s `r ref("Prediction")` objects contain both predictions and ground truth.
-The `r ref("Measure")` objects define how prediction and ground truth are compared, and how differences between them are quantified.
-We choose root mean squared error (`r ref("mlr_measures_regr.rmse", text = "regr.rmse")`) as our performance measure for this example.
-Once the measure is created, we can pass it to the `$score()` method of the `r ref("Prediction")` object to quantify the predictive performance of our model.
-
-```{r basics-038}
-task = tsk("mtcars")
-splits = partition(task)
-predictions = lrn("regr.rpart")$train(task, splits$train)$predict(task, splits$test)
-measure = msr("regr.rmse")
+```{r}
+measure = msr("regr.mae")
 measure
+```
+
+This measure compares the absolute difference ('error') between true and predicted values: $f(y, \hat{y}) = | y - \hat{y} |$.
+Lower values are considered better (`Minimize = TRUE`), which is intuitive as we would like the true values, $y$, to be identical (or as close as possible) in value to the predicted values, $\hat{y}$.
+Finally we can see that the range of possible values the learner can take is from $0$ to $\infty$ (`Range: [0, Inf]`).
+
+All supervised learning measures compare the difference between predicted values and the ground truth.
+`mlr3` simplifies the process of bringing these quantities together by storing the predictions and true outcomes in the `r ref("Prediction")` object as we have already seen.
+
+```{r}
+predictions
+```
+
+To actually calculate model performance, we simply call the `r define("$score()", code = TRUE)` method of a `r ref("Prediction")` object and pass as a single argument the measure (or measures passed as a list) that we want to compute.
+Less abstractly:
+
+```{r}
 predictions$score(measure)
 ```
 
-:::{.callout-note}
-`$score()` can be called without a measure; in this case the default measure for the type of task is used.
-Regression defaults to mean squared error (`r ref("mlr_measures_regr.mse", text = "regr.mse")`).
-:::
+Note that all task types have default measures that are used if the argument to `$score()` is omitted, for regression this is the mean squared error (`regr.mse`).
 
 It is possible to calculate multiple measures at the same time by passing multiple measures to `$score()`.
-For example, to compute both root mean squared error `r ref("mlr_measures_regr.rmse", text = "regr.rmse")` and mean squared error `r ref("mlr_measures_regr.mse", text = "regr.mse")`:
+For example, below we compute performance for mean squared error (`regr.mse`)and mean absolute error (`regr.mae`) (note we use `r define("msrs()")` to load multiple measures at once):
 
 ```{r basics-039}
 measures = msrs(c("regr.rmse", "regr.mse"))
+measures
 predictions$score(measures)
 ```
+
+### Meta-measures
 
 `r mlr3` also provides measures that do not quantify the quality of the predictions of a model, but other information we may be interested in, for example the time it took to train the model and make predictions:
 
@@ -574,6 +584,8 @@ predictions$score(measures, learner = learner_lm)
 ```
 
 Note that these measures require a trained learner in addition to the predictions.
+
+### Measure hyperparameters
 
 Some measures have hyperparameters themselves, for example `r ref("mlr_measures_selected_features", text = "selected_features")`.
 This measure gives information on the features the model used and is only supported by learners that have the "selected_features" property.
@@ -604,6 +616,41 @@ We have now seen the basic building blocks of `r mlr3` -- creating and partition
 So far, we have focused on regression, where we want to predict a numeric quantity.
 The rest of this chapter looks at other task types.
 The general procedure is the same, but some details are different.
+
+## Our first ML experiment
+
+Before we go on to look at how the building blocks of `mlr3` extend to classification, we will take a brief pause to put together everything above in a short experiment.
+In this experiment we will compare the performance of a featureless regression learner to a decision tree with changed parameters.
+
+```{r}
+library(mlr3)
+set.seed(349)
+# load and partition our task
+task_bh = tsk("boston_housing")
+splits = partition(task)
+# load featureless learner
+featureless = lrn("regr.featureless")
+# load decision tree with different hyperparameters
+rpart = lrn("regr.rpart", cp = 0.2, maxdepth = 5)
+# load MSE and MAE measures, and calculate time
+measures = msrs(c("regr.mse", "regr.mae"))
+# train learners
+featureless$train(task, splits$train)
+rpart$train(task, splits$train)
+# make and score predictions
+featureless$predict(task, splits$test)$score(measures)
+rpart$predict(task, splits$test)$score(measures)
+```
+
+Before starting the experiment we load the `r mlr3` library and set a seed (in an exercise below you will be asked to think about why setting a seed is essential for reproducibility in this experiment).
+In this experiment we loaded the regression task `r ref("mlr_tasks_boston_housing")` with `tsk()` and then split this using `partition` with the default 70/30 split.
+Next we loaded a featureless baseline learner (`regr.featureless`) with the `lrn()` function.
+Then loaded a decision tree (`regr.rpart`) but changed the complexity parameter and max tree depth from their defaults.
+We then used `msrs()` to load multiple measures at once, the mean squared error (`regr.mse`) and the mean absolute error (MAE) (`regr.mae`).
+With all objects loaded we then train our models, passing the same training data to both.
+Finally we made predictions from our trained models and scored these, note how we use 'method chaining', which is an R6 technique to combine multiple methods (called with `$()`) in a row on the same line.
+For both MSE and MAE, lower values are 'better' (`Minimize: TRUE`) therefore we can conclude that the decision tree performs better than the featureless baseline as its MSE and MAE are both lower.
+In @sec-benchmarking we will see how to formalize comparison between models in a more efficient way using `r ref("benchmark()")`\index{benchmark()}.
 
 
 ## Classification {#sec-classif}
