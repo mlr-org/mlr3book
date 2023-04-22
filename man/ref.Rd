@@ -4,7 +4,7 @@
 \alias{ref}
 \title{Hyperlink to Function Reference}
 \usage{
-ref(topic, text = NULL, format = "markdown", aside = FALSE)
+ref(topic, text = NULL, format = "markdown", index = FALSE, aside = FALSE)
 }
 \arguments{
 \item{topic}{Name of the topic to link against.}
@@ -13,7 +13,9 @@ ref(topic, text = NULL, format = "markdown", aside = FALSE)
 
 \item{format}{Either markdown or HTML.}
 
-\item{aside}{If \code{TRUE} calls \code{aside(topic)}}
+\item{index}{If \code{TRUE} calls \code{index}}
+
+\item{aside}{Passed to \code{index}}
 }
 \value{
 (\code{character(1)}) markdown link.
