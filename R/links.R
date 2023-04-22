@@ -183,7 +183,7 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
   if (is.null(index))
     index = if (code) main else toproper(main)
 
-  out = sprintf("%s\\index{%s}%s", out, index)
+  out = sprintf("%s\\index{%s}", out, index)
 
   if (aside)
     out = sprintf("%s[%s]{.aside}", out, index)
