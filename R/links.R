@@ -180,13 +180,20 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
     out = main
   }
 
-  if (is.null(index))
+  if (is.null(index)) {
     index = if (code) main else toproper(main)
+  }
+
+  asidetxt = index
+
+  if (code) {
+    index = gsub("^\\$", "\\\\$", index)
+  }
 
   out = sprintf("%s\\index{%s}", out, index)
 
   if (aside)
-    out = sprintf("%s[%s]{.aside}", out, index)
+    out = sprintf("%s[%s]{.aside}", out, asidetxt)
 
   out
 }
