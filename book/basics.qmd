@@ -776,16 +776,7 @@ classif_task$positive = "pos"
 classif_task$positive
 ```
 
-Whilst the choice of positive and negative class is arbitrary, it is essential to ensuring results from models are interpreted as expected.
-
-```{r}
-splits = partition(task_sonar)
-lrn_rpart = lrn("classif.rpart", predict_type = "prob")
-task_sonar$positive = "M"
-lrn_rpart$train(task_sonar, splits$train)$predict(task_sonar, splits$test)
-task_sonar$positive = "R"
-lrn_rpart$train(task_sonar, splits$train)$predict(task_sonar, splits$test)
-```
+Whilst the choice of positive and negative class is arbitrary, it is essential to ensuring results from models are interpreted as expected -- this is best demonstrated when we discuss thresholding (@sec-classif-prediction).
 
 Finally, plotting is possible with `r ref("mlr3viz::autoplot.TaskClassif")`, below we plot a comparison between the target column and features.
 
@@ -811,9 +802,8 @@ predictions
 
 Notice how the predictions include the predicted probabilities for all three classes, as well as the `response`, which (by default) is the class with the highest predicted probability.
 
-Classification measures, which are of class `r ref('MeasureClassif', aside = TRUE, index = TRUE)` are again almost identical to those for regression,
-
-If we want to assess the quality of our probability predictions, we will need to use a measure that evaluates these prediction types, i.e., where the measure predict type is also "prob".
+Classification measures, which are of class `r ref('MeasureClassif', aside = TRUE, index = TRUE)` are almost identical to those for regression and again the key difference is that predict types are more important to pay attention to  ensure you are evaluating the 'correct' predictions.
+To evaluate `"response"` predictions, then you will need to use measures with `predict_type = "response"`, or to evaluate probability predictions then you will require `predict_type = "prob"`.
 The easiest way to find these measures is by filtering the `r ref("mlr_measures")` dictionary:
 
 ```{r}
@@ -821,119 +811,98 @@ as.data.table(mlr_measures)[task_type == "classif" & predict_type == "prob" & ta
 ```
 
 We also filtered to remove any measures that have the "twoclass" property as this would conflict with our "multiclass" task.
-Now we can evaluate the quality of our probability predictions, and we can also simultaneously evaluate the quality of our response predictions.
+Now we can evaluate the quality of our probability predictions and we can also simultaneously our response predictions:
 
 ```{r}
 measures = msrs(c("classif.mbrier", "classif.logloss", "classif.acc"))
 predictions$score(measures)
 ```
 
-Unlike the accuracy measure, the brier score (`classif.mbrier`) and logloss (`classif.logloss`), are hard to interpret by themselves and therefore primarily used to compare multiple learners.
+Unlike the accuracy measure, the brier score (`classif.mbrier`) and logloss (`classif.logloss`), are hard to interpret by themselves and are therefore primarily used to compare multiple learners (@sec-performance).
 
-### `PredictionClassif` and Thresholding
+### `PredictionClassif`, Confusion Matrix, and Thresholding {#sec-classif-prediction}
 
-`r ref("PredictionClassif", index = TRUE, aside = TRUE)` objects are nearly identical to the regression case.
-However, we have added one important method, `r index("$confusion", aside = TRUE, code = TRUE)` that returns the confusion matrix from predictions:
+`r ref("PredictionClassif", index = TRUE, aside = TRUE)` objects have two important differences from the regression case.
+Firstly, the added field `r index('$confusion', code = TRUE)`, and secondly the added method `r index('$set_threshold()', code = TRUE)`.
+
+#### Confusion matrix {.unnumbered .unlisted}
+
+A `r index('confusion matrix', aside = TRUE)` is a popular way to show the quality of classification (response) predictions by seeing if a model is good at (mis)classifying observations in a particular class.
+For binary and multiclass classification, the confusion matrix is stored in the `r index('$confusion', code = TRUE, aside = TRUE)` field of the `r ref("PredictionClassif")` object:
 
 ```{r basics-049}
 predictions$confusion
 ```
 
-This is a popular way to show the quality of classification (response) predictions.
 The rows in a confusion matrix are the predicted class and the columns are the true class.
 All off-diagonal entries are incorrectly classified observations, and all diagonal entries are correctly classified.
-Confusion matrices are useful for identifying if a model is particularly good at (mis)classifying observations in a particular class.
 In this case, the classifier does fairly well classifying all penguins, but we could have found that it only classifies the Adelie species well but often conflates Chinstrap and Gentoo.
-
-### Binary Classification {#sec-binary-classif}
-
-Classification problems with targets that can only be one of two classes, are called `r index('binary classification', aside = TRUE)` tasks.
-In binary classification, one of the classes is known as the `r index('positive class', aside = TRUE)`, and the other is the `r index('negative class', aside = TRUE)`.
-During construction, the positive class can be specified with the `positive` argument, if this is omitted then the default is the first level of the target feature:
-
-```{r basics-050}
-# create a dataset with factor target
-data = data.frame(x = runif(5), y = factor(c(0, 1, 0, 0, 1)))
-# specifying the positive class:
-as_task_classif(data, target = "y", positive = "1")$positive
-
-# default is first class, which here is "0"
-classif_task = as_task_classif(data, target = "y")
-classif_task$positive
-
-# changing after construction
-classif_task$positive = "1"
-classif_task$positive
-```
-
-Other than this small difference, binary classification tasks are identical to multiclass classification.
-
-### Thresholding
-
-We saw in `r index('multiclass classification')` that the `response` was calculated as the class that has the highest predicted probability.
-In binary classification terms, this is simply saying that the positive class will be predicted as the `response` if the predicted probability of being in the class is greater than or equal to 50%.
-This 50% value is known as the `r index('threshold', aside = TRUE)` and it can be useful to change this threshold if classes are unbalanced, i.e., where one class is more prevalent than another.
-
-We will first look at thresholding in the simpler binary classification setting and then with multiclass classification.
-For both examples we will demonstrate the effect of class imbalance and thresholding using a featureless classifier (`classif.featureless`) using the weighted sampling method, which means the model will simply predict the probability of each class as the probability observed in the training set, e.g. if a model is predicting the colour of an apple and is trained on 100 apples where 10 are green and 90 are red, then going forward the model will predict always predict $P(red) = 0.9, P(green) = 0.1$.
-
-#### Binary classification thresholding {.unnumbered .unlisted}
-
-In the "german_credit" dataset, the credit risk is 'good' for far many more observations and classifiers will therefore commonly overpredict this class.
-
-```{r basics-thresholding-1}
-#| fig-cap: "Comparing predicted and ground truth values for the german_credit dataset."
-#| fig-alt: "A stacked bar plot of predicted values in one bar and ground truth values in the other. The more prevalent class is predicted much more often than it is present in the ground truth data."
-task_credit = tsk("german_credit")
-table(task_credit$truth())
-splits = partition(task_credit)
-learner = lrn("classif.rpart", predict_type = "prob")
-learner$train(task_credit)
-predictions = learner$predict(task_credit)
-predictions$score(msrs(c("classif.acc", "classif.mbrier")))
-```
-
-On the surface our classifier may seem to perform well as it has 70% accuracy.
-However, on closer inspection we can see that this is simply because it always predicts every customer will have 'good' credit, which will be true 70% of the time due to imbalance in the data.
+You can visualize a confusion matrix with `r ref('autoplot.PredictionClassif', index = TRUE, aside = TRUE)`.
+We will return to these in greater detail in @sec-roc.
 
 ```{r}
 autoplot(predictions)
 ```
 
-`r index('Thresholding', aside = TRUE)` allows us to change the prediction threshold after predictions are made without having to retrain the model.
-This is performed by calling the `r index('$set_threshold()', aside = TRUE, code = TRUE)` method on a `r ref("PredictionClassif")` object.
-So now see what happens if we change our threshold to 70%, i.e., where the positive class is only prediction if $P(positive > 70\%)$:
+Note that in a binary classification case, the confusion matrix corresponds to true positives (top left), false positives (top right), false negatives (bottom left), and true negatives (bottom right) (see @fig-confusion):
 
-```{r basics-thresholding-2}
-#| fig-cap: "Comparing predicted and ground truth values for the german_credit dataset with adjusted threshold."
-#| fig-alt: "A stacked bar plot of predicted values in one bar and ground truth values in the other. The more prevalent class is now predicted less often and the agreement with the ground truth data is better."
-predictions$set_threshold(0.7)
-predictions$score(msrs(c("classif.acc", "classif.mbrier")))
-autoplot(predictions) +
-  ggplot2::ggtitle(sprintf("Accuracy = %.0f%%", (1 - predictions$score())*100))
+```{r}
+splits = partition(task_sonar)
+learner_rpart$
+  train(task_sonar, splits$train)$
+  predict(task_sonar, splits$test)$
+  confusion
 ```
 
-Overall our model has performed worse as the accuracy has dropped 20%.
-But, this is still more useful as we can now start to make accurate predictions for those with 'bad' credit.
+#### Thresholding {.unnumbered .unlisted}
 
-In @sec-pipelines we will see how to automatically choose and set thresholds and in @sec-cost-sens we will look at `r index('cost-sensitive classification')` where each class has a different associated cost.
+The final big difference to discuss is `r index('thresholding', aside = TRUE)`.
+We saw previously that the `response` prediction type by default is calculated as the class that has the highest predicted probability.
+For `n` classes, with predicted probabilities $p_1,...,p_n$, this is the same as saying `response` = $max\{p_1,...,p_n\}$.
+If the maximum probability is not unique, i.e., multiple classes are predicted to have the highest probability, then the response is chosen randomly from these classes.
+In binary classification this means that the positive class will be selected if the predicted class is greater than 50%, and the negative class otherwise.
 
-#### Multiclass classification thresholding {.unnumbered .unlisted}
+This 50% value is known as the `r index('threshold', aside = TRUE)` and it can be useful to change this threshold if there is class imbalance.
+`r index('Class imbalance', aside = TRUE)` occurs when one or more classes are over- or under-represented in a dataset.
+For example, say 700 people have good credit and 300 have bad (the situation in the `r ref("mlr_tasks_german_credit")` task) then the 'good' class is overrepresented.
+In fact, a model that always predicts a customer has good credit will achieve 70% accuracy, thus making it appear like a 'good' model on the surface, when in fact it just ignores all 'bad' customers -- this can create very big problems in healthcare and other settings where there are data biases.
+Thresholding is a way to correct this class imbalance by allowing classes to be selected with a lower probability threshold, so instead of predicting a customer has bad credit if P(good) < 50%, instead we might predict bad credit if P(good) < 70% -- notice how we write this in terms of the positive class, which in this task is 'good'.
+Let's see this in practice:
 
-In multiclass classification, thresholding works slightly differently. First, the probability for a data point for each class is divided by each class threshold resulting in `n` ratios for `n` classes, then the highest ratio is selected (ties are random by default).
+```{r}
+library(ggplot2)
+library(patchwork)
 
-To make this clearer we can look at an example.
-Say we are predicting if a new observation will be of class A, B, C, or D and we have predicted $P(A = 0.2), P(B = 0.4), P(C = 0.1), P(D = 0.3)$.
-For now we will assume that the threshold for all classes is identical, therefore the class thresholds are all $1/4 = 0.25$.
+task_credit = tsk("german_credit")
+splits = partition(task_credit)
+lrn_rpart = lrn("classif.rpart", predict_type = "prob")
+preds = lrn_rpart$train(task_credit, splits$train)$predict(task_credit, splits$test)
+title = sprintf("Threshold = 0.5; Accuracy = %s",
+  round(preds$score(msr("classif.acc")), 2))
+before = autoplot(preds) + ggtitle(title)
+preds$set_threshold(0.75)
+title = sprintf("Threshold = 0.7; Accuracy = %s",
+  round(preds$score(msr("classif.acc")), 2))
+after = autoplot(preds) + ggtitle(title)
+before + after + plot_layout(guides = "collect")
+```
+
+Our model now captures the relationship between classes more accurately, just by adjusting the threshold.
+
+In the binary classification setting, `$set_threshold` only requires one numeric argument, which corresponds with the threshold for the positive class -- hence why it is essential to ensure the positive class is correctly set in your task.
+
+In multiclass classification, thresholding works by first assigning a threshold to each of the `n` classes, dividing the predicted probabilities for each class by these thresholds to return `n` ratios, and then the class with the highest ratio is selected.
+By example say we are predicting if a new observation will be of class A, B, C, or D and we have predicted $P(A = 0.2), P(B = 0.4), P(C = 0.1), P(D = 0.3)$.
+For now we will assume that the threshold for all classes is identical, note that it is arbitrary what thresholds are chosen if they are all identical so below we just use `1`:
 
 ```{r}
 probs = c(0.2, 0.4, 0.1, 0.3)
-thresholds = c(A = 0.25, B = 0.25, C = 0.25, D = 0.25)
+thresholds = c(A = 1, B = 1, C = 1, D = 1)
 probs/thresholds
 ```
 
-We will therefore predict our observation is of class B as this is the highest ratio.
-However, we could change our thresholds so we want D to be most likely to be predicted, A to be least likely, and B and C to be equal.
+We would therefore predict our observation is of class B as this is the highest ratio.
+However, we could change our thresholds so that D has the lowest threshold and is therefore most likely to be predicted, A has the highest threshold, and B and C are equal:
 
 ```{r}
 thresholds = c(A = 0.5, B = 0.25, C = 0.25, D = 0.1)
@@ -942,35 +911,33 @@ probs/thresholds
 
 Now our observation will be predicted to be in class D.
 
-In `r mlr3`, the same principle is followed with `$set_threshold` by passing a named list to update thresholds from the default, this is demonstrated below with `r ref('mlr_tasks_zoo')`.
+In `r mlr3`, the same principle is followed with `$set_threshold` by passing a named list.
+This is demonstrated below with `r ref('mlr_tasks_zoo')`.
 Before changing the thresholds, some classes are never predicted and some are overpredicted.
 
 ```{r basics-thresholding-3}
 #| fig-cap: "Comparing predicted and ground truth values for the zoo dataset."
 #| fig-alt: "A stacked bar plot of predicted values in one bar and ground truth values in the other. Some classes are predicted more often than in the ground truth data, some less often."
+library(ggplot2)
+library(patchwork)
+
 task = tsk("zoo")
 splits = partition(task)
 learner = lrn("classif.rpart", predict_type = "prob")
 learner$train(task, splits$train)
 preds = learner$predict(task, splits$test)
-autoplot(preds)
-```
-
-The classes `amphibian` and `insect` are never predicted.
-On the other hand, the classes `mollusc` and `reptile` are predicted more often than they appear in the truth data.
-We can address this by lowering the threshold for `amphibian` and `insect`.
-`$set_threshold()` can be given a named list to set the threshold for all classes at once.
-In the example below we set the new thresholds to be the proportions of each class in the training set, doing so effectively sets the thresholds by the inverse probability of occurring, so classes that are more common have lower thresholds and vice versa.
-
-```{r basics-thresholding-4}
-#| fig-cap: "Comparing predicted and ground truth values for the zoo dataset with adjusted thresholds."
-#| fig-alt: "A stacked bar plot of predicted values in one bar and ground truth values in the other. The agreement between predicted and ground truth data is better with the adjusted prediction thresholds."
+before = autoplot(preds) + ggtitle("Default thresholds")
 new_thresh = proportions(table(task$truth(splits$train)))
+new_thresh
 preds$set_threshold(new_thresh)
-autoplot(preds)
+after = autoplot(preds) + ggtitle("Inverse weighting thresholds")
+before + after + plot_layout(guides = "collect")
 ```
 
-Now the thresholds have been adjusted, there is a much better correspondence between true and predicted labels.
+Again we see that the model better represents all classes after thresholding.
+In this example we set the new thresholds to be the proportions of each class in the training set, doing so, known as `r index('inverse weighting')`, effectively sets the thresholds as the inverse probability of occurring, this means that more common classes are will have higher thresholds and vice versa.
+
+In @sec-pipelines we will return to thresholding to see how to automatically choose and set thresholds,§ and in @sec-cost-sens we will look at `r index('cost-sensitive classification')` where each class has a different associated cost.
 
 
 ## Column Roles {#sec-row-col-roles}
