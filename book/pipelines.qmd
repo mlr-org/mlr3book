@@ -723,16 +723,56 @@ bagging$plot(vertex.label.cex = 1)
 ```
 
 The bagging pipeline can be converted to a learner using `as_learner()`.
-The following code compares it to a single `"classif.rpart"`-`Learner`:
+The following code compares it to a single `"classif.rpart"`-`Learner` on the "Sonar" dataset.
+This dataset contains sonar response levels in different frequency bands, where the task is to differentiated between metal objects (such as mines) and rocks.
+The bagged learner performs noticeably better in this example.
+We note, however, that the bagged decision tree is still outperformed by the random forest (`lrn("classif.ranger")`).
 
 ```{r 05-pipelines-non-sequential-013}
 l_bag = as_learner(bagging)
 l_bag$id = "bagging"
 l_rpart = lrn("classif.rpart")
-grid = benchmark_grid(tsks("iris"), list(l_bag, l_rpart), rsmps("repeated_cv"))
+rsmp_sonar = rsmp("cv")$instantiate(tsk("sonar"))
+grid = benchmark_grid(tsks("sonar"), list(l_bag, l_rpart, lrn("classif.ranger")), list(rsmp_sonar))
 bmr = benchmark(grid)
 bmr$aggregate()
 ```
+
+We can, however, use `mlr3pipelines` and `lrn("classif.rpart")` to come very close to an actual random forest!
+The main difference is that the random forest also performs "feature bagging", where onlhy a random subset of available features is used for each tree.
+We can implement using the `po("select")` operator and a custom `Selector`.
+We also use the `ppl("bagging")` method mentioned above.
+It makes use of the `r ref("Multiplicity")` construct, which is a more efficient way of building massively parallel Graphs.
+Here we use 300 trees, just as the random forest.
+
+```{r 05-bagging-ex}
+
+subsample_selector = function(task) {
+  sample(task$feature_names, sqrt(length(task$feature_names)))
+}
+
+bagging_quasi_rf = ppl("bagging",
+  graph = po("select", selector = subsample_selector) %>>% lrn("classif.rpart", minsplit = 1),
+  iterations = 300,
+  averager = po("classifavg", collect_multiplicity = TRUE)
+)
+
+bagging_quasi_rf$param_set$values$subsample.frac = 1
+bagging_quasi_rf$param_set$values$subsample.replace = FALSE
+
+l_quasi_rf = as_learner(bagging_quasi_rf)
+l_quasi_rf$id = "quasi.rf"
+
+grid = benchmark_grid(tsks("sonar"), list(l_quasi_rf, lrn("classif.ranger")), list(rsmp_sonar))
+bmr = benchmark(grid)
+bmr$aggregate(msrs(c("classif.ce", "time_both")))
+```
+
+The result shows that we managed to build a learner that behaves and performs very closely to `r ref("ranger")`.
+The `time_both` measure also tells us that our implementation is slower by orders of magnitude, since `r ref("ranger")` is written in C++.
+However, it also took us much less time construct our custom learner, compared to what the authors of `r ref("rpart")` likely needed.
+If the goal is to construct new kinds of learning algorithms that work for a specific purpose, then computer time is often much cheaper than developer time!
+
 
 ### Example: `PipeOpLearnerCV` and Stacking {#sec-pipelines-stack}
 
@@ -758,11 +798,10 @@ We therefore use a `r ref("PipeOpLearnerCV")`, wich performs cross-validation on
 Each of the models is then used to predict on the out-of-fold data.
 As a result, we obtain predictions for every data point in our input data.
 
-We first create a learner, which we call the "level 0" learner, which is used to create a feature of predictions.
+We first create a multinomial classification learner, which we call the "level 0" learner, which is used to create a feature of predictions.
 
 ```{r 05-pipelines-non-sequential-015, eval = TRUE}
-l_rpart = lrn("classif.rpart")
-lrn_0 = po("learner_cv", l_rpart, id = "rpart_cv")
+lrn_0 = po("learner_cv", lrn("classif.multinom", predict_type = "prob"), resampling.folds = 10, id = "multinom_cv")
 ```
 
 We use `r ref("PipeOpNOP")`, in combination with `r ref("gunion", "gunion()")`, in order to send both the predictions made by the level 0 learner, as well as the unchanged task, to the next level.
@@ -773,7 +812,7 @@ We append a final PipeOp containing the learner we want to train on top of the c
 ```{r 05-pipelines-non-sequential-016, eval = TRUE}
 level_0 = gunion(list(lrn_0, po("nop")))
 combined = level_0 %>>% po("featureunion")
-stack = combined %>>% po("learner", l_rpart)
+stack = combined %>>% po("learner", lrn("classif.rpart"))
 ```
 
 The resulting layout can be visualized by the Graphs `$plot()` function:
@@ -781,11 +820,22 @@ The resulting layout can be visualized by the Graphs `$plot()` function:
 stack$plot(horizontal = TRUE)
 ```
 
-After training this pipeline, we can show that the second `"classif.rpart"` learner used the output of the first `"classif.rpart"` learner as input by inspecting its `$model`.
+After training this pipeline, we can show that the second `"classif.rpart"` learner used the output of the first `"classif.multinom"` learner as input by inspecting its `$model`.
 ```{r 05-pipelines-non-sequential-019, eval = TRUE}
+set.seed(0)
 l_stack = as_learner(stack)
+l_stack$id = "rpart_stacking"
 l_stack$train(tsk("iris"))
 l_stack$graph_model$pipeops$classif.rpart$learner_model$model
+```
+
+We can see that the performance of `lrn("classif.rpart")` was enhanced by the use of stacking.
+More advanced models may give even better performance, but the advantage of this setup is that both components of the stacing learner -- the multinomial classification learner and the decision tree -- are easier to interpret than most other models.
+
+```{r 05-pipelines-non-sequential-020}
+grid = benchmark_grid(tsks("iris"), list(l_stack, lrn("classif.rpart")), rsmps("repeated_cv"))
+bmr = benchmark(grid)
+bmr$aggregate()
 ```
 
 In many real-world applications, stacking is done for multiple levels and on multiple representations of the dataset.
