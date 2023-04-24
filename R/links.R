@@ -69,7 +69,7 @@ ref = function(topic, text = NULL, format = "markdown", index = FALSE, aside = F
     "markdown" = sprintf("[`%s`](%s)", text, url),
     "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
   )
-  if (aside) {
+  if (index) {
     out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
   }
   out
