@@ -4,10 +4,12 @@
 \alias{index}
 \title{Add term to index}
 \usage{
-index(main)
+index(main, index = toproper(main))
 }
 \arguments{
 \item{main}{Text to show in book}
+
+\item{index}{Index entry if different from `main}
 }
 \description{
 Add term to index
