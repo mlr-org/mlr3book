@@ -51,7 +51,7 @@ As we work through this chapter we will refer to the 'building blocks' of `r mlr
 
 We begin by discussing a task that does not require any additional packages or infrastructure, only the tools we have already learned about from earlier chapters.
 In 'regular' classification, the aim is to optimize a metric (often the misclassification rate) whilst assuming all misclassification errors are deemed equally severe.
-A more general approach is `r define("cost-sensitive classification", index = "classification!cost-sensitive classification")`, in which costs caused by different kinds of errors may not be equal.
+A more general approach is `r define("cost-sensitive classification")`, in which costs caused by different kinds of errors may not be equal.
 The objective of cost-sensitive classification is to minimize the expected costs.
 As we discuss this task we will work with `r ref("mlr_tasks_german_credit")` (@sec-appendix-tasks) as a running example.
 
@@ -137,7 +137,8 @@ The key to modelling in survival analysis is that we assume there exists a hypot
 Mathematically, this is represented by the hypothetical event time, $Y$, the hypothetical censoring time, $C$, the observed outcome time, $T = min(Y, C)$, the event indicator $\Delta = (T = Y)$, and as usual some features, $X$.
 Learners are trained on $(T, \Delta)$ but, critically, make predictions of $Y$ from previously unseen features.
 This means that unlike classification and regression, learners are trained on two variables, $(T, \Delta)$, which, in R, is often captured in a `r ref("survival::Surv")` object.
-An example of this is in the code below, where we randomly generate 6 survival times and 6 event indicators, an outcome with a `+` indicates the outcome is censored, otherwise the event of interest occurred.
+Relating to our example above the runner's outcome would then be $(T = 4, \Delta = 1)$ or $(T = 2, \Delta = 0)$.
+Another example is in the code below, where we randomly generate 6 survival times and 6 event indicators, an outcome with a `+` indicates the outcome is censored, otherwise the event of interest occurred.
 
 ```{r special-009}
 library(survival)
@@ -151,8 +152,8 @@ For a good introduction to survival analysis see @Collett2014 or for machine lea
 For the remainder of this section we will look at how `r mlr3proba` [@mlr3proba] extends the building blocks of `r mlr3` for survival analysis. We will begin by looking at objects used to construct machine learning tasks for survival analysis, then we will turn to the learners we have implemented to solve these tasks, before looking at measures for evaluating survival analysis predictions, and then finally we will consider how to transform prediction types.
 
 ```{r special-010, echo=FALSE}
-#| fig-alt:
-#| fig-cap: Dead and censored subjects (y-axis) over time (x-axis). Black diamonds indicate true death times and white circles indicate censoring times. Vertical line is the study end time. Subjects 1 and 2 die in the study time. Subject 3 is censored in the study and (unknown) dies within the study time. Subject 4 is censored in the study and (unknown) dies after the study. Subject 5 dies after the end of the study. Figure and caption from @Sonabend2021b.
+#| fig-alt: Figure shows give horizontal lines at 1,2,3,4,5 on the y-axis and a vertical line at 8 on the x-axis. Top line (subject 5) has a circle at x=8 and a diamond at x=9, second line (subject 4) has a circle at x=1 and a diamond at x=9, subject 3 has a circle at x=4 and a diamond at x=6, subject 2 has a diamond at x=8, and subject 1 has a diamond at x=7.
+#| fig-cap: Plot illustrating different censoring types. Dead and censored subjects (y-axis) over time (x-axis). Black diamonds indicate true death times and white circles indicate censoring times. Vertical line is the study end time. Subjects 1 and 2 die in the study time. Subject 3 is censored in the study and (unknown) dies within the study time. Subject 4 is censored in the study and (unknown) dies after the study. Subject 5 dies after the end of the study. Figure and caption from @Sonabend2021b.
 #| label: fig-censoring
 library(ggplot2)
 ggplot(data.frame(x = c(1, 2, 5, 7, 10), y = 1:5), aes(x = x, y = y)) +
@@ -183,11 +184,10 @@ ggplot(data.frame(x = c(1, 2, 5, 7, 10), y = 1:5), aes(x = x, y = y)) +
 
 As we saw in the introduction to this section, survival algorithms require two targets for training, this means the new `r ref("TaskSurv")` object  expects two targets.
 The simplest way to create a survival task is to use `r ref("as_task_surv")`, as in the following code chunk.
+Note this has more arguments than `as_task_regr` to reflect multiple target and censoring types, `time` and `event` arguments expect strings representing column names where the 'time' and 'event' variables are stored, `type` refers to the censoring type (currently only right censoring supported so this is the default).
 Note how `r ref("as_task_surv")` coerces the target columns into a `r ref("survival::Surv")` object.
 
 ```{r special-011, warning=FALSE, message=FALSE}
-#| fig-cap: Kaplan-Meier plot of the `rats` task. x-axis is time variable and y-axis is survival function, S(T), defined by 1 - F(T) where F is the cumulative distribution function. Red crosses indicate points where censoring takes place.
-#| fig-alt: Figure shows a line plot with "Time" on the x-axis from 0 to 100 and "Survival" on the y-axis from 0.80 to 1.00. The line plot is a black line from (0, 1) to (25, 1) then starts to drop slowly and then quickly down to (100, 0.80).
 library("mlr3verse")
 library("mlr3proba")
 library("survival")
@@ -196,6 +196,14 @@ task = as_task_surv(survival::rats, time = "time",
   event = "status", type = "right", id = "rats")
 
 task$head()
+```
+
+Plotting the task with `autoplot` results in a Kaplan-Meier plot which is a non-parametric estimator of the probability of survival for the average observation in the training set.
+
+```{r, warning=FALSE, message=FALSE}
+#| fig-cap: Kaplan-Meier plot of the `rats` task. x-axis is time variable and y-axis is survival function, S(T), defined by 1 - F(T) where F is the cumulative distribution function. Red crosses indicate points where censoring takes place.
+#| fig-alt: Figure shows a line plot with "Time" on the x-axis from 0 to 100 and "Survival" on the y-axis from 0.80 to 1.00. The line plot is a black line from (0, 1) to (25, 1) then starts to drop slowly and then quickly down to (100, 0.80).
+#| label: fig-autokm
 autoplot(task)
 ```
 
@@ -241,7 +249,7 @@ The likely reason for this is due to the presence of censoring.
 We rarely observe the true survival time for many observations and therefore it is unlikely any survival model can confidently make predictions for survival times.
 This is illustrated in the code below.
 
-In the example below we train and predict from a survival support vector machine (`r ref("mlr_learners_surv.svm")`), note we use `type = "regression"` to select the algorithm that optimizes survival time predictions.
+In the example below we train and predict from a survival support vector machine (`r ref("mlr_learners_surv.svm")`), note we use `type = "regression"` to select the algorithm that optimizes survival time predictions and `gamma.mu = 1e-3` is selected arbitrarily as this is a required parameter (this parameter should usually be tuned).
 We then compare the predictions from the model to the true data.
 
 ```{r special-016}
@@ -260,17 +268,16 @@ Hence, with no realistic way to evaluate these models, survival time predictions
 So unlike regression in which deterministic/point predictions are most common, in survival analysis distribution predictions are much more common.
 You will therefore find that the majority of survival models in `r mlr3proba` will make distribution predictions by default.
 These predictions are implemented using the `r ref_pkg("alan-turing-institute/distr6")` package, which allows visualization and evaluation of survival curves (defined as 1 - cumulative distribution function).
-In the example below we train a Cox PH model on the `rats` dataset and then plot the survival function of the first three predictions and evaluate this function for all three predictions at $t = 77$.
+In the example below we train a Cox PH model on the `rats` dataset and then evaluate the survival function for three predictions at $t = 77$.
 
 ```{r special-017}
 t = tsk("rats")
 split = partition(t)
 p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
-plot(p$distr[1:3], fun = "survival", xlab = "T", ylab = "S(T)")
 p$distr[1:3]$survival(77)
 ```
 
-The output indicates that there is a 90.2\%, 90.0\%, and 94.6\% chance of the first three predicted rats being alive at time 77 respectively.
+The output indicates that there is a `r paste0(round(p$distr[1:3]$survival(77)*100, 1), "%")`, chance of the first three predicted rats being alive at time 77 respectively.
 
 
 #### `predict_type = "lp"`
@@ -470,6 +477,9 @@ All learners will return a `distr` and `pdf` prediction but only some can make `
 Again, the `distr` predict type is implemented using `r ref_pkg("alan-turing-institute/distr6")`.
 
 ```{r special-024}
+#| label: fig-dens-hist
+#| fig-cap: Predicted density from the histogram learner, as expected this closely resembles the underlying N(0, 1) data.
+#| fig-alt: Image shows a line plot from (-2, 0) to (2, 0.4) in a histogram shape that closely resembles a Normal(0, 1) distribution.
 learn = lrn("dens.hist")
 p = learn$train(task, 1:900)$predict(task, 901:1000)
 x = seq.int(-2, 2, 0.01)
@@ -499,6 +509,8 @@ meas
 
 p$score(meas)
 ```
+
+As with any scoring rule this output cannot be interpreted by itself and is more useful in a benchmark experiment, which we will look at in the final part of this section.
 
 ### Putting it all together {#sec-density-all}
 
