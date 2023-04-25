@@ -110,6 +110,8 @@ filter_cor$param_set$values = list(method = "spearman")
 filter_cor$param_set
 ```
 
+As noted above, the correlation filter can only be calculated for regression tasks with numeric features and can thus not be used with the penguins data.
+
 ### Feature Importance Filters {#sec-fs-var-imp-filters}
 
 To use feature importance filters, we can use a learner with integrated feature importance methods.
@@ -130,14 +132,16 @@ To use the feature importance method "impurity", select it during learner constr
 lrn = lrn("classif.ranger", importance = "impurity")
 ```
 
-Now we can use the `r ref("mlr_filters_importance", text = "FilterImportance")` filter class:
+We first have to remove missing data because the learner cannot handle missing data, i.e. it does not have the property "missing": 
 
 ```{r feature-selection-006}
 task = tsk("penguins")
-
-# Remove observations with missing data
 task$filter(which(complete.cases(task$data())))
+```
 
+Now we can use the `r ref("mlr_filters_importance", text = "FilterImportance")` filter class:
+
+```{r feature-selection-006-2}
 filter = flt("importance", learner = lrn)
 filter$calculate(task)
 as.data.table(filter)
@@ -148,16 +152,20 @@ as.data.table(filter)
 Many learners internally select a subset of the features which they find helpful for prediction, but ignore other features.
 For example, a decision tree might never select some features for splitting.
 These subsets can be used for feature selection, which we call embedded methods because the feature selection is embedded in the learner.
-The selected features (and those not selected) can be queried if the learner has the `"selected_features"` property, as the following example demonstrates:
+The selected features (and those not selected) can be queried if the learner has the `"selected_features"` property. 
+As above, we can find those learners with
 
 ```{r feature-selection-007}
+as.data.table(mlr_learners)[sapply(properties, function(x) "selected_features" %in% x)]
+```
+
+or on the `r link("https://mlr-org.com/learners.html", "mlr3 website")`.
+For example, we can use the `r ref("mlr_learners_classif.rpart", text = "classif.rpart")` learner.
+
+```{r feature-selection-007-2}
 task = tsk("penguins")
 learner = lrn("classif.rpart")
-
-# ensure that the learner selects features
-stopifnot("selected_features" %in% learner$properties)
-
-learner = learner$train(task)
+learner$train(task)
 learner$selected_features()
 ```
 
@@ -171,7 +179,7 @@ as.data.table(filter)
 
 Contrary to other filter methods, embedded methods just return value of 1 (selected features) and 0 (dropped feature).
 
-### Filter-based Feature Selection
+### Filter-based Feature Selection {#sec-fs-filter-based}
 
 After calculating a score for each feature, one has to select the features to be kept or those to be dropped from further modelling steps.
 For the `"selected_features"` filter described in embedded methods (@sec-fs-embedded-methods), this step is straight-forward since the methods assigns either a value of 1 for a feature to be kept or 0 for a feature to be dropped. With `task$select()` the features with a value of 1 can be selected:
@@ -331,6 +339,7 @@ instance = fselect(
 ```
 
 To show all analyzed feature subsets and the corresponding performance, we use `as.data.table(instance$archive)`.
+In this example, the `batch_nr` column represents the iteration of the sequential forward selection and we start by looking at the first iteration.
 
 ```{r feature-selection-018}
 dt = as.data.table(instance$archive)
@@ -348,7 +357,7 @@ autoplot(instance, type = "performance")
 ```
 
 In the plot, we can see that adding a second feature further improves the performance to over 90%. 
-To see which feature was added, we can go back to the archive and look at the second iterations:
+To see which feature was added, we can go back to the archive and look at the second iteration:
 
 ```{r feature-selection-018-2}
 dt[batch_nr == 2, 1:5]
@@ -386,7 +395,7 @@ To create an `FSelectInstanceSingleCrit` object, we use the sugar function `r re
 
 ```{r feature-selection-020}
 instance = fsi(
-  task = tsk("penguins"),
+  task = task,
   learner = lrn("classif.rpart"),
   resampling = rsmp("holdout"),
   measure = msr("classif.acc"),
@@ -451,13 +460,13 @@ The algorithm proceeds as follows
 The best feature subset and the corresponding measured performance can be accessed from the instance:
 
 ```{r feature-selection-023}
-as.data.table(instance$result)[, .(features, classif.acc)]
+  as.data.table(instance$result)[, .(features, classif.acc)]
 ```
 
 As in the forward selection example above, one can investigate all resamplings which were undertaken, as they are stored in the archive of the `FSelectInstanceSingleCrit` object and can be accessed by using `as.data.table()`:
 
 ```{r feature-selection-024}
-as.data.table(instance$archive)[, .(bill_depth, bill_length, body_mass, classif.acc)]
+as.data.table(instance$archive)[, .(bill_depth, bill_length, body_mass, flipper_length, classif.acc)]
 ```
 
 Now the optimized feature subset can be used to subset the task and fit the model on all observations:
@@ -564,6 +573,12 @@ as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
 ```
 
 We can see that, in this example, the feature selection improves prediction performance but also drastically increases the training time, since the feature selection (including resampling and random search) is part of the model training of the wrapped learner.
+
+::: {.callout-note}
+For wrapper methods, we use the `AutoFSelector` to wrap a learner with feature selection, whereas in @sec-fs-filter-based we used pipelines to combine learner and feature selection filter. 
+The difference is that a filter is independent of the learner and can thus be calculated as a preprocessing operator before training a learner, while a wrapper is inseparable from the learner, as it needs to train the learner in each iteration with a different feature subset. 
+Nevertheless, both approaches can be integrated into pipelines.
+:::
 
 ## Conclusion
 
