@@ -415,34 +415,32 @@ head(large_design)
 Once an experimental design is finalized, the next step is to run it.
 Parallelizing this step is conceptually straight-forward, because we are facing an embarrassingly parallel problem (see @sec-parallelization).
 Not only are the resample experiments independent, but even their individual iterations are.
-However, if the experiment is large, parallelization on a local machine as shown in @sec-parallelization might not be enough and using a distributed computing system, such as an HPC cluster, is recommended.
-While access to HPC clusters is widespread, the effort required to work on these systems is still considerable.
-The R package `r ref_pkg("batchtools")` provides a framework to conveniently run large batches of computational experiments in parallel from R.
+However, if the experiment is large, parallelization on a local machine as shown in @sec-parallelization often is not enough and using a distributed computing system, such as an HPC cluster, is required.
+While access to HPC clusters is widespread at universities, the effort required to work on these systems is still considerable.
+The R package `r ref_pkg("batchtools")` provides a framework to simplify running large batches of computational experiments in parallel from R.
 It is highly flexible, making it suitable for a wide range of computational experiments, including machine learning, optimisation, simulation, and more.
 
 :::{.callout-note}
 In @sec-parallel-resample we have already touched upon different parallelization backends.
 The package `r ref_pkg("future")` also comes with a plan for `r ref_pkg("batchtools")`.
-However, for larger experiments the additional control over the execution which `batchtools` offers is invaluable.
-Therefore, we recommend the `"batchtools"` plan only for moderately sized experiments which complete within a couple of hours.
+However, for larger experiments, the additional control over the execution which `batchtools` offers is invaluable.
+Therefore, we recommend future's `"batchtools"` plan only for moderately sized experiments which complete within a couple of hours.
 :::
 
 <!-- We will now start by giving a brief summary of the HPC basics and will then show how to use `r ref_pkg("batchtools")` and `r ref_pkg("mlr3batchmark")`. -->
 
-### HPC Basics {#sec-hpc-basics}
-
-A High Performance Computing cluster is a collection of interconnected computers or servers that work together as a single system to provide computational power beyond what a single computer can achieve.
-They are used for solving complex problems in science, engineering, machine learning and other fields that require a large amount of computational resources.
+An HPC cluster is a collection of interconnected computers or servers providing computational power beyond what a single computer can achieve.
+They are used for solving complex problems in chemistry, physics, engineering, machine learning and other fields that require a large amount of computational resources.
 An HPC cluster typically consists of multiple compute nodes, each with multiple CPU/GPU cores, memory, and storage.
 These nodes are connected together by a high-speed network, which enables the nodes to communicate and work together on a given task.
 These clusters are also designed to run parallel applications that can be split into smaller tasks and distributed across multiple compute nodes to be executed simultaneously.
 We will leverage this capacity to parallelize the execution of the benchmark experiment.
-The most important difference between such a cluster and a personal computer (PC), is that one has no direct control over the nodes, but has to instead work with a `r define("scheduling system")` like `r link("https://slurm.schedmd.com", "Slurm")` (Simple Linux Utility for Resource Management).
-A scheduling system is a software tool that manages the allocation of computing resources to users or applications on the cluster.
+The most important difference between such a cluster and a personal computer (PC), is that the nodes cannot be accessed directly, but instead computational jobs are queued by a `r define("scheduling system")` like `r link("https://slurm.schedmd.com", "Slurm")` (Simple Linux Utility for Resource Management).
+A scheduling system is a software tool that orchestrates the allocation of computing resources to users or applications on the cluster.
 It ensures that multiple users and applications can access the resources of the cluster in a fair and efficient manner, and also helps to maximize the utilization of the computing resources.
 
 @fig-hpc contains a rough sketch of an HPC architecture.
-Multiple users can login into the head node (typically via `r link("https://en.wikipedia.org/wiki/Secure_Shell", "SSH")`) and add their computational workloads of the form "Execute Computation X using Resources Y for Z amount of time" to the queue.
+Multiple users can log in into the head node (typically via `r link("https://en.wikipedia.org/wiki/Secure_Shell", "SSH")`) and add their computational workloads of the form "Execute Computation X using Resources Y for Z amount of time" to the queue.
 One such instruction will be referred to as a `r define("computational job")`.
 The scheduling system controls when these computational jobs are executed.
 
@@ -457,43 +455,40 @@ knitr::include_graphics("Figures/hpc.drawio.png")
 
 Common challenges when interoperating with a scheduling systems are that
 
-1. the code to submit a job depends on the scheduling system
-1. code that runs locally has to be adapted to run on the cluster
-1. the burden is on the user to account for seeding to ensure reproducibility
-1. it is cumbersome to query the status of jobs and debug failures
+1. the code to submit a job depends on the scheduling system,
+1. code that runs locally has to be adapted to run on the cluster,
+1. the burden is on the user to account for seeding to ensure reproducibility, and
+1. it is cumbersome to query the status of jobs and debug failures.
 
 In the following we will see how `r ref_pkg("batchtools")` mitigates these problems.
 
 ## Running Large-Scale Experiments {#sec-running-large-scale-experiments}
 
-### Experiment Definition {#sec-batchtools-define}
-
 <!-- What we wanna do conceptually -->
-Our goal in this section is to run the benchmark design shown below (originally defined at the end of @sec-openml-collection) on an HPC cluster.
+Our goal in this section is to run the benchmark design shown in @sec-openml-collection on an HPC cluster.
 
 ```{r large_benchmarking-027_experiments-027}
 large_design
 ```
 
 We use the packages `r ref_pkg("batchtools")` and `r ref_pkg("mlr3batchmark")` for this.
-The `r ref_pkg("mlr3batchmark")` package simplifies working with `r ref_pkg("batchtools")` in the mlr3 ecosystem.
+The `r ref_pkg("mlr3batchmark")` package assists in translating the machine learning problem defined with syntax and objects from `r ref_pkg("mlr3")` to the more general "apply some algorithm A on some problem P" approach in `r ref_pkg("batchtools")` which is outlined in the following.
 
 The central concept of `r ref_pkg("batchtools")` is the experiment or `r define("job", "Job or Experiment")`:
 One replication of an experiment (or job) $E$ is defined by applying algorithm $A$ using algorithm parameters $\xi_A$ to problem $P$ with problem parameters $\xi_P$.
 A benchmark experiment in batchtools then consists of running many such experiments with different algorithms, algorithm parameters, problems, and problem parameters.
-Note that the problem parameters $\xi_P$ can e.g. useful in simulation studies but we won't use them here.
+Note that the problem parameters $\xi_P$ can, e.g., be useful in simulation studies, but we won't use them here for our ML problems.
 Each experiment $E$ is computationally independent of all other experiments and constitutes the basic level of computation batchtools can parallelize.
-<!--  There is not a single right way to use batchtools and we here show one solution where we use the notion of an experiment replication to represent the resampling iterations. -->
 
 In the introduction of this chapter, we have defined a benchmark experiment as running a number of resample experiments $E_{i, j} = (L_i, T_j, R_j)$ that are defined by a learner, task and resampling.
-While it might seem natural to define one such triplet as a job, each resample experiment can be split up even further, namely into its iterations $E^1_{i, j}, ..., E_{i, j}^{n_j}$, where $n_j$ is the number of iterations of resampling $R_j$.
-We will therefore understand one resampling iteration $E^l_{i, j}$ as a job (aka. experiment). ^[Note that such a job does not have to coincide with the notion of a computational job defined earlier, more on that in @sec-batchtools-submission.]
+While it might seem natural to define one such triplet as a job, each resample experiment can be split up even further, namely into its iterations $E^1_{i, j}, ..., E_{i, j}^{n_j}$, where $n_j$ is the number of iterations of resampling $R_j$, making the computation more fine granular and giving you the opportunity to utilize more CPUs in parallel (c.f., @#sec-parallelization).
+We will therefore understand one resampling iteration $E^l_{i, j}$ as a single experiment. ^[Note that such a job does not have to coincide with the notion of a computational job defined earlier, more on that in @sec-batchtools-submission.]
 <!--  We will now show how to define the batchtools algorithm $A$, algorithm parameters $\xi_A$, and problem $P$ in such a way that they allow to define each resampling iteration as a job. -->
 
 ### Experiment Registry
 
-The first step is always to create an (or load an existing) experiment registry using the function `r ref("batchtools::makeExperimentRegistry()")` (or `r ref("batchtools::loadRegistry()")`).
-This function constructs the inter-communication object for all functions in `r ref_pkg("batchtools")` and corresponds to a folder in the file system.
+The first step is always to create an (or load an existing) experiment registry using the function `r ref("batchtools::makeExperimentRegistry()")` (or `r ref("batchtools::loadRegistry()")`, respectively).
+This function constructs the inter-communication object for all functions in `r ref_pkg("batchtools")` and corresponds to a folder on the file system.
 
 Among other things, the experiment registry stores the
 
@@ -532,16 +527,18 @@ The next step is to populate the registry with algorithms and problems, which we
 ### mlr3batchmark
 
 The next step is to populate the registry with problems and algorithms.
-Doing this with `r ref_pkg("batchtools")` is complex and requires a lot of custom code.
-
-<!-- Add text about problems and algorithms -->
+This is the first step where `r ref_pkg("mlr3batchmark")` comes into play.
+Doing this with `r ref_pkg("batchtools")` is also possible and gives you more flexibility.
+An exemplary approach is covered in the following Section-FIXME.
+By calling `r ref("batchmark")`, mlr3 tasks and mlr3 resamplings will be translated to batchtools problems, and mlr3 learners are mapped to batchtools algorithms.
 
 ```{r large_benchmarking-047_experiments-047}
 #| output: false
 batchmark(large_design, reg = reg1)
 ```
 
-When printing the registry, we confirm that one algorithm, six problems, and 180 experiments are registered.
+When printing the registry, we confirm that six problems (one for each task and resampling) but only a single algorithm is registered.
+While a 1-on-1 mapping of the 3 algorithms in the design would have also been possible, the approach in `r ref_pkg("mlr3batchmark")` uses a single algorithm parametrized with the learner identifiers instead for efficiency.
 
 ```{r large_benchmarking-048_experiments-048}
 reg1
