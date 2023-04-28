@@ -14,8 +14,9 @@ author:
 abstract:
     This chapter deals with the technical details of conducting ML experiments.
     These are particularly important when computing on large, hard-to-manage datasets.
-    Runtimes and efficient storage play an important role, as does error handling.
-    Not all of this chapter is suitable for beginners, but we recommend that you have at least a superficial knowledge of the topics so that you can skip to the appropriate section if you encounter a problem.
+    The chapter covers parallelization, error handling, logging, and how to operate on out-of-memory data.
+    Additionally, the extension of the Measure class is demonstrated.
+    Note that not all of this chapter is suitable for beginners and most of it can be skipped, but we recommend that you have at least a superficial knowledge of the topics so that you can skip to the appropriate section if you encounter a problem.
 ---
 
 # Technical {#sec-technical}
@@ -23,7 +24,7 @@ abstract:
 {{< include _setup.qmd >}}
 
 In the previous chapters, we demonstrated how to turn ML concepts and ML methods into code.
-Unfortunately, we let out the more technical details yet, but they are utterly important for conducting applied ML experiments.
+So far, we have covered ML concepts without going into a lot of technical detail, which can be important for more advanced uses of mlr3.
 This includes the following topics:
 
 * Parallelization with the `r ref_pkg("future")` framework (@sec-parallelization),
@@ -39,7 +40,7 @@ This includes the following topics:
 The term `r index("parallelization")` refers to running multiple algorithms in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 Not all algorithms can be parallelized, but when they can, parallelization allows significant savings in computation time.
 
-In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, `r link("https://en.wikipedia.org/wiki/Thread_(computing)", "threads")` or `r link("https://en.wikipedia.org/wiki/Fork_(system_call)", "forks")` are ways to utilize all cores on a local machine.
+In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, `r link("https://en.wikipedia.org/wiki/Thread_(computing)", "threads")` or `r link("https://en.wikipedia.org/wiki/Fork_(system_call)", "processes")` are ways to utilize all cores on a local machine.
 If you have multiple machines on the other hand, the machines need a way to communicate and exchange information, e.g. via protocols like network sockets or the `r link("https://en.wikipedia.org/wiki/Message_Passing_Interface", "Message Passing Interface (MPI)")`.
 Larger computational sites rely on a scheduler to orchestrate the computation for multiple users and offer a shared network file system all machines can access.
 Interacting with scheduling systems on compute clusters is covered in @sec-large-benchmarking using the R package `r ref_pkg("batchtools")`.
@@ -49,7 +50,7 @@ We do not want to delve too deep into such details here, but want to introduce s
   As many parallelization backends have different APIs, we are using the `r ref_pkg("future")` package as an abstraction layer for many parallelization backends.
   `r mlr3` just interfaces `r ref_pkg("future")` while the user can control how the code is executed by configuring a backend prior to starting the computations.
 * The R session or process which orchestrates the computational work is called `r define("main")`, and it starts computational `r define("jobs")`.
-* The R sessions, processes, forks or machines which receive the jobs, do the calculation and then send back the result are called `r define("workers")`.
+* The R sessions, processes, or machines which receive the jobs, do the calculation and then send back the result are called `r define("workers")`.
 
 An important step in parallel programming involves the identification of sections of the program flow which are both time-consuming (`r define("bottlenecks")`) and also can run independently of a different section.
 The key characteristic is that these sections do not depend on each other, i.e. section A can be ran without waiting for results from section B.
@@ -214,7 +215,7 @@ The loop is executed via the `r ref_pkg("future")` parallelization framework, us
 In this section, we will use the spam task and a simple `lrn("classif.rpart")`.
 We use the `r ref("future::multisession")` plan (which internally uses socket clusters from the `parallel` package, see `r ref("parallel::makeCluster()")`) that should work on all operating systems.
 
-```{r technical-005, eval = FALSE}
+```{r technical-005}
 # query the currently active plan
 future::plan()
 
@@ -226,10 +227,10 @@ resampling = rsmp("cv", folds = 3)
 # select the multisession backend to use
 future::plan("multisession")
 
-# run the resampling in parallel
-time = proc.time()[3]
-resample(task, learner, resampling)
-diff = proc.time()[3] - time
+# run the resampling in parallel and measure runtime
+system.time({
+  resample(task, learner, resampling)
+})
 ```
 
 By default, all CPUs of your machine are used unless you specify the argument `workers` in `r ref("future::plan()")` (possible problems with the value returned by the heuristic have already been discussed in the previous @sec-parallel-learner).
@@ -238,6 +239,7 @@ However, in practice, you cannot expect the runtime to fall linearly as the numb
 In contrast to threads, the technical overhead for starting workers, communicating objects, sending back results, and shutting down the workers is quite large for the multisession backend.
 The multicore backend (`plan("multicore")`) comes with more overhead than threading, but considerably less overhead in comparison with the multisession backend.
 In fact, with the multicore backend, R objects are copied only when they are modified (copy-on-write), while with the multisession backend, objects are always copied to the respective session prior to any computation.
+The multicore backend has the major disadvantage that it is not supported on Windows systems - for this reason, we will stick with the multisession backend for all examples here.
 In general, it is advised to only consider parallelization for resamplings where each iteration runs at least a few seconds.
 
 @fig-parallel-overview illustrates the parallelization from the above example. From left to right:
@@ -289,6 +291,22 @@ In `r mlr3`, the choice of level is no longer required (except occasionally for 
 All experiments are rolled out on the same level, i.e., `benchmark()` iterates over the elements of the Cartesian product of the iterations of the outer and inner loops.
 Therefore, there is no need to decide whether you want to parallelize the tuning *or* the resampling, you always parallelize both.
 This approach makes the computation fine-grained and gives the `r ref_pkg("future")` backend the opportunity to group the jobs into chunks of suitable size (depending on the number of workers).
+
+Parallelization of benchmarks works analogously to resampling:
+```{r, echo = FALSE}
+# simple benchmark design
+design = benchmark_grid(
+    tsks(c("sonar", "penguins")),
+    lrns(c("classif.featureless", "classif.rpart")),
+    rsmp("cv", folds = 3)
+)
+
+# enable parallelization
+future::plan("multisession")
+
+# run benchmark in parallel
+benchmark(design)
+```
 
 
 
@@ -346,6 +364,8 @@ The resulting CPU utilization of the nested resampling example on 4 CPUs is visu
   First, each of the four workers starts with the computation of an inner 2-fold cross-validation.
   As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on CPU1 **after** the first 4 iterations are finished after 8 secs.
   During the computation of the 5th outer resampling iteration, only CPU1 is utilized, the other 3 CPUs are idling.
+  Note that just setting up the parallelization with a simple `future::plan("multisession")` has the same effect - the most outer loop is parallelized while all subsequent loops are executed sequentially.
+
 * @fig-parallel-inner as an example for parallelizing the inner 2-fold cross-validation.
   ```{r technical-009, eval = FALSE}
   # Runs the outer loop sequentially and the inner loop in parallel
@@ -454,6 +474,7 @@ After the first batch of jobs is sent to the worker, the next jobs are either st
 Method (a) usually comes with less synchronization overhead and is best suited for short jobs with homogeneous runtimes.
 Method (b) is faster if the runtimes are heterogeneous, especially if the parallelization overhead is neglectable in comparison with the runtime for the computation.
 E.g., for `r ref("parallel::mclapply()")`, the behavior of the scheduler can be controlled with the `mc.preschedule` option and `r ref("parallel::parSapply()")` implements Method (a) while `r ref("parallel::parSapplyLB()")` implements scheduling according to method (b).
+
 FIXME: future options
 
 
@@ -494,6 +515,9 @@ Luckily, this and many other problems are already addressed by the excellent `r 
 `r ref_pkg("future")` ensures that all workers will receive the exactly same PRNG streams, independent of the number of workers.
 Although correct seeding alone does not guarantee full reproducibility, it is one problem less to worry about.
 You can find more details about the used PRNG in `r link("https://www.jottr.org/2020/09/22/push-for-statistical-sound-rng/", "this blog post")`.
+
+The issue of reproducibility is very complex, and complete reproducibility is very difficult to achieve - this ultimately also depends on the computational accuracy of the hardware, the processor instructions used, compiler versions and optimisation flags, or the `r index("BLAS")` library for linear algebra R links to.
+But since at least parallel PRNGs are not a problem, you should get the same or at least very similar results with a simple `set.seed()` before you run the experiments.
 
 
 ## Error Handling {#sec-error-handling}
