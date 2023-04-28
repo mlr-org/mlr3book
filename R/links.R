@@ -188,7 +188,7 @@ link = function(url, text = NULL) {
     out = sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
   }
 
-  sprintf("%s{.link}", out)
+  sprintf("[%s]{.link}", out)
 }
 
 #' @name paradox
