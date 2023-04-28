@@ -94,7 +94,7 @@ ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
     out = cran_pkg(pkg, format = format)
   }
 
-  sprintf("(%s){.refpkg}", out)
+  sprintf("[%s]{.refpkg}", out)
 }
 
 cran_pkg = function(pkg, format = "markdown") {
