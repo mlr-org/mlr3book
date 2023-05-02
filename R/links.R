@@ -63,10 +63,7 @@ ref = function(topic, text = NULL, format = "markdown") {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  switch(format,
-    "markdown" = sprintf("[`%s`](%s)", text, url),
-    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
-  )
+  sprintf("[`%s`](%s){.refcode}", text, url)
 }
 
 #' @title Hyperlink to Package
@@ -87,16 +84,17 @@ ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
 
   if (grepl("/", pkg, fixed = TRUE)) {
     if (runiverse) {
-      ru_pkg(pkg, format = format)
+      out = ru_pkg(pkg, format = format)
     } else {
-      gh_pkg(pkg, format = format)
+      out = gh_pkg(pkg, format = format)
     }
-
   } else if (pkg %in% db$hosted) {
-    mlr_pkg(pkg, format = format)
+    out = mlr_pkg(pkg, format = format)
   } else {
-    cran_pkg(pkg, format = format)
+    out = cran_pkg(pkg, format = format)
   }
+
+  sprintf("[%s]{.refpkg}", out)
 }
 
 cran_pkg = function(pkg, format = "markdown") {
@@ -185,10 +183,12 @@ index = function(main, index = toproper(main)) {
 #' @export
 link = function(url, text = NULL) {
   if (is.null(text)) {
-    sprintf("[%s](%s)", url, url)
+    out = sprintf("[%s](%s)", url, url)
   } else {
-    sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
+    out = sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
   }
+
+  sprintf("[%s]{.link}", out)
 }
 
 #' @name paradox
