@@ -183,12 +183,10 @@ index = function(main, index = toproper(main)) {
 #' @export
 link = function(url, text = NULL) {
   if (is.null(text)) {
-    out = sprintf("[%s](%s)", url, url)
+    sprintf("[%s](%s)", url, url)
   } else {
-    out = sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
+    sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
   }
-
-  sprintf("[%s]{.link}", out)
 }
 
 #' @name paradox
