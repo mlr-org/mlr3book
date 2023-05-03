@@ -185,7 +185,7 @@ link = function(url, text = NULL) {
   if (is.null(text)) {
     sprintf("[%s](%s)", url, url)
   } else {
-    sprintf("[%s](%s)^[%s](%s)", text, url, url, url)
+    sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
   }
 }
 
