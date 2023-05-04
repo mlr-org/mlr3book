@@ -47,6 +47,10 @@ pdf:
 	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto render book/ --to pdf
 
+pdfref:
+	Rscript -e 'renv::restore("book/", prompt = FALSE)'
+	quarto render book/ --to pdf --cache-refresh
+
 names:
 	Rscript -e 'mlr3book::name_chunks_mlr3book()'
 
