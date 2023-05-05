@@ -35,14 +35,35 @@ abstract: "
 library("mlr3pipelines")
 lgr::get_logger("mlr3")$set_threshold("warn")
 lgr::get_logger("bbotk")$set_threshold("warn")
-knitr::opts_chunk$set(fig.width=7, fig.height=5, eval = FALSE)
+lgr::get_logger("mlr3tuning")$set_threshold("warn")
+options(warnPartialMatchArgs = FALSE)
+options(warnPartialMatchAttr = FALSE)
+options(warnPartialMatchDollar = FALSE)
+options(mlr3.exec_chunk_size = 5)
+
+knitr::opts_chunk$set(fig.width=7, fig.height=5, eval = TRUE)
 library("data.table")
 
 library("mlr3oml")
 dir.create(here::here("book", "openml"), showWarnings = FALSE, recursive = TRUE)
 options(mlr3oml.cache = here::here("book", "openml", "cache"))
-oldplan = future::plan("multisession")
+.cl = parallel::makePSOCKcluster(parallel::detectCores())
+.oldplan = future::plan(future::cluster, workers = .cl)
 
+# disable all output everywhere
+parallel::clusterCall(.cl, function() {
+  Sys.setenv(OMP_NUM_THREADS=1)
+  Sys.setenv(OMP_THREAD_LIMIT=1)
+  data.table::setDTthreads(1)
+  RhpcBLASctl::blas_set_num_threads(1)
+  RhpcBLASctl::omp_set_num_threads(1)
+  lgr::get_logger("bbotk")$set_threshold("warn")
+  lgr::get_logger("mlr3")$set_threshold("warn")
+  lgr::get_logger("mlr3tuning")$set_threshold("warn")
+  options(warnPartialMatchArgs = FALSE)
+  options(warnPartialMatchAttr = FALSE)
+  options(warnPartialMatchDollar = FALSE)
+})
 ```
 
 Machine learning (ML) toolkits often try to abstract away the processes inside ML algorithms.
@@ -51,9 +72,9 @@ The benefit of using `r ref_pkg("mlr3")`, for example, is that one can use any `
 In the following code snippet, it would be trivial to swap in a different learner than `"regr.rpart"` without having to worry about implementation details:
 ```{r 05-pipelines-in-depth-002, eval = FALSE}
 task = as_task_regr(cars, target = "dist")
-lrn = lrn("regr.rpart")
-rsmp = rsmp("holdout")
-resample(task, lrn, rsmp)
+learner_rpart = lrn("regr.rpart")
+resampling = rsmp("holdout")
+resample(task, learner_rpart, resampling)
 ```
 
 However, this modularity breaks down as soon as the learning process encompasses more than just model fitting, like data preprocessing, building ensemble-models or even more complicated meta-models.
@@ -127,12 +148,11 @@ graph = po("branch", c("nop", "pca", "scale")) %>>%
     po("nop", id = "null1"),
     po("pca"),
     po("scale")
-  ))
-gr = graph %>>%
+  )) %>>%
   po("unbranch", c("nop", "pca", "scale")) %>>%
   po("learner", lrn("classif.rpart"))
 
-gr$plot()
+graph$plot()
 ```
 
 PipeOps can then easily be created using the `r ref("po", "po()")` constructor function.
@@ -150,16 +170,16 @@ To get a Graph that trains a model, combine PipeOps with `r ref("Learner")`.
 The `$plot()` method can be used to show what the created Graph looks like.
 
 ```{r pipeop-quickstart-graphs-1, eval = TRUE}
-gr = pca %>>% lrn("classif.rpart")  # equivalent
+graph = pca %>>% lrn("classif.rpart")  # equivalent
 
-gr$plot(horizontal = TRUE)
+graph$plot(horizontal = TRUE)
 ```
 
 Graphs in which the last operation is a `r ref("PipeOpLearner")` can be turned into a Learner that performs the operations represented by the `Graph` in order by using `r ref("as_learner", "as_learner()")`.
 Notice how the decision variables in the model are not the columns of the original dataset, but instead the principal components extracted by the `"pca"`-PipeOp.
 
 ```{r pipeop-quickstart-graphlearner-1, eval = TRUE}
-gl = as_learner(gr)
+gl = as_learner(graph)
 
 gl$train(tsk("iris"))
 gl$model$classif.rpart$model
@@ -170,66 +190,6 @@ The Learner can be `resample()`d, `benchmark()`ed and `tune()`d just as any othe
 rr = resample(tsk("iris"), gl, rsmp("cv"))
 rr$aggregate()
 ```
-
-<!--
-### Non-Sequential `Graph`s
-
-One distinguishing feature of `r mlr3pipelines` is that it can represent Graphs with parallel paths, for example alternative preprocessing operations that then get combined together in a "`cbind`"-operation. To arrange Graphs in parallel, the `r ref("gunion", "gunion()")`-function can be used. The `%>>%` operator tries to automatically connect all outputs of its left hand side to all inputs of its right hand side. The following fits a model on both the centered and the non-centered principal components of the `iris` dataset. The features get combined using the `"featureunion"` PipeOp and then given to the `"classif.rpart"` learner.
-```{r pipeop-quickstart-nonseq-1}
-gr2 = gunion(list(po("pca", center = TRUE), po("pca", center = FALSE, id = "pca2"))) %>>%
-  po("featureunion", innum = c("centered", "noncentered")) %>>% lrn("classif.rpart")
-gr2$keep_results = TRUE
-gr2$plot()
-gl2 = as_learner(gr2)
-gl2$train(tsk("iris"))
-```
-This already shows some advanced usage necessary for this scenario: The ID of one of the `"pca"` PipeOps needs to be changed to avoid name collisions, and the `innum` construction argument of `"featureunion"` is set to a vector of column prefixes to use, as both `"pca"` PipeOps produce columns with the same name.
-Setting the`$keep_results` debug-flag of the `Graph` is not necessary, but it allows us to find out what was actually returned by the `"featureunion"` PipeOp during training:
-```{r pipeop-quickstart-nonseq-2}
-gl2$graph_model$pipeops$featureunion$.result
-```
-We can also look at the trained `"classif.rpart"`-model to see that both centered as well as noncentered features were used
-```{r pipeop-quickstart-nonseq-3}
-gl2$model$classif.rpart$model
-```
-
-See @sec-pipelines-nonsequential for more on non-sequential Graphs.
-
-### Tuning `GraphLearner`s
-
-`r mlr3pipelines` is well suited for tuning entire ML pipelines.
-For one because performance evaluations are more accurate, see above, but also because the constructed Graph objects have a combined hyperparameter space that can be tuned together.
-Notice how the hyperparameters of both the `"pca"` PipeOp as well as the `"classif.rpart"` learner are present.
-They are prefixed by each object's ID to avoid possible name clashes.
-
-```{r pipeop-quickstart-graphlearner-3}
-gl$param_set
-```
-
-This `GraphLearner` behaves like any other `r ref("Learner")` for the sake of tuning. The following tunes the number of principal components to use, along with the tree size to use:
-```{r pipeop-quickstart-tuning-1}
-library("mlr3tuning")
-gl$param_set$values$pca.rank. = to_tune(1, 4)
-gl$param_set$values$classif.rpart.maxdepth = to_tune(2, 6)
-
-tr = tune(tnr("grid_search"), tsk("iris"), gl, rsmp("cv"))
-tr$result
-```
-
-@sec-pipelines-tuning gives more details on the topic of tuning Graphs.
-
-### Common `Graph` Patterns
-
-There are various patterns that frequently occur when building ML pipelines that consist of more than just a single PipeOp operation. The `r ref("ppl", "ppl()")` function provides a variety of patterns which are presented in @sec-pipelines-ppl.
-
-The following is an example of *stacking*, using the `"classif.ranger"` and `"classif.multinom"` model predictions as features for a `"classif.rpart"` model:
-```{r pipeop-quickstart-ppl-1}
-library("mlr3learners")
-gr3 = ppl("stacking", lrns(c("classif.ranger", "classif.multinom")), lrn("classif.rpart"))
-gr3$plot()
-```
-
--->
 
 ## `PipeOp`: Pipeline Operators {#sec-pipelines-pipeops}
 
@@ -289,8 +249,7 @@ pca$state
 Each PipeOp is an instance of an `R6` class, many of which are provided by the `r mlr3pipelines` package itself.
 They can be retrieved from the `r ref("mlr_pipeops")` dictionary, most easily by using the `r ref("po", "po()")` short access function.
 A shortcut for creating lists of PipeOps from a vector of names is `r ref("pos", "pos()")`.
-Besides that, they can also be constructed explicitly ("`PipeOpPCA$new()`").
-When retrieving PipeOps from the `r ref("mlr_pipeops")` dictionary, it is also possible to give additional constructor arguments, such as an ID or hyperparameter settings. Setting the ID explicitly is necessary when using multiple instances of the same class of `PipeOp` in a single `Graph`, since otherwise a name collision would occur.
+When retrieving PipeOps from the `r ref("mlr_pipeops")` dictionary, it is also possible to give additional constructor arguments, such as an ID or hyperparameter settings.
 
 ```{r 05-pipelines-in-depth-2-009, eval = TRUE}
 po("pca", rank. = 3, id = "pca2")
@@ -533,16 +492,14 @@ To ensure that PipeOps can be accessed by their ID within Graphs, it is necessar
 IDs can be set during construction using the `id`-argument of `po()`, or they can be changed for existing PipeOps.
 For PipeOps that are already in a Graph, the `$set_names()` method can also be used to change IDs, although this should rarely be necessary.
 
-```{r 05-pipelines-in-depth-039, eval = FALSE}
-gr = po("pca") %>>% po("pca")
-# Error in gunion(list(g1, g2), in_place = c(TRUE, TRUE)) :
-# Assertion on 'ids of pipe operators of graphs' failed: Must have unique names, but element 2 is duplicated.
-```
-
 ```{r 05-pipelines-in-depth-040, eval = TRUE}
+# without the `id` argument, this would give a name collision error
 gr = po("pca") %>>% po("pca", id = "pca2")
 gr
-gr$set_names("pca", "pca1")
+gr$set_names(
+  old = c("pca", "pca2"),
+  new = c("pca_1", "pca_2")
+)
 gr
 ```
 
@@ -733,13 +690,15 @@ l_bag = as_learner(bagging)
 l_bag$id = "bagging"
 l_rpart = lrn("classif.rpart")
 rsmp_sonar = rsmp("cv")$instantiate(tsk("sonar"))
-grid = benchmark_grid(tsks("sonar"), list(l_bag, l_rpart, lrn("classif.ranger")), list(rsmp_sonar))
+grid = benchmark_grid(tsks("sonar"),
+  list(l_bag, l_rpart, lrn("classif.ranger")), list(rsmp_sonar)
+)
 bmr = benchmark(grid)
 bmr$aggregate()
 ```
 
 We can, however, use `mlr3pipelines` and `lrn("classif.rpart")` to come very close to an actual random forest!
-The main difference is that the random forest also performs "feature bagging", where onlhy a random subset of available features is used for each tree.
+The main difference is that the random forest also performs "feature bagging", where only a random subset of available features is used for each tree.
 We can implement using the `po("select")` operator and a custom `Selector`.
 We also use the `ppl("bagging")` method mentioned above.
 It makes use of the `r ref("Multiplicity")` construct, which is a more efficient way of building massively parallel Graphs.
@@ -752,7 +711,8 @@ subsample_selector = function(task) {
 }
 
 bagging_quasi_rf = ppl("bagging",
-  graph = po("select", selector = subsample_selector) %>>% lrn("classif.rpart", minsplit = 1),
+  graph = po("select", selector = subsample_selector) %>>%
+    lrn("classif.rpart", minsplit = 1),
   iterations = 300,
   averager = po("classifavg", collect_multiplicity = TRUE)
 )
@@ -763,7 +723,9 @@ bagging_quasi_rf$param_set$values$subsample.replace = FALSE
 l_quasi_rf = as_learner(bagging_quasi_rf)
 l_quasi_rf$id = "quasi.rf"
 
-grid = benchmark_grid(tsks("sonar"), list(l_quasi_rf, lrn("classif.ranger")), list(rsmp_sonar))
+grid = benchmark_grid(tsks("sonar"),
+  list(l_quasi_rf, lrn("classif.ranger")), list(rsmp_sonar)
+)
 bmr = benchmark(grid)
 bmr$aggregate(msrs(c("classif.ce", "time_both")))
 ```
@@ -824,20 +786,42 @@ stack$plot(horizontal = TRUE)
 ```
 
 After training this pipeline, we can show that the second `"classif.rpart"` learner used the output of the first `"classif.multinom"` learner as input by inspecting its `$model`.
-```{r 05-pipelines-non-sequential-019, eval = TRUE}
+```{r 05-pipelines-non-sequential-019, eval = TRUE, message = FALSE, warning = FALSE, include = FALSE}
+# don't know why this is not working.
+set.seed(0)
+l_stack = as_learner(stack)
+l_stack$id = "rpart_stacking"
+l_stack$train(tsk("iris"))
+```
+```{r 05-pipelines-non-sequential-019-x, eval = FALSE}
 set.seed(0)
 l_stack = as_learner(stack)
 l_stack$id = "rpart_stacking"
 l_stack$train(tsk("iris"))
 l_stack$graph_model$pipeops$classif.rpart$learner_model$model
 ```
+```{r 05-pipelines-non-sequential-019-xx, eval = TRUE, echo = FALSE}
+l_stack$graph_model$pipeops$classif.rpart$learner_model$model
+```
 
 We can see that the performance of `lrn("classif.rpart")` was enhanced by the use of stacking.
 More advanced models may give even better performance, but the advantage of this setup is that both components of the stacing learner -- the multinomial classification learner and the decision tree -- are easier to interpret than most other models.
 
-```{r 05-pipelines-non-sequential-019-1}
-grid = benchmark_grid(tsks("iris"), list(l_stack, lrn("classif.rpart")), rsmps("repeated_cv"))
+```{r 05-pipelines-non-sequential-019-1-background, include = FALSE, warning = FALSE, message = FALSE}
+# weird bugfix
+grid = benchmark_grid(tsks("iris"),
+  list(l_stack, lrn("classif.rpart")), rsmps("repeated_cv")
+)
 bmr = benchmark(grid)
+```
+```{r 05-pipelines-non-sequential-019-1}
+grid = benchmark_grid(tsks("iris"),
+  list(l_stack, lrn("classif.rpart")), rsmps("repeated_cv")
+)
+bmr = benchmark(grid)
+bmr$aggregate()
+```
+```{r 05-pipelines-non-sequential-019-1-foreground, echo = FALSE}
 bmr$aggregate()
 ```
 
@@ -1047,9 +1031,6 @@ instance = tune(
 cbind(as.data.table(instance$result_x_domain), classif.ce = instance$result_y)
 ```
 
-<!-- Looking at the result in @fig-pipelines-opttrace-2, we see that the performance of the "nop" path and the "scale" path is the same.
-This is not surprising:
-By default, the SVM does scaling internally, so the `po("scale")` leads to identical results in this case. -->
 Looking at the result, we see that the tuned KNN performs better than the untuned decision tree, "classif.rpart".
 A more thorough investigation could try to tune the decision tree to check if its performance can be brought to the level of the KNN algorithm.
 Increasing the number of options, however, increases the search space vastly.
@@ -1236,329 +1217,8 @@ They also have optional arguments for fine adjustments which are described on th
   The predictions made on the binary tasks are then combined into the multiclass prediction needed for the original task.
   If possible, the `$predict_type` of the learner(s) in `graph` should be set to `"prob"`.
 
-  
-
-<!--
-TODO: this?
-
-The example above showed a sequential preprocessing pipeline, but it is in fact possible to build true "graphs" of operations, as long as no loops are introduced^[It is tempting to denote this as a "directed acyclic graph", but this would not be entirely correct because edges run between channels of PipeOps, not PipeOps themselves.].
-PipeOps with multiple output channels can feed their data to multiple different subsequent PipeOps, and PipeOps with multiple input channels can take results from different PipeOps.
-When a PipeOp has more than one input / output channel, then the `r ref("Graph")`'s `$add_edge()` method needs an additional argument that indicates which channel to connect to.
-This argument can be given in the form of an integer, or as the name of the channel.
-
-The following constructs a `r ref("Graph")` that copies the input and gives one copy each to a "scale" and a "pca" PipeOp.
-The resulting columns of each operation are put next to each other by "featureunion".
-
-```{r 05-pipelines-in-depth-021, tidy = FALSE}
-gr = Graph$new()$
-  add_pipeop(po("copy", outnum = 2))$
-  add_pipeop(po("scale"))$
-  add_pipeop(po("pca"))$
-  add_pipeop(po("featureunion", innum = 2))
-
-gr$
-  add_edge("copy", "scale", src_channel = 1)$        # designating channel by index
-  add_edge("copy", "pca", src_channel = "output2")$  # designating channel by name
-  add_edge("scale", "featureunion", dst_channel = 1)$
-  add_edge("pca", "featureunion", dst_channel = 2)
-
-gr$plot()
-```
-```{r 05-pipelines-in-depth-022}
-# gr$train(iris_first_half)[[1]]$data()
-```
-
-### Multilevel Stacking
-
-In order to showcase the power of `r mlr3pipelines`, we will show a more complicated stacking example.
-
-In this case, we train a `r mlr3book::ref_pkg("glmnet")` and 2 different `r mlr3book::ref_pkg("rpart")` models (some transform its inputs using `r ref("PipeOpPCA")`) on our task in the "level 0" and concatenate them with the original features (via `r ref("gunion")`).
-The result is then passed on to "level 1", where we copy the concatenated features 3 times and put this task into an `r mlr3book::ref_pkg("rpart")` and a `r mlr3book::ref_pkg("glmnet")` model.
-Additionally, we keep a version of the "level 0" output (via `r ref("PipeOpNOP")`) and pass this on to "level 2".
-In "level 2" we simply concatenate all "level 1" outputs and train a final decision tree.
-
-In the following examples, use `<lrn>$param_set$values$<param_name> = <param_value>` to set hyperparameters for the different learner.
-
-```{r 05-pipelines-non-sequential-020}
-library("magrittr")
-library("mlr3learners") # for classif.glmnet
-
-rprt = lrn("classif.rpart", predict_type = "prob")
-glmn = lrn("classif.glmnet", predict_type = "prob")
-
-#  Create Learner CV Operators
-lrn_0 = po("learner_cv", rprt, id = "rpart_cv_1")
-lrn_0$param_set$values$maxdepth = 5L
-lrn_1 = po("pca", id = "pca1") %>>% po("learner_cv", rprt, id = "rpart_cv_2")
-lrn_1$param_set$values$rpart_cv_2.maxdepth = 1L
-lrn_2 = po("pca", id = "pca2") %>>% po("learner_cv", glmn)
-
-# Union them with a PipeOpNULL to keep original features
-level_0 = gunion(list(lrn_0, lrn_1, lrn_2, po("nop", id = "NOP1")))
-
-# Cbind the output 3 times, train 2 learners but also keep level
-# 0 predictions
-level_1 = level_0 %>>%
-  po("featureunion", 4) %>>%
-  po("copy", 3) %>>%
-  gunion(list(
-    po("learner_cv", rprt, id = "rpart_cv_l1"),
-    po("learner_cv", glmn, id = "glmnt_cv_l1"),
-    po("nop", id = "NOP_l1")
-  ))
-
-# Cbind predictions, train a final learner
-level_2 = level_1 %>>%
-  po("featureunion", 3, id = "u2") %>>%
-  po("learner", rprt, id = "rpart_l2")
-
-# Plot the resulting graph
-level_2$plot()
-
-task = tsk("iris")
-lrn = as_learner(level_2)
-```
-
-And we can again call `.$train` and `.$predict`:
-
-```{r 05-pipelines-non-sequential-021, warning=FALSE, eval=FALSE}
-lrn$
-  train(task, train.idx)$
-  predict(task, test.idx)$
-  score()
-```
--->
-
-<!--
-## Specific PipeOps
-
-### Imputation: `PipeOpImpute`
-
-Often you will be using data sets that have missing values.
-There are many methods of dealing with this issue, from relatively simple imputation using either mean, median or histograms to way more involved methods including using ML algorithms in order to predict missing values.
-These methods are called imputation.
-
-The following PipeOps, `r ref("PipeOpImpute")`:
-
-- Add an indicator column marking whether a value for a given feature was missing or not (numeric only)
-- Impute numeric values from a histogram
-- Impute categorical values using a learner
-- We use `po("featureunion")` and `po("nop")` to cbind the missing indicator features. In other words to combine the indicator columns with the rest of the data.
-
-```{r 05-pipelines-special-pipeops-002}
-# Imputation example
-task = tsk("penguins")
-task$missings()
-
-# Add missing indicator columns ("dummy columns") to the Task
-pom = po("missind")
-# Simply pushes the input forward
-nop = po("nop")
-# Imputes numerical features by histogram.
-pon = po("imputehist", id = "imputer_num")
-# combines features (used here to add indicator columns to original data)
-pou = po("featureunion")
-# Impute categorical features by fitting a Learner ("classif.rpart") for each feature.
-pof = po("imputelearner", lrn("classif.rpart"), id = "imputer_fct", affect_columns = selector_type("factor"))
-```
-
-Now we construct the graph.
-
-```{r 05-pipelines-special-pipeops-003}
-impgraph = list(
-  pom,
-  nop
-) %>>% pou %>>% pof %>>% pon
-
-impgraph$plot()
-```
-
-Now we get the new task and we can see that all of the missing values have been imputed.
-
-```{r 05-pipelines-special-pipeops-004}
-new_task = impgraph$train(task)[[1]]
-
-new_task$missings()
-```
-
-A learner can thus be equipped with automatic imputation of missing values by adding an imputation Pipeop.
-
-```{r 05-pipelines-special-pipeops-005}
-polrn = po("learner", lrn("classif.rpart"))
-lrn = as_learner(impgraph %>>% polrn)
-```
-
-### Feature Engineering: `PipeOpMutate`
-
-New features can be added or computed from a task using `r ref("PipeOpMutate")` .
-The operator evaluates one or multiple expressions provided in an `alist`.
-In this example, we compute some new features on top of the `iris` task.
-Then we add them to the data as illustrated below:
-
-`iris` dataset looks like this:
-
-```{r 05-pipelines-special-pipeops-006}
-task = task = tsk("iris")
-head(as.data.table(task))
-```
-
-Once we do the mutations, you can see the new columns:
-
-```{r 05-pipelines-special-pipeops-007}
-pom = po("mutate")
-
-# Define a set of mutations
-mutations = list(
-  Sepal.Sum = ~ Sepal.Length + Sepal.Width,
-  Petal.Sum = ~ Petal.Length + Petal.Width,
-  Sepal.Petal.Ratio = ~ (Sepal.Length / Petal.Length)
-)
-pom$param_set$values$mutation = mutations
-
-new_task = pom$train(list(task))[[1]]
-head(as.data.table(new_task))
-```
-
-If outside data is required, we can make use of the `env` parameter.
-Moreover, we provide an environment, where expressions are evaluated (`env` defaults to `.GlobalEnv`).
-
-### Training on data subsets: `PipeOpChunk`
-
-In cases, where data is too big to fit into the machine's memory, an often-used technique is to split the data into several parts.
-Subsequently, the parts are trained on each part of the data.
-
-After undertaking these steps, we aggregate the models.
-In this example, we split our data into 4 parts using `r ref("PipeOpChunk")` .
-Additionally, we create 4 `r ref("PipeOpLearner")`  POS, which are then trained on each split of the data.
-
-```{r 05-pipelines-special-pipeops-008}
-chks = po("chunk", 4)
-lrns = ppl("greplicate", po("learner", lrn("classif.rpart")), 4)
-```
-
-Afterwards we can use `r ref("PipeOpClassifAvg")` to aggregate the predictions from the 4 different models into a new one.
-
-```{r 05-pipelines-special-pipeops-009}
-mjv = po("classifavg", 4)
-```
-
-We can now connect the different operators and visualize the full graph:
-
-```{r 05-pipelines-special-pipeops-010, fig.width=7.5, fig.height = 9}
-pipeline = chks %>>% lrns %>>% mjv
-pipeline$plot()
-```
-
-```{r 05-pipelines-special-pipeops-011}
-task = tsk("iris")
-train.idx = sample(seq_len(task$nrow), 120)
-test.idx = setdiff(seq_len(task$nrow), train.idx)
-
-pipelrn = as_learner(pipeline)
-pipelrn$train(task, train.idx)$
-  predict(task, train.idx)$
-  score()
-```
-
-### Feature Selection beyond `PipeOpSelect`
-
-When a particular, pre-determined set of features should be selected, the `PipeOpSelect` operator is usually sufficient. However, often it is desirable to select features depending on their relationship with the target variable, for example to create models that rely on only very few features while still being relatively performant. This process is called *feature filtering*.
-
-The package `r mlr3book::ref_pkg("mlr3filters")` contains many different `"mlr3filters::Filter")`s that can be used to select features for subsequent learners.
-This is often required when the data has a large amount of features.
-
-A PipeOp for filters is `r ref("PipeOpFilter")`:
-
-```{r 05-pipelines-special-pipeops-012}
-po("filter", mlr3filters::flt("information_gain"))
-```
-
-How many features to keep can be set using `filter_nfeat`, `filter_frac` and `filter_cutoff`.
-
-## Technical Details
-
-### PipeOp Channels
-
-#### Input Channels
-
-Just like functions, PipeOps can take multiple inputs.
-These multiple inputs are always given as elements in the input list.
-For example, there is a `r ref("PipeOpFeatureUnion")` that combines multiple tasks with different features and "`cbind()`s" them together, creating one combined task.
-When two halves of the `iris` task are given, for example, it recreates the original task:
-
-```{r 05-pipelines-in-depth-009}
-iris_first_half = task$clone()$select(c("Petal.Length", "Petal.Width"))
-iris_second_half = task$clone()$select(c("Sepal.Length", "Sepal.Width"))
-
-pofu = po("featureunion", innum = 2)
-
-pofu$train(list(iris_first_half, iris_second_half))[[1]]$data()
-```
-
-Because `r ref("PipeOpFeatureUnion")` effectively takes two input arguments here, we can say it has two **input channels**.
-An input channel also carries information about the *type* of input that is acceptable.
-The input channels of the `pofu` object constructed above, for example, each accept a `r ref("Task")` during training and prediction.
-This information can be queried from the `$input` field:
-
-```{r 05-pipelines-in-depth-010}
-pofu$input
-```
-
-Other PipeOps may have channels that take different types during different phases.
-The `backuplearner` PipeOp, for example, takes a `NULL` and a `r ref("Task")` during training, and a `r ref("Prediction")` and a `r ref("Task")` during prediction:
-
-```{r 05-pipelines-in-depth-011}
-# TODO this is an important case to handle here, do not delete unless there is a better example.
-# po("backuplearner")$input
-```
-
-#### Output Channels
-
-Unlike the typical notion of a function, PipeOps can also have multiple **output channels**.
-`$train()` and `$predict()` always return a list, so certain PipeOps may return lists with more than one element.
-Similar to input channels, the information about the number and type of outputs given by a PipeOp is available in the `$output` field.
-The `chunk` PipeOp, for example, chunks a given `r ref("Task")` into subsets and consequently returns multiple `r ref("Task")` objects, both during training and prediction.
-The number of output channels must be given during construction through the `outnum` argument.
-
-```{r 05-pipelines-in-depth-012}
-po("chunk", outnum = 3)$output
-```
-
-Note that the number of output channels during training and prediction is the same.
-A schema of a PipeOp with two output channels:
-
-```{r 05-pipelines-in-depth-013, echo = FALSE}
-knitr::include_graphics("Figures/po_multi_alone.png")
-```
-
-#### Channel Configuration
-
-Most PipeOps have only one input channel (so they take a list with a single element), but there are a few with more than one;
-In many cases, the number of input or output channels is determined during construction, e.g. through the `innum` / `outnum` arguments.
-The `input.num` and `output.num` columns of the `r ref("mlr_pipeops")`-table [above](#where-to-get-pipeops) show the default number of channels, and `NA` if the number depends on a construction argument.
-
-The default printer of a PipeOp gives information about channel names and types:
-
-TODO!!
-```{r 05-pipelines-in-depth-014, out.width="98%"}
-# po("backuplearner")
-```
-
-### Edges {#sec-pipelines-edges}
-
-Edges always pass between PipeOp *channels*, so it is not only possible to explicitly prescribe which position of an input or output list an edge refers to, it makes it possible to make different components of a PipeOp's output flow to multiple different other PipeOps, as well as to have a PipeOp gather its input from multiple other PipeOps.
-
-A schema of a simple graph of PipeOps:
-
-```{r 05-pipelines-in-depth-015, echo = FALSE}
-knitr::include_graphics("Figures/po_multi_viz.png")
-```
-
-### How `%>>%` Works
-
--->
-
 ```{r pipelines-teardown, include = FALSE, cache = FALSE}
-future::plan(oldplan)
+future::plan(.oldplan)
+parallel::stopCluster(.cl)
 
 ```
