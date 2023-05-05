@@ -47,8 +47,7 @@ pdf:
 	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto render book/ --to pdf
 
-
-pdfrefresh:
+pdfref:
 	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto render book/ --to pdf --cache-refresh
 

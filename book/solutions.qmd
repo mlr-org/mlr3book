@@ -489,70 +489,77 @@ msr("classif.costs", costs = C)
 
 ```{r solutions-021}
 #| echo: false
-library(mlr3oml)
-collection = readRDS(here::here("book", "openml", "collection_297.rds"))
-tbl = readRDS(here::here("book", "openml", "tbl_297.rds"))
+library("mlr3oml")
+collection = readRDS(here::here("book", "openml", "collection_269.rds"))
+tbl = readRDS(here::here("book", "openml", "tbl_269.rds"))
 ```
 
-We access the OpenML collection with ID 297 using the `r ref("mlr3oml::ocl()")` function.
+We access the AutoML benchmark suite with ID 269 using the `r ref("mlr3oml::ocl()")` function.
 
 ```{r solutions-022}
 #| eval: false
-library(mlr3oml)
-collection = ocl(id = 297)
+library("mlr3oml")
+collection = ocl(id = 269)
 ```
 
-We can then find all tasks with less than 10000 observations using `r ref("mlr3oml::list_oml_tasks()")`.
+We can then find all tasks with less than 4000 observations using `r ref("mlr3oml::list_oml_tasks()")`.
 
 ```{r solutions-023}
 #| eval: false
-tbl = list_oml_tasks(task_id = collection$task_ids, number_instances = c(0, 10000))
+tbl = list_oml_tasks(
+  task_id = collection$task_ids, number_instances = c(0, 4000)
+)
 ```
 
-```{r solutions-024}
-#| echo: false
-#| output: false
-tbl = readRDS(here::here("book", "openml", "tbl_297.rds"))
-```
-
-This returns a table with the relevant IDs.
+This returns a table matching the query.
 
 ```{r solutions-025}
+tbl
 task_ids = tbl$task_id
 task_ids
 ```
 
-
-We can create mlr3 tasks using the `"oml"` task and resampling.
-
-```{r solutions-026}
-tasks = lapply(task_ids, function(id) tsk("oml", task_id = id))
-resamping = rsmp("holdout")
+```{r}
+#| echo: false
+#| output: false
+tasks = readRDS(here::here("book", "openml", "tasks_269_subset.rds"))
 ```
 
-We continue with defining the learners and robustifying them.
-We also set
+
+We can create mlr3 tasks using `tsk("oml")`.
+
+
+```{r solutions-026}
+#| eval: false
+tasks = lapply(task_ids, function(id) tsk("oml", task_id = id))
+```
+
+We continue with defining the learners, robustify them and then, register a featureless fallback learner.
 
 ```{r solutions-027}
-tasks = lapply(task_ids, function(id) tsk("oml", task_id = id))
-resamplings = lapply(task_ids, function(id) rsmp("oml", task_id = id))
-
 learner_ranger = as_learner(
-  ppl("robustify", learner = lrn("regr.ranger")) %>>% po("learner", lrn("regr.ranger"))
+  ppl("robustify", learner = lrn("regr.ranger")) %>>% 
+    po("learner", lrn("regr.ranger"))
 )
 learner_ranger$id = "ranger"
+learner_ranger$fallback = lrn("regr.featureless")
 
 learner_rpart = as_learner(
-  ppl("robustify", learner = lrn("regr.rpart")) %>>% po("learner", lrn("regr.rpart"))
+  ppl("robustify", learner = lrn("regr.rpart")) %>>% 
+    po("learner", lrn("regr.rpart"))
 )
 learner_rpart$id = "rpart"
+learner_ranger$fallback = lrn("regr.featureless")
 
 learners = list(learner_ranger, learner_rpart)
 ```
 
-Finally, we create the experiment design using `r ref("benchmark_grid")`.
+Finally, we create the experiment design using `r ref("benchmark_grid()")`.
 
 ```{r solutions-028}
+# we set the seed, as benchmark_grid instantiates the resamplings
+set.seed(123)
+resampling = rsmp("cv", folds = 3)
 design = benchmark_grid(tasks, learners, resampling)
 design
 ```
@@ -562,36 +569,44 @@ design
 We start with loading the relevant libraries and creating a registry.
 
 ```{r solutions-029}
-library(mlr3batchmark)
-library(batchtools)
+#| cache: false
+library("mlr3batchmark")
+library("batchtools")
 
 reg = makeExperimentRegistry(NA, seed = 1, packages = "mlr3verse")
 ```
 
-Then, we change the cluster function to "Multicore".
+Then, we change the cluster function to "Multicore" (or "Socket" if you are on Windows).
 
 ```{r}
+#| cache: false
 reg$cluster.function = makeClusterFunctionsMulticore()
+
+# Windows:
+# reg$cluster.function = makeClusterFunctionsSocket()
+
 saveRegistry(reg)
 ```
 
 The next step is to populate the registry with the experiments and submit them.
 
 ```{r solutions-030}
+#| output: false
 batchmark(design, reg = reg)
-submitJobs()
+submitJobs(reg = reg)
 ```
 
 ```{r}
 #| echo: false
-waitForJobs()
+#| output: false
+waitForJobs(reg = reg)
 ```
 
 
-After they are finished, we can collect the results.
+After they are finished, we collect the results.
 
 ```{r solutions-031}
-bmr = reduceResultsBatchmark()
+bmr = reduceResultsBatchmark(reg = reg)
 bmr
 ```
 
@@ -600,8 +615,9 @@ bmr
 As a first step, we load `r ref_pkg("mlr3benchmark")` and create a benchmark aggregate.
 
 ```{r}
-library(mlr3benchmark)
-bma = as_benchmark_aggr(bmr)
+library("mlr3benchmark")
+bma = as_benchmark_aggr(bmr, measures = msr("regr.mse"))
+bma
 ```
 
 This allows us to conduct a friedman test.
@@ -610,65 +626,15 @@ This allows us to conduct a friedman test.
 bma$friedman_test()
 ```
 
-Finally, we visualize the results.
+This experiment design was not able to detect a significant difference on the 5% level.
+
+We can inspect the ranks using the `$rank_data()` method of the `r ref("BenchmarkAggr")`.
 
 ```{r}
-autoplot(bmr)
+bma$rank_data(minimize = TRUE)
 ```
 
-
-
-
-# 1. Create an experiment design that compares the random forest in `r ref_pkg("ranger")` with the regression tree from `r ref_pkg("rpart")`.
-
-```{r solutions-034}
-# TODO Cache the tsk table and the collection.
-```
-
-collection = ocl(id = 297)
-
-tbl = list_oml_tasks(task_id = collection$task_ids, number_instances = c(0, 10000))
-task_ids = tbl$task_id
-
-tasks = lapply(task_ids, function(id) tsk("oml", task_id = id))
-resamplings = lapply(task_ids, function(id) rsmp("oml", task_id = id))
-
-learner_ranger = as_learner(
-  ppl("robustify", learner = lrn("regr.ranger")) %>>% po("learner", lrn("regr.ranger"))
-)
-learner_ranger$id = "ranger"
-
-learner_rpart = as_learner(
-  ppl("robustify", learner = lrn("regr.rpart")) %>>% po("learner", lrn("regr.rpart"))
-)
-learner_rpart$id = "rpart"
-
-learners = list(learner_ranger, learner_rpart)
-
-design = benchmark_grid(tasks, learners, resamplings, paired = TRUE)
-
-
-reg = makeExperimentRegistry(NA, seed = 1, packages = "mlr3verse")
-reg$cluster.function = makeClusterFunctionsMulticore()
-saveRegistry(reg)
-
-batchmark(design, reg = reg)
-submitJobs()
-
-waitForJobs()
-
-bmr = reduceResultsBatchmark()
-
-
-bma = as_benchmark_aggr(bmr)
-
-bma$friedman_test()
-
-autoplot(bmr)
-
-results = lapply
-
-
+The random forest is better on 7 of the 10 experiments.
 
 ## Solutions to @sec-interpretation
 
@@ -777,6 +743,3 @@ ranger_ceteris = predict_profile(ranger_exp, player_1)
 plot(ranger_ceteris, variables = num_features) +
   ggtitle("Ceteris paribus for R. Lewandowski", " ")
 ```
-
-
-## Solutions to @sec-extending
