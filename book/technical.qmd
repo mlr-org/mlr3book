@@ -24,7 +24,7 @@ Not all algorithms can be parallelized, but when they can, parallelization allow
 In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, `r link("https://en.wikipedia.org/wiki/Thread_(computing)", "threads")` or `r link("https://en.wikipedia.org/wiki/Fork_(system_call)", "processes")` are ways to utilize all cores on a local machine.
 If you have multiple machines on the other hand, the machines need a way to communicate and exchange information, e.g. via protocols like network sockets or the `r link("https://en.wikipedia.org/wiki/Message_Passing_Interface", "Message Passing Interface (MPI)")`.
 Larger computational sites rely on a scheduler to orchestrate the computation for multiple users and offer a shared network file system all machines can access.
-Interacting with scheduling systems on compute clusters is covered in @sec-large-benchmarking using the R package `r ref_pkg("batchtools")`.
+Interacting with scheduling systems on compute clusters is covered in @sec-hpc-exec using the R package `r ref_pkg("batchtools")`.
 We do not want to delve too deep into such details here, but want to introduce some terminology which helps us to discuss parallelization on a more abstract level:
 
 * We call the hardware to parallelize on together with the respective interface provided by an R package the `r define("parallelization backend")`.
@@ -103,7 +103,7 @@ system.time({
 Whenever you have the option to control the granularity by setting the chunk size, you should aim for at least as many jobs as workers and also the runtime of each worker should be at least several seconds.
 This ensures that you can fully utilize the system and that the parallelization overhead stays reasonable.
 If you have heterogeneous runtimes, also consider grouping jobs together so that the runtime of the chunks get homogeneous.
-If there is a good estimate for the runtime, `batchtools::binpack()` (create an arbitrary number of chunks with a specified maximum combined runtime) and `batchtools::lpt()` (pack a specified number of chunks with arbitrary but homogeneous runtime) can prove useful - both are documented together with the `r ref("batchtools::chunk()")` helper.
+If there is a good estimate for the runtime, `batchtools::binpack()` (create an arbitrary number of chunks, each with a specified maximum combined runtime) and `batchtools::lpt()` (pack a specified number of chunks, each with arbitrary but homogeneous runtime) can prove useful - both are documented together with the `r ref("batchtools::chunk()")` helper.
 For unknown runtimes, randomizing the order of jobs sometimes helps if there is a systematic relationship between the order of the jobs and their runtime.
 This prevents the long jobs, for example, from all being executed at the end, which leads to avoidable underutilization.
 `r mlr3misc` ships with the functions `r ref("chunk()")` and `r ref("chunk_vector()")` to conveniently chunk vectors and also shuffles them per default.
@@ -231,9 +231,10 @@ Note that there are two mlr3 options to control the execution and granularity:
 * If `mlr3.exec_random` is set to `TRUE` (default), the order of jobs is randomized in resamplings and benchmarks.
   This can help if you run a benchmark or tuning with heterogeneous runtimes, e.g., to avoid that all the expensive learners get started last.
 * Option `mlr3.exec_chunk_size` can be used to control how many jobs are mapped to a single `future` and defaults to 1.
-  The value of this option is passed to `r ref("future.apply::future_mapply()")` while `future.scheduling` is set to `TRUE`.
+  The value of this option is passed to `r ref("future.apply::future_mapply()")` and `future.scheduling` is constantly set to `TRUE`.
 
-In general, however, the defaults should be in order, adjusting these options is worthwhile only in rare cases.
+Tuning the chunk size can help in some rare cases to mitigate the parallelization overhead.
+For larger problems and longer runtimes, however, this plays a subordinate role.
 
 
 @fig-parallel-overview illustrates the parallelization from the above example. From left to right:
@@ -287,7 +288,7 @@ Therefore, there is no need to decide whether you want to parallelize the tuning
 This approach makes the computation fine-grained and gives the `r ref_pkg("future")` backend the opportunity to group the jobs into chunks of suitable size (depending on the number of workers).
 
 Parallelization of benchmarks works analogously to resampling:
-```{r, echo = FALSE}
+```{r technical-006, echo = FALSE}
 # simple benchmark design
 design = benchmark_grid(
     tsks(c("sonar", "penguins")),
@@ -302,7 +303,7 @@ future::plan("multisession")
 benchmark(design)
 ```
 
-For larger benchmarks with a cumulative runtime of weeks, months or even years, see @sec-large-benchmarking which covers parallelization on high-performance computing clusters.
+For larger benchmarks with a cumulative runtime of weeks, months or even years, see @sec-hpc-exec which covers parallelization on high-performance computing clusters.
 
 
 ### Nested Resampling Parallelization {#sec-nested-resampling-parallelization}
@@ -313,7 +314,7 @@ Therefore, nested loops cannot be flattened, and the user instead has to choose 
 Let's consider the following example:
 You want to tune the `minsplit` argument of a classification tree using the `r ref("AutoTuner")` of `r mlr3tuning` (simplified version taken from @sec-model-tuning):
 
-```{r technical-006, echo = FALSE}
+```{r technical-007, echo = FALSE}
 library("mlr3tuning")
 
 learner = lrn("classif.rpart",
@@ -329,7 +330,7 @@ at = auto_tuner(
 )
 ```
 To evaluate the performance on an independent test set, resampling is used:
-```{r technical-007}
+```{r technical-008}
 resample(
   task = tsk("penguins"),
   learner = at,
@@ -341,9 +342,9 @@ Here, we have three opportunities to parallelize:
 
 1. the inner cross-validation of the auto tuner with 2 folds,
 2. the outer cross-validation of the resampling with 5 folds, and
-3. the points proposed by the random search in a single batch.
+3. evaluating all configurations proposed by the random search in a single batch (parameter `batch_size` of `r ref("TunerRandomSearch")`, defaulting to 1).
 
-Because the third opportunity is not always applicable, especially for many advanced tuning algorithms which propose only a single points in each iteration, we will focus on the first two opportunities.
+Because the third opportunity is not always applicable, especially for many advanced tuning algorithms which are only capable of proposing a single configuration in each iteration, we will here focus on the first two opportunities.
 Furthermore, we assume that we have a single CPU with four cores available.
 
 If we opt to parallelize the outer CV, all four cores would be utilized first with the computation of the first 4 resampling iterations.
@@ -351,7 +352,7 @@ The computation of the fifth iteration has to wait.
 The resulting CPU utilization of the nested resampling example on 4 CPUs is visualized in two Figures:
 
 * @fig-parallel-outer as an example for parallelizing the outer 5-fold cross-validation.
-  ```{r technical-008, eval = FALSE}
+  ```{r technical-009, eval = FALSE}
   # Runs the outer loop in parallel and the inner loop sequentially
   future::plan(list("multisession", "sequential"))
   ```
@@ -359,10 +360,10 @@ The resulting CPU utilization of the nested resampling example on 4 CPUs is visu
   First, each of the four workers starts with the computation of an inner 2-fold cross-validation.
   As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on CPU1 **after** the first 4 iterations are finished after 8 secs.
   During the computation of the 5th outer resampling iteration, only CPU1 is utilized, the other 3 CPUs are idling.
-  Note that just setting up the parallelization with a simple `future::plan("multisession")` has the same effect - the most outer loop is parallelized while all subsequent loops are executed sequentially.
+  Note that just setting up the parallelization with a simple `future::plan("multisession")` has the same effect - the most outer loop is parallelized while all subsequent loops default to sequential execution.
 
 * @fig-parallel-inner as an example for parallelizing the inner 2-fold cross-validation.
-  ```{r technical-009, eval = FALSE}
+  ```{r technical-010, eval = FALSE}
   # Runs the outer loop sequentially and the inner loop in parallel
   future::plan(list("sequential", "multisession"))
   ```
@@ -435,7 +436,7 @@ Alternatively, you can also enable parallelization for both loops for nested par
 While nesting real parallelization backends is often unintended and causes unnecessary overhead, it is useful in some distributed computing setups.
 In this case, the number of workers must be manually tweaked so that the system does not get overburdened:
 
-```{r technical-010, eval = FALSE}
+```{r technical-011, eval = FALSE}
 # Runs both loops in parallel
 future::plan(list(
   future::tweak("multisession", workers = 2),
@@ -450,9 +451,9 @@ For more background information about parallelization during tuning, see Section
 :::{.callout-important}
 During tuning with `r mlr3tuning`, you can often adjust the **batch size** of the `r ref("Tuner")`, i.e., control how many hyperparameter configurations are evaluated in parallel.
 If you want full parallelization, make sure that the batch size multiplied by the number of (inner) resampling iterations is at least equal to the number of available workers.
-If you expect homogeneous runtimes, i.e., you are tuning over a single learner or linear pipeline and you have no hyperparameter which is likely to influence the runtime, aim for a multiple of the number of workers.
+If you expect homogeneous runtimes, i.e., you are tuning over a single learner or linear pipeline, and you have no hyperparameter which is likely to influence the runtime, aim for a multiple of the number of workers.
 
-In general, larger batches mean more parallelization, while smaller batches imply a more frequent evaluation of termination criteria.
+In general, larger batches allow for more parallelization, while smaller batches imply a more frequent evaluation of the termination criteria.
 We default to a `batch_size` of 1 that ensures that all `r ref("Terminator")`s work as intended, i.e., you cannot exceed the computational budget.
 :::
 
@@ -480,7 +481,7 @@ Technically, the test data is first split into multiple groups and the predict-m
 The resulting predictions are then combined internally in a second step.
 However, to avoid predicting in parallel accidentally, parallel predictions must first be enabled in the learner via the `parallel_predict` field:
 
-```{r}
+```{r technical-012}
 # train random forest on spam task
 task = tsk("spam")
 learner = lrn("classif.ranger")
@@ -526,7 +527,7 @@ How to deal with these problems even in more complex setups like benchmarking or
 For illustration (and internal testing) of error handling, `r mlr3` ships with the learners `"classif.debug"` and `"regr.debug"`.
 Here, we use the debug learner for classification to demonstrate the error handling:
 
-```{r technical-011}
+```{r technical-013}
 task = tsk("penguins")
 learner = lrn("classif.debug")
 print(learner)
@@ -541,13 +542,13 @@ E.g., the debug learner comes with hyperparameters to control
 
 For a detailed description of all hyperparameters, see the manual page of `r ref("mlr_learners_classif.debug")`.
 
-```{r technical-012}
+```{r technical-014}
 learner$param_set
 ```
 
 With the learner's default settings, the learner will do nothing special: The learner remembers a random label and constantly predicts this label:
 
-```{r technical-013}
+```{r technical-015}
 task = tsk("penguins")
 learner$train(task)$predict(task)$confusion
 ```
@@ -555,7 +556,7 @@ learner$train(task)$predict(task)$confusion
 We now set a hyperparameter to let the debug learner signal an error during the train step.
 By default, `r mlr3` does not catch conditions such as warnings or errors raised while calling learners:
 
-```{r technical-014, error = TRUE}
+```{r technical-016, error = TRUE}
 # set probability to signal an error to 1
 learner$param_set$values = list(error_train = 1)
 
@@ -585,7 +586,7 @@ I.e., the execution of the calling function or package (here: `r mlr3`) continue
 Each `r ref("Learner")` has a field `encapsulate` to control how the train or predict steps are wrapped.
 The easiest way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")` which evaluates R expressions while tracking conditions such as outputs, messages, warnings or errors (see the documentation of the `r ref("encapsulate()")` helper function for more details):
 
-```{r technical-015}
+```{r technical-017}
 task = tsk("penguins")
 learner = lrn("classif.debug")
 
@@ -600,7 +601,7 @@ learner$train(task)
 
 After training the learner, one can access the recorded log via the fields `log`, `warnings` and `errors`:
 
-```{r technical-016}
+```{r technical-018}
 learner$log
 learner$warnings
 learner$errors
@@ -611,7 +612,7 @@ In contrast to `r ref_pkg("evaluate")`, the computation is taken out in a separa
 This guards the calling session against segmentation faults which otherwise would tear down the complete main R session.
 On the downside, starting new processes comes with comparably more computational overhead.
 
-```{r technical-017}
+```{r technical-019}
 learner$encapsulate = c(train = "callr", predict = "callr")
 learner$param_set$values = list(segfault_train = 1)
 learner$train(task = task)
@@ -623,7 +624,7 @@ Additionally, a timeout can be set so that learners do not run for an indefinite
 Interrupting learners works differently depending on the encapsulation (see `r ref("mlr3misc::encapsulate()")`) and, when viewed from the outside, behave as if they would signal an error after reaching the timeout.
 The timeout can be set separately for training and prediction and must be provided in seconds:
 
-```{r}
+```{r technical-020}
 # 5 minute timeout for training, no timeout for predict
 learner$timeout = c(train = 5 * 60, predict = Inf)
 ```
@@ -631,7 +632,7 @@ learner$timeout = c(train = 5 * 60, predict = Inf)
 Unfortunately, catching errors and ensuring an upper time limit is only half the battle.
 Without a model, it is not possible to get predictions:
 
-```{r technical-018, error = TRUE}
+```{r technical-021, error = TRUE}
 learner$predict(task)
 ```
 
@@ -665,7 +666,7 @@ To make this procedure very convenient during resampling and benchmarking, we su
 In the next example, in addition to the debug learner, we attach a simple featureless learner to the debug learner.
 So whenever the debug learner fails (which is every single time with the given parametrization) and encapsulation is enabled, `r mlr3` falls back to the predictions of the featureless learner internally:
 
-```{r technical-019}
+```{r technical-022}
 task = tsk("penguins")
 
 learner = lrn("classif.debug")
@@ -679,7 +680,7 @@ learner
 Note that encapsulation is not enabled explicitly; it is automatically set to `"evaluate"` for the training and the predict step while setting a fallback learner for a learner without encapsulation enabled.
 Furthermore, the log contains the captured error (which is also included in the print output), and although no model is stored, we can still get predictions:
 
-```{r technical-020}
+```{r technical-023}
 learner$model
 prediction = learner$predict(task)
 prediction$score()
@@ -691,7 +692,7 @@ However, it is invaluable for larger benchmark studies.
 In the following snippet, we compare the previously created debug learner with a simple classification tree.
 We re-parametrize the debug learner to fail in roughly 30% of the resampling iterations during the training step:
 
-```{r technical-021}
+```{r technical-024}
 learner$param_set$values = list(error_train = 0.3)
 
 bmr = benchmark(benchmark_grid(tsk("penguins"), list(learner, lrn("classif.rpart")), rsmp("cv")))
@@ -704,7 +705,7 @@ It is also possible to split the benchmark up into separate `ResampleResult` obj
 E.g., if we only want to have a closer look into the debug learner, we can extract the errors from the corresponding resample results:
 
 
-```{r technical-022}
+```{r technical-025}
 rr = aggr[learner_id == "classif.debug"]$resample_result[[1L]]
 rr$errors
 ```
@@ -723,7 +724,7 @@ However, this approach does not factor in that you can not generate predictions 
 Long story short, if a fallback learner is specified, missing predictions of the base learner will be automatically replaced with predictions from the fallback learner.
 This is illustrated in the following example:
 
-```{r technical-023}
+```{r technical-026}
 task = tsk("penguins")
 learner = lrn("classif.debug")
 
@@ -754,7 +755,7 @@ A message is only displayed if the respective level exceeds the global logging t
 
 To change the setting for `r mlr3` for the current session, you need to retrieve the logger (which is a `r ref_pkg("R6")` object) from `r ref_pkg("lgr")`, and then change the threshold of the like this:
 
-```{r technical-091, eval = FALSE}
+```{r technical-027, eval = FALSE}
 requireNamespace("lgr")
 
 logger = lgr::get_logger("mlr3")
@@ -764,19 +765,19 @@ logger$set_threshold("<level>")
 The default log level is `"info"`.
 All available levels can be listed as follows:
 
-```{r technical-092}
+```{r technical-028}
 getOption("lgr.log_levels")
 ```
 
 To increase verbosity, set the log level to a higher value, e.g. to `"debug"` with:
 
-```{r technical-093, eval = FALSE}
+```{r technical-029, eval = FALSE}
 lgr::get_logger("mlr3")$set_threshold("debug")
 ```
 
 To reduce the verbosity, reduce the log level to warn:
 
-```{r technical-094, eval = FALSE}
+```{r technical-030, eval = FALSE}
 lgr::get_logger("mlr3")$set_threshold("warn")
 ```
 
@@ -785,7 +786,7 @@ lgr::get_logger("mlr3")$set_threshold("warn")
 Also note that the optimization packages such as `r mlr3tuning` or `r mlr3fselect` use the logger of their base package `r ref_pkg("bbotk")`.
 If you want do disable logging from `r mlr3`, but keep the output from `r mlr3tuning`, reduce the verbosity of the `r mlr3` logger and change the `r ref_pkg("bbotk")` logger to the desired level.
 
-```{r technical-095, eval=FALSE}
+```{r technical-031, eval=FALSE}
 lgr::get_logger("mlr3")$set_threshold("warn")
 lgr::get_logger("bbotk")$set_threshold("info")
 ```
@@ -795,7 +796,7 @@ lgr::get_logger("bbotk")$set_threshold("info")
 Redirecting output is already extensively covered in the documentation and vignette of `r ref_pkg("lgr")`.
 Here is just a short example that adds an appender to log events additionally to a temporary file using the [JSON](https://en.wikipedia.org/wiki/JSON) format:
 
-```{r technical-096, eval = knitr::is_html_output()}
+```{r technical-032, eval = knitr::is_html_output()}
 tf = tempfile("mlr3log_", fileext = ".json")
 
 # get the logger as R6 object
@@ -835,7 +836,7 @@ In mlr3, `r ref("Task")` objects store their data in an abstract data object, th
 A `r index("data backend")` provides a unified API to retrieve subsets of the data or query information about it, regardless of how the data is actually stored on the system.
 The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` as a very fast and efficient in-memory database.
 For example, we can query the dimensions of the penguins task:
-```{r technical-024}
+```{r technical-033}
 task = tsk("penguins")
 backend = task$backend
 backend$nrow
@@ -864,7 +865,7 @@ In the following, we will show how to work with data backends that are available
 To demonstrate the `r ref("mlr3db::DataBackendDplyr")` we use the NYC flights data set from the `r ref_pkg("nycflights13")` package and move it into a `r index("SQLite")` database.
 Although `r ref("as_sqlite_backend()")` provides a convenient function to perform this step, we construct the database manually here.
 
-```{r technical-025, message = FALSE}
+```{r technical-034, message = FALSE}
 # load data
 requireNamespace("DBI")
 requireNamespace("RSQLite")
@@ -888,7 +889,7 @@ rm(flights)
 With the SQLite database stored in file `path`, we now re-establish a connection and switch to `r ref_pkg("dplyr")`/`r ref_pkg("dbplyr")` for some essential preprocessing.
 If you had a real `r index("database management system")` (DBMS), this would be the first step now:
 
-```{r technical-026, echo = FALSE}
+```{r technical-035, echo = FALSE}
 # establish connection
 con = DBI::dbConnect(RSQLite::SQLite(), path)
 
@@ -901,7 +902,7 @@ tbl = tbl(con, "flights")
 As databases are intended to store large volumes of data, a natural first step is to slice and dice the data to suitable dimensions.
 Therefore, we build up an SQL query in a step-wise fashion using `r ref_pkg("dplyr")` verbs and start by selecting a subset of columns to work on:
 
-```{r technical-027}
+```{r technical-036}
 keep = c("row_id", "year", "month", "day", "hour", "minute", "dep_time",
   "arr_time", "carrier", "flight", "air_time", "distance", "arr_delay")
 tbl = select(tbl, all_of(keep))
@@ -909,19 +910,19 @@ tbl = select(tbl, all_of(keep))
 
 Additionally, we remove those observations where the arrival delay (`arr_delay`) has a missing value:
 
-```{r technical-028}
+```{r technical-037}
 tbl = filter(tbl, !is.na(arr_delay))
 ```
 
 To reduce the runtime for this example, we also filter the data to only use every second row:
 
-```{r technical-029}
+```{r technical-038}
 tbl = filter(tbl, row_id %% 2 == 0)
 ```
 
 The factor levels of the feature `carrier` are merged so that infrequent carriers are replaced by level "other":
 
-```{r technical-030}
+```{r technical-039}
 tbl = mutate(tbl, carrier = case_when(
   carrier %in% c("OO", "HA", "YV", "F9", "AS", "FL", "VX", "WN") ~ "other",
   TRUE ~ carrier))
@@ -929,14 +930,14 @@ tbl = mutate(tbl, carrier = case_when(
 
 Next, the processed table is used to create a `r ref("mlr3db::DataBackendDplyr")` from `r mlr3db`:
 
-```{r technical-031}
+```{r technical-040}
 library("mlr3db")
 b = as_data_backend(tbl, primary_key = "row_id")
 ```
 
 We can now use the interface of `r ref("DataBackend")` to query some basic information about the data:
 
-```{r technical-032}
+```{r technical-041}
 b$nrow
 b$ncol
 b$head()
@@ -946,7 +947,7 @@ Note that the `r ref("DataBackendDplyr")` does not know about any rows or column
 
 As we now have constructed a backend, we can switch over to `r mlr3` for model fitting on a task based on the previously created `r ref("mlr3db::DataBackendDplyr")`:
 
-```{r technical-033}
+```{r technical-042}
 task = as_task_regr(b, id = "flights_sqlite", target = "arr_delay")
 learner = lrn("regr.rpart")
 resampling = rsmp("subsampling", ratio = 0.02, repeats = 3)
@@ -955,7 +956,7 @@ resampling = rsmp("subsampling", ratio = 0.02, repeats = 3)
 We pass all these objects to `r ref("resample()")` to perform a subsampling on 2% of the observations three times.
 In each iteration, only the required subset of the data is queried from the SQLite database and passed to `r ref("rpart::rpart()")`:
 
-```{r technical-034}
+```{r technical-043}
 rr = resample(task, learner, resampling)
 print(rr)
 
@@ -966,7 +967,7 @@ rr$aggregate(measures)
 Note that we still have an active connection to the database.
 To properly close it, we remove the `tbl` object referencing the connection and then close the connection.
 
-```{r technical-035}
+```{r technical-044}
 rm(tbl)
 DBI::dbDisconnect(con)
 ```
@@ -984,13 +985,13 @@ Parquet is a popular column-oriented data storage format supporting efficient co
 
 To demonstrate working with Parquet files, we first query the location of an example data set shipped with `r ref_pkg("mlr3db")`:
 
-```{r technical-036}
+```{r technical-045}
 path = system.file(file.path("extdata", "spam.parquet"), package = "mlr3db")
 ```
 
 We can then create a `r ref("DataBackendDuckDB")` based on this file and convert the backend to a classification task, all without loading the dataset into memory:
 
-```{r technical-037}
+```{r technical-046}
 backend = as_duckdb_backend(path)
 task = as_task_classif(backend, target = "type")
 print(task)
@@ -1023,7 +1024,7 @@ In maths this would be defined as $f(y, \hat{y}) = \frac{1}{n} \sum_{i=1}^n \mat
 The function $\mathbb{I(C)}$ denotes the `r link("https://en.wikipedia.org/wiki/Indicator_function", "indicator function")` with $\mathbb{I(C)} = 1$ if condition $C$ is true and $\mathbb{I(C)} = 0$ otherwise.
 In code the measure may be written as:
 
-```{r extending-015}
+```{r technical-047}
 threshold_acc = function(truth, response) {
   mean(ifelse(abs(truth - response) < sd(truth), 1, 0))
 }
@@ -1036,7 +1037,7 @@ This measure is then bounded in $[0, 1]$ and a larger score is better.
 To use this measure in mlr3, we need to create a new `r ref("R6::R6Class")`, which will inherit from `r ref("Measure")` and in this case specifically inheriting from `r ref("MeasureRegr")`.
 We will now demonstrate what the final code for this new measure would look like and then explain each line, this can be used as a template for most performance measures.
 
-```{r extending-016}
+```{r technical-048}
 MeasureRegrThresholdAcc = R6::R6Class("MeasureRegrThresholdAcc",
   inherit = mlr3::MeasureRegr, # regression measure
   public = list(
@@ -1076,7 +1077,7 @@ You can also consult the manual page of the `r ref("Measure")` for an overview o
 
 Once you have defined your measure you can either use it with the `R6` constructor, or by adding it to the `r ref("mlr_measures")` dictionary:
 
-```{r}
+```{r technical-049}
 library(mlr3verse)
 
 task = tsk("boston_housing")
@@ -1127,7 +1128,7 @@ Therefore, at least superficial knowledge is necessary to be able to identify th
 ### Parallelization {.unnumbered .unlisted}
 
 Consider the following example where you resample a learner (debug learner, sleeps for 3 seconds during train) on 4 workers using the multisession backend:
-```{r, eval = FALSE}
+```{r technical-050, eval = FALSE}
 task = tsk("penguins")
 learner = lrn("classif.debug", sleep_train = function() 3)
 resampling = rsmp("cv", folds = 6)
