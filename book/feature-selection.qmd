@@ -78,13 +78,13 @@ All filters have advantages and disadvantages.
 @bommert2020 recommend to not rely on a single filter method but try several ones if the available computational resources allow.
 If only a single filter method can be tested, the authors recommend to use a feature importance filter using random forest permutation importance (@sec-fs-var-imp-filters); JMIM and AUC filters also performed well in their comparison.
 
-### Calculating Filter Values {#sec-fs-calc}
+### Model-Agnostic Filters {#sec-fs-calc}
 
 Similarly to other classes in `mlr3`, `r ref("Filter")`s are stored in the `r ref("mlr_filters")` dictionary and can be accessed with `r ref("flt()")`.
 Filter algorithms are running by calling the `$calculate()` method on your chosen `Filter`.
 For example, using the correlation on the `mtcars` dataset:
 
-```{r feature-selection-001}
+```{r}
 library(mlr3verse)
 # load filter
 filter = flt("correlation", method = "spearman")
@@ -98,178 +98,134 @@ filter$scores
 
 Note how we changed the parameter `method` in the 'usual way' by setting the desired value in construction.
 
-### Feature Importance Filters {#sec-fs-var-imp-filters}
+### Model-Dependent Filters {#sec-fs-var-imp-filters}
 
-To use feature importance filters, we can use a learner with integrated feature importance methods.
-All learners with the property "importance" have this functionality.
-A list of all learners with this property can be found with
+Feature importance methods and embedded filters, are model-dependent as they depend on the model of choice, and the returned scores/features will depend on the algorithm, chosen hyperparameters, and underlying implementation.
+Embedded filters are so-called as the filter algorithm is part of the model training process, a common example is decision trees, which selectively choose variables to split the model during training.
+This can be thought of as a filter method as after training only a subset of the filters will have been used by the model.
 
-```{r feature-selection-004}
-as.data.table(mlr_learners)[sapply(properties, function(x) "importance" %in% x)]
+```{r}
+lrn = lrn("regr.rpart")
+task = tsk("mtcars")
+lrn$train(task)$model
 ```
 
-or on the `r link("https://mlr-org.com/learners.html", "mlr3 website")`.
+In the example above, we can see the decision tree has only selected `r length(lrn$selected_features())` (``r lrn$selected_features()``) features out of the possible `r task$ncol`.
 
-For some learners, the desired filter method needs to be set during learner creation.
-For example, learner `r ref("mlr_learners_classif.ranger", text = "classif.ranger")` comes with multiple integrated methods, c.f. the help page of `r ref("ranger::ranger()")`.
-To use the feature importance method "impurity", select it during learner construction:
+In contrast, some learners will calculate importance scores during training without explicitly selecting features.
+For example, the magnitude of weights fit by a linear regression can be thought of as an importance method as the value of the fitted coefficients tells us how much a given variable influences the outcome.
+
+```{r}
+lrn = lrn("regr.lm")
+task = tsk("mtcars")
+# remove intercept and sort coefficients in decreasing order
+scores = sort(abs(lrn$train(task)$model$coefficients), TRUE)[-1]
+scores
+```
+
+In this example we can see all variables have been used but the absolute coefficients vary in size with ``r names(scores)[1]`` contributing the most to the final prediction and ``r names(scores)[10]`` contributing the least.
+
+#### Feature Importance {.unnumbered .unlisted}
+
+Feature importance filters are available for any `Learner` with the "importance" property:
+
+```{r}
+head(as.data.table(mlr_learners)[
+  sapply(properties, function(x) "importance" %in% x)])
+```
+
+The `r ref("FilterImportance")` class is a wrapper that trains the provided `Learner` and then passes the importance scores to the `$scores` field:
 
 ```{r feature-selection-005}
-lrn = lrn("classif.ranger", importance = "impurity")
-```
+lrn = lrn("regr.rpart")
+task = tsk("mtcars")
 
-Now we can use the `r ref("mlr_filters_importance", text = "FilterImportance")` filter class:
+# Manually training a learner and returning `$importance`
+lrn$train(task)$importance()
 
-```{r feature-selection-006}
-task = tsk("penguins")
-
-# Remove observations with missing data
-task$filter(which(complete.cases(task$data())))
-
+# Using the filter method
 filter = flt("importance", learner = lrn)
 filter$calculate(task)
-as.data.table(filter)
+filter$scores
 ```
 
-### Embedded Methods {#sec-fs-embedded-methods}
+:::{.callout-tip}
+Some learners will have a choice of methods for feature importance, for example `classif.ranger` has four possible choices:
 
-Many learners internally select a subset of the features which they find helpful for prediction, but ignore other features.
-For example, a decision tree might never select some features for splitting.
-These subsets can be used for feature selection, which we call embedded methods because the feature selection is embedded in the learner.
-The selected features (and those not selected) can be queried if the learner has the `"selected_features"` property, as the following example demonstrates:
-
-```{r feature-selection-007}
-task = tsk("penguins")
-learner = lrn("classif.rpart")
-
-# ensure that the learner selects features
-stopifnot("selected_features" %in% learner$properties)
-
-learner = learner$train(task)
-learner$selected_features()
+```{r}
+lrn("regr.ranger")$param_set$levels$importance
 ```
-
-The features selected by the model can be extracted by a `Filter` object, where `$calculate()` corresponds to training the learner on the given task:
-
-```{r feature-selection-008}
-filter = flt("selected_features", learner = learner)
-filter$calculate(task)
-as.data.table(filter)
-```
-
-Contrary to other filter methods, embedded methods just return value of 1 (selected features) and 0 (dropped feature).
-
-### Filter-based Feature Selection
-
-After calculating a score for each feature, one has to select the features to be kept or those to be dropped from further modelling steps.
-For the `"selected_features"` filter described in embedded methods (@sec-fs-embedded-methods), this step is straight-forward since the methods assigns either a value of 1 for a feature to be kept or 0 for a feature to be dropped. With `task$select()` the features with a value of 1 can be selected:
-
-```{r feature-selection-009}
-task = tsk("penguins")
-learner = lrn("classif.rpart")
-filter = flt("selected_features", learner = learner)
-filter$calculate(task)
-
-# select all features used by rpart
-keep = names(which(filter$scores == 1))
-task$select(keep)
-task$feature_names
-```
-
-::: {.callout-tip}
-To select features, we use the function `task$select()` and not `task$filter()`, which is used to filter rows (not columns) of the data matrix, see task mutators (@sec-tasks-mutators).
 :::
 
+#### Selected Features {.unnumbered .unlisted}
 
-For filter methods which assign continuous scores, there are essentially two ways to select features:
+Selected features filters are available for any `Learner` with the "selected_features" property:
 
-* select the top $k$ features, or
-* select all features with a score above a threshold $\tau$.
+```{r feature-selection-004}
+head(as.data.table(mlr_learners)[
+  sapply(properties, function(x) "selected_features" %in% x)])
+```
 
-Where the first option is equivalent to dropping the bottom $p-k$ features.
-For both options, one has to decide on a threshold, which is often quite arbitrary.
-For example, to implement the first option with the information gain filter:
+The `r ref("FilterSelectedFeatures")` class is a wrapper that trains the provided `Learner` and then passes the selected features to the `$scores` field.
+By example, again using `mtcars` and `regr.rpart`:
+
+```{r feature-selection-007}
+# Looking at selected features from the trained learner
+lrn$selected_features()
+
+# Now with the filter method
+filter = flt("selected_features", learner = lrn)
+filter$calculate(task)
+filter$scores
+```
+
+Contrary to other filter methods, embedded methods just return scores of either 1 for selected features or 0 fordropped features.
+
+### Selecting Features from Filters
+
+Once scores have been calculated, the next step is to select features based on the score value or ranking.
+For embedded methods, selecting features is trivial as scores are either 1 or 0, so we would simply select the columns of a task corresponding to the selected features:
+
+```{r feature-selection-009}
+task = tsk("mtcars")
+filter = flt("selected_features", learner = lrn("regr.rpart"))
+filter$calculate(task)
+# $select requires vector of column names
+task$select(names(which(filter$scores == 1)))
+task$feature_names
+```
+
+For other filter methods, the choice of threshold for scores or rankings is arbitrary.
+So returning to our example from the top of the chapter using the correlation filter with `mtcars`:
 
 ```{r feature-selection-010}
-task = tsk("penguins")
-filter = flt("information_gain")
+task = tsk("mtcars")
+filter = flt("correlation")
 filter$calculate(task)
 
-# select top 3 features from information gain filter
-keep = names(head(filter$scores, 3))
-task$select(keep)
+# we could select top 5 features
+task$clone()$select(names(filter$scores[1:5]))$feature_names
+
+# or all features with correlation > 0.5
+task$clone()$select(names(filter$scores > 0.5))
 task$feature_names
 ```
 
-Or, the second option with $\tau = 0.5$:
-
-```{r feature-selection-011}
-task = tsk("penguins")
-filter = flt("information_gain")
-filter$calculate(task)
-
-# select all features with score >0.5 from information gain filter
-keep = names(which(filter$scores > 0.5))
-task$select(keep)
-task$feature_names
-```
-
-Filters can be integrated into pipelines. While pipelines are described in detail in @sec-pipelines, here is a brief preview:
+The process of calculating scores, thresholding and selecting features, and filtering the task, can be simplified using `r ref("mlr_pipeops_filter")`, which we will discuss after @sec-pipelines.
+Making use of this pipeline also allows hyperparameter optimization allowing us to automate which features to select.
+We will return to this in detail in FIXME!!!, for now here is a brief preview where we create a `r ref("Graph")` that we then tune to identify the optimal number of features to select:
 
 ```{r feature-selection-012}
-library(mlr3pipelines)
-task = tsk("penguins")
+library(mlr3verse)
+task = tsk("mtcars")
 
-# combine filter (keep top 3 features) with learner
-graph = po("filter", filter = flt("information_gain"), filter.nfeat = 3) %>>%
-  po("learner", lrn("classif.rpart"))
+# create filter PipeOp and set `filter.nfeat` to select top 3 features
+graph = as_learner(po("filter", filter = flt("correlation"), filter.nfeat = 3) %>>%
+  po("learner", lrn("regr.rpart")))
+graph$param_set$values$correlation.filter.nfeat = to_tune(1, task$ncol)
 
-# now it can be used as any learner, but it includes the feature selection
-learner = as_learner(graph)
-learner$train(task)
+tune(tnr("random_search"), task, graph, rsmp("holdout"), term_evals = 10)$result
 ```
-
-Pipelines can also be used to apply hyperparameter optimization (@sec-optimization) to the filter, i.e. tune the filter threshold to optimize the feature selection regarding prediction performance.
-We first combine a filter with a learner,
-
-```{r feature-selection-013}
-graph = po("filter", filter = flt("information_gain")) %>>%
-  po("learner", lrn("classif.rpart"))
-learner = as_learner(graph)
-```
-
-and tune how many feature to include
-```{r feature-selection-014, message=FALSE, warning=FALSE}
-library("mlr3tuning")
-ps = ps(information_gain.filter.nfeat = p_int(lower = 1, upper = 7))
-instance = TuningInstanceSingleCrit$new(
-  task = task,
-  learner = learner,
-  resampling = rsmp("holdout"),
-  measure = msr("classif.acc"),
-  search_space = ps,
-  terminator = trm("none")
-)
-tuner = tnr("grid_search")
-tuner$optimize(instance)
-```
-
-The output above shows only the best result.
-To show the results of all tuning steps, retrieve them from the archive of the tuning instance:
-
-```{r feature-selection-015}
-as.data.table(instance$archive)
-```
-
-We can also plot the tuning results:
-```{r feature-selection-016}
-#| label: fig-tunefilter
-#| fig-cap: Model performance with different numbers of features, selected by an information gain filter.
-#| fig-alt: Plot showing model performance in filter-based feature selection, showing that adding a second and third feature to the model improves performance, while adding more feature achieves no further performance gain.
-autoplot(instance)
-```
-
-For more details, see Pipelines (@sec-pipelines) and Hyperparameter Optimization (@sec-optimization).
 
 ## Wrapper Methods {#sec-fs-wrapper}
 
