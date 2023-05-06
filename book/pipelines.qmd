@@ -973,7 +973,7 @@ In the following, we set three options:
 
 1. Doing nothing (`r ref("PipeOpNOP", "po(\"nop\")")`)
 2. Applying a PCA
-3. Applying a Kernel Principal Component Analysis, as implemented by `r ref("kernlab::kpca")`, by using `r ref("PipeOpKernelPCA", "po(\"kernelpca\")")`
+3. Removing constant features and applying the Yeo-Johnson transform, using `r ref("PipeOpYeoJohnson", "po(\"yeojohnson\")")`
 
 It is important to "unbranch" again after "branching", so that the outputs are merged into one result objects.
 
@@ -982,12 +982,12 @@ For this demo, we will use the `rank.` value that was the optimum in the last op
 ```{r 05-pipelines-non-sequential-003, eval = TRUE}
 rank_opt = instance$result_x_domain$pca.rank.
 
-graph = po("branch", c("nop", "pca", "kernelpca")) %>>%
+graph = po("branch", c("nop", "pca", "yeojohnson")) %>>%
   gunion(list(
     po("nop"),
     po("pca", rank. = rank_opt),
-    po("kernelpca")
-  )) %>>% po("unbranch", c("nop", "pca", "kernelpca"))
+    po("removeconstants") %>>% po("yeojohnson")
+  )) %>>% po("unbranch", c("nop", "pca", "yeojohnson"))
 ```
 
 The resulting Graph looks as follows:
@@ -1007,7 +1007,7 @@ head(graph$train(mnist_task)[[1]]$feature_names)
 
 Tuning this hyperparameter can be used to determine which of the possible options works best in combination with a given learner.
 Branching can even be used to tune which of several learners is most appropriate for a given dataset.
-We now extend this example so that both the preprocessing (PCA, Kernel-PCA, or no preprocessing), as well as the model to use (KNN or decision tree) can be tuned.
+We now extend this example so that both the preprocessing (PCA, Yeo-Johnson transform, or no preprocessing), as well as the model to use (KNN or decision tree) can be tuned.
 For this, we add another branching pathway to our Graph:
 
 ```{r 05-pipelines-branch-02, eval = TRUE}
@@ -1032,7 +1032,7 @@ The search space that tunes over all options of both branching operators as well
 
 ```{r 05-pipelines-branch-03}
 search_space = ps(
-  branch.selection = p_fct(c("nop", "pca", "kernelpca")),
+  branch.selection = p_fct(c("nop", "pca", "yeojohnson")),
   branch2.selection = p_fct(c("classif.rpart", "classif.kknn")),
   classif.kknn.k = p_int(lower = 1, upper = 32, logscale = TRUE,
     depends = branch2.selection == "classif.kknn")
@@ -1059,9 +1059,9 @@ Therefore, if this investigation were to be carried further, one would need to u
 
 ```{r fig.align='center'}
 #| label: fig-pipelines-opttrace-2
-#| fig-cap: "Observed performance values when optimizing both preprocessing (between \"pca\", \"kernelpca\", and \"nop\", which is no preprocessing) and Learner (between KNN and the decision tree \"classif.rpart\") at the same time.
+#| fig-cap: "Observed performance values when optimizing both preprocessing (between \"pca\", \"yeojohnson\", and \"nop\", which is no preprocessing) and Learner (between KNN and the decision tree \"classif.rpart\") at the same time.
 #|   The x-axis shows preprocessing. Each facet (i.e. individual plot) shows the Learner being used, together with setting for \"k\", if applicable."
-#| fig-alt: "Plot showing performance values of pca, kernelpca, or nop, followed by KNN or decision tree."
+#| fig-alt: "Plot showing performance values of pca, yeojohnson, or nop, followed by KNN or decision tree."
 #| echo: false
 
 ggplot(instance$archive$data[, learner := ifelse(is.na(classif.kknn.k), "classif.rpart", sprintf("classif.kknn\nk = % 2s", (sapply(x_domain, `[[`, "classif.kknn.k"))))],
@@ -1092,12 +1092,12 @@ Having a PipeOp that can itself contain Graphs that can be tuned over makes it p
 #|   Two ways of parametrizing the PipeOps or Learners that should be used.
 #|   The setups shown in both examples have the same effect: Data is PCA-transformed before being fed to the learner.
 #|   (a): Using `PipeOpBranch` it is possible to choose which one out of various alternative paths should be taken.
-#|        In this example, the PCA PipeOp is active, the alternatives (Kernel-PCA, or no operation through PipeOpNop) are inactive.
+#|        In this example, the PCA PipeOp is active, the alternatives (Yeo-Johnson transform, or no operation through PipeOpNop) are inactive.
 #|        A `PipeOpUnbranch` is necessary to mark the end of the alternative paths.
 #|   (b): `PipeOpProxy` has the hyperparameter `content`, which can be set to a another PipeOp. In this example, it is set to PCA.
 #| "
 #| fig-alt:
-#|   - "PipeOpBranch, followed by, alternatively, PipeOpNop, PCA, and Kernel-PCA, which are all followed by PipeOpUnbranch and a Learner.
+#|   - "PipeOpBranch, followed by, alternatively, PipeOpNop, PCA, and Yeo-Johnson transform, which are all followed by PipeOpUnbranch and a Learner.
 #|      The PCA branch is active."
 #|   - PipeOpProxy, followed by a Learner. The content of the PipeOpProxy is set to a PCA PipeOp.
 #| fig-subcap:
@@ -1131,7 +1131,7 @@ search_space = ps(
   preproc.content = p_fct(list(
     nop = po("nop"),
     pca = po("pca", rank. = rank_opt),
-    kernelpca = po("kernelpca")
+    yeojohnson = po("removeconstants") %>>% po("yeojohnson")
   )),
   learner.content = p_fct(list(
     classif.rpart = lrn("classif.rpart"),
@@ -1193,9 +1193,9 @@ They also have optional arguments for fine adjustments which are described on th
   E.g., if a given `Learner` has the `"missings"` property (i.e. supports missing values) but does not have `"factor"` in its `$feature_types` (i.e. can not handle categorical features), then `r ref("pipeline_robustify", "ppl(\"robustify\")")` will numerically encode categorical features, but will not do imputation.
 * **`r ref("mlr_graphs_branch", "ppl(\"branch\", graphs)")`**: Alternative path branching, as described in @sec-pipelines-branch.
   The mandatory `graphs` argument must be a list of PipeOps or Graphs that should lie on the resulting alternative paths.
-  The choice between PCA, Kernel-PCA, and no-op that is shown in @sec-pipelines-branch can, for example, be produced by calling:
+  The choice between PCA, Yeo-Johnson transform, and no-op that is shown in @sec-pipelines-branch can, for example, be produced by calling:
   ```{r, eval = FALSE}
-  ppl("branch", graphs = pos(c("pca", "kernelpca", "nop")))
+  ppl("branch", graphs = pos(c("pca", "yeojohnson", "nop")))
   ```
 * **`r ref("mlr_graphs_stacking", "ppl(\"stacking\", base_learners, super_learner)")`**: Stacking, as described in @sec-pipelines-stack. `base_learners` must be a list of learners that are used to augment the incoming data.
   The learner given to `super_learner` is then trained on the original data (unless the optional `use_features` is set to `FALSE`) and the predictions made by these learners.
