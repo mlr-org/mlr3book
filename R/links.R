@@ -65,13 +65,12 @@ ref = function(topic, text = NULL, format = "markdown", index = FALSE, aside = F
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  out = switch(format,
-    "markdown" = sprintf("[`%s`](%s)", text, url),
-    "html" = sprintf("<a href=\"%s\">%s</a>", url, text)
-  )
+  out = sprintf("[`%s`](%s){.refcode}", text, url)
+
   if (index) {
     out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
   }
+
   out
 }
 
@@ -93,16 +92,17 @@ ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
 
   if (grepl("/", pkg, fixed = TRUE)) {
     if (runiverse) {
-      ru_pkg(pkg, format = format)
+      out = ru_pkg(pkg, format = format)
     } else {
-      gh_pkg(pkg, format = format)
+      out = gh_pkg(pkg, format = format)
     }
-
   } else if (pkg %in% db$hosted) {
-    mlr_pkg(pkg, format = format)
+    out = mlr_pkg(pkg, format = format)
   } else {
-    cran_pkg(pkg, format = format)
+    out = cran_pkg(pkg, format = format)
   }
+
+  sprintf("[%s]{.refpkg}", out)
 }
 
 cran_pkg = function(pkg, format = "markdown") {
@@ -196,6 +196,13 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
     out = sprintf("%s[%s]{.aside}", out, asidetxt)
 
   out
+}
+
+#' @title Define - tmp will be removed
+#' @param text text to define
+#' @export
+define = function(text) {
+  index(text, aside = TRUE)
 }
 
 #' @title Create markdown and print-friendly link
