@@ -24,7 +24,7 @@ abstract:
 
 # Bayesian Optimization {#sec-bayesian-optimization}
 
-```{r}
+```{r, echo=FALSE}
 set.seed(1)
 ```
 
@@ -46,7 +46,7 @@ In general, most black-box optimizers work iteratively, i.e., they propose new p
 Evolutionary strategies for example maintain a so-called population and generate new points for evaluation by choosing parents from that population and performing recombination operators such as mutation and crossover to generate the offspring of the next generation.
 In general, evolutionary strategies are very suited for black-box optimization, however, if the cost of the evaluation of the black-box function becomes large (e.g., as in HPO), sample efficiency of an optimizer becomes highly relevant.
 
-Bayesian optimization (BO\index{BO}) refers to a class of sample-efficient global black-box optimization algorithms that rely on a surrogate model trained on observed data to model the black-box function.
+Bayesian optimization (BO\index{BO}) -- sometimes also called Model Based Optimization (MBO\index{MBO}) refers to a class of sample-efficient global black-box optimization algorithms that rely on a surrogate model trained on observed data to model the black-box function.
 This surrogate model is typically a non-linear regression model that tries to capture the unknown function using limited observed data.
 To select the next candidate point for evaluation, BO algorithms use an acquisition function that quantifies the expected 'utility' of each point in the search space based on the surrogate model.
 The algorithm selects the candidate point with the best acquisition function value, and evaluates the black-box function at that point to then update the surrogate model.
@@ -75,8 +75,11 @@ $f: [0, 1] \rightarrow \mathbb{R}, x \mapsto 2x + \sin(14x)$.
 At the core of an `r ref("OptimInstanceSingleCrit")` lies an `r ref("Objective")`\index{Objective}[Objective]{.aside} function wrapping the actual function mapping a domain to a codomain (see also #sec-defining-search-spaces).
 The domain of a function refers to the set of all possible input values for which the function is defined and can produce a valid output.
 The codomain of a function refers to the set of all possible output values that the function can produce.
-Objective functions can be constructed using the classes `r ref("ObjectiveRFun")` (wraps a custom R function that expects a list describing a single configuration as input), `r ref("ObjectiveRFunMany")` (wraps a custom R function that expects a list of configurations as input) or `r ref("ObjectiveRFunDt")` (wraps a custom R function that works on a `r ref("data.table")`).
-The choice of the concrete class for constructing the objective function is usually based on efficiency reasons as for example operating on a `r ref("data.table")` object within an `r ref("ObjectiveRFunDt")` can allow for straightforward vectorized or batched evaluations as shown in the following:
+Objective functions can be created using different classes: `r ref("ObjectiveRFun")` wraps a custom R function that takes a list describing a single configuration as input, `r ref("ObjectiveRFunMany")` wraps a custom R function that takes a list of configurations as input, and `r ref("ObjectiveRFunDt")` wraps a custom R function that operates on a `r ref("data.table")`.
+The choice of which class to use mostly depends on efficiency considerations. For instance, if your function can process `r ref("data.table")` objects directly, using `r ref("ObjectiveRFunDt")` can enable efficient vectorized or batched evaluations.
+This approach avoids unnecessary data type conversions and offers straightforward operations on `r ref("data.table")` objects.
+Similarly, if the function evaluation can be parallelized, it is preferable to use `r ref("ObjectiveRFunMany")` instead of `r ref("ObjectiveRFun")`. With `r ref("ObjectiveRFunMany")`, the parallel evaluation of multiple points can be directly implemented within the wrapped function.
+We provide an example in the exercises section.
 
 ```{r}
 sinus_1D = function(xdt) {
@@ -121,7 +124,10 @@ ggplot(aes(x = x, y = y), data = xydt) +
   theme(legend.position = "none")
 ```
 
-The global minimum is located at `x = 0.792`.
+The global minimum is located at around `x = 0.792`.
+```{r}
+xydt[y == min(y), ]
+```
 
 By wrapping the objective function in an `r ref("OptimInstanceSingleCrit")`, we can proceed to optimize it.
 Note that an `r ref("OptimInstance")` also allows for explicitly specifying a search space.
@@ -151,7 +157,8 @@ instance = bb_optimize(objective, method = "random_search",
   max_evals = 20)
 ```
 
-To see all available optimizers that can be used for black-box optimization, you can inspect the following dictionary:
+To see all available optimizers that can be used for black-box optimization, you can inspect the following dictionary.
+`r ref("OptimizerMbo")` refers to BO as introduced in this chapter.
 
 ```{r}
 as.data.table(mlr_optimizers)
@@ -195,8 +202,9 @@ Before we can fit a surrogate model, we need data.
 The initial set of points that is evaluated before a surrogate model can be fit is referred to as the initial design\index{initial design}[Initial Design]{.aside}.
 
 `r mlr3mbo` offers two different ways for specifying an initial design:
-(1) One can simply evaluate points on the `r ref("OptimInstance")` that is to be optimized prior to using an `r ref("OptimizerMbo")`. In this case, the `r ref("loop_function")` should skip the construction and evaluation of an initial design.
-(2) If no points were already evaluated on the `r ref("OptimInstance")`, the `r ref("loop_function")` should construct an initial design itself and evaluate it.
+
+1. One can simply evaluate points manually on the `r ref("OptimInstance")` that is to be optimized prior to using an `r ref("OptimizerMbo")`. In this case, the `r ref("loop_function")` should skip the construction and evaluation of its own initial design. For example if one wants to use a custom `design` given in the form of a `r ref("data.table")`, `instance$eval_batch(design)` will evaluate it so that it can be used within the optimization process.
+2. If no points were already evaluated manually on the `r ref("OptimInstance")`, the `r ref("loop_function")` should construct an initial design itself and evaluate it.
 
 Functions for creating different initial designs are part of the `r paradox` package, e.g.:
 
@@ -274,12 +282,14 @@ We observe that a random design does not necessarily cover the search well and i
 A grid design will result in points being equidistant from their nearest neighbour and does not cover the search space well (areas between points are unexplored).
 In contrast, an LHS design provides a good space-filling property, as it ensures that each interval of each input variable (spanned by the horizontal and vertical dotted lines in @fig-bayesian-optimization-designs) is represented by exactly one sample point.
 This usually results in a more even coverage of the search space and a better representation of the distribution of the input variables.
-A Sobol design has a similar goal in mind but must not guarantee this for a small number of samples.
+A Sobol design has a similar goal in mind but does not guarantee this for a small number of samples.
 However, constructing a Sobol design can be done much more efficiently than an LHS design, especially if the number of samples and dimensions grows.
 Moreover, a Sobol design has better coverage properties than an LHS design if the number of dimensions grows large.
 
-Of course, one can always evaluate a custom initial design in the form of a `r ref("data.table")`.
-Coming back to our running example of minimizing the sinusoidal function, we will now evaluate the following custom design:
+If a specific initial design is desired, it needs to be evaluated on the `r ref("OptimInstance")` before running an `r ref("OptimizerMbo")`.
+The loop function within the `r ref("OptimizerMbo")` will then recognize the evaluations in the instance's archive and consider it as the initial design, omitting the need to construct and evaluate a new initial design.
+Note that the same mechanism also allows for specifying a custom initial design (i.e., points designed by the user) in the form of a `r ref("data.table")`.
+Coming back to our running example of minimizing the sinusoidal function, we will now use the following custom design and evaluate it:
 
 ```{r}
 instance = OptimInstanceSingleCrit$new(objective,
@@ -309,6 +319,65 @@ After having made some assertions and safety checks, and having evaluated the in
 3. `acq_optimizer$optimize()`: optimize the acquisition function to yield a new candidate
 4. `instance$eval_batch(candidate)`: evaluate the candidate and add it to the archive
 
+For completeness, we also provide the actual code (slightly modified and compressed to increase readability) of the `bayesopt_ego()` loop function (`r ref("mlr_loop_functions_ego")`) below.
+The function first performs some assertions and checks the validity of the input arguments.
+It sets up the necessary components, including the surrogate model, acquisition function, and acquisition function optimizer.
+If the archive of evaluated points is empty, it generates an initial design of points uniformly at random within the search space and evaluates them (either of size $4D$ where $D$ is the dimensionality of the search space or if specified based on the `init_design_size` argument).
+The function then enters a loop where it repeatedly performs the steps described above:
+Note that updating the surrogate model, acquisition function and optimizing the acquisition function are wrapped in a error catch mechanism with a fallback to propose the next candidate uniformly at random.
+For more details on this mechanism, see @sec-robustness-bayesian-optimization.
+
+```{r, eval=FALSE}
+bayesopt_ego = function(
+    instance,
+    surrogate,
+    acq_function,
+    acq_optimizer,
+    init_design_size = NULL
+  ) {
+
+  # assertions
+  assert_r6(instance, "OptimInstanceSingleCrit")
+  assert_int(init_design_size, lower = 1L, null.ok = TRUE)
+  assert_r6(surrogate, classes = "Surrogate")
+  assert_r6(acq_function, classes = "AcqFunction")
+  assert_r6(acq_optimizer, classes = "AcqOptimizer")
+
+  # initial design
+  search_space = instance$search_space
+  if (is.null(init_design_size) && instance$archive$n_evals == 0L) {
+    init_design_size = 4L * search_space$length
+  }
+  if (!is.null(init_design_size) && init_design_size > 0L) {
+    design = generate_design_random(search_space, n = init_design_size)$data
+    instance$eval_batch(design)
+  }
+
+  # completing initialization
+  surrogate$archive = instance$archive
+  acq_function$surrogate = surrogate
+  acq_optimizer$acq_function = acq_function
+
+  # actual loop
+  repeat {
+    candidate = tryCatch({
+      acq_function$surrogate$update()
+      acq_function$update()
+      acq_optimizer$optimize()
+    }, mbo_error = function(mbo_error_condition) {
+      lg$info(paste0(class(mbo_error_condition), collapse = " / "))
+      lg$info("Proposing a randomly sampled point")
+      generate_design_random(search_space, n = 1L)$data
+    })
+
+    instance$eval_batch(candidate)
+    if (instance$is_terminated) break
+  }
+
+  return(invisible(instance))
+}
+```
+
 ### Surrogate Models
 
 A surrogate model\index{surrogate model}[Surrogate Model]{.aside} wraps a regression learner that models the unknown black-box function based on observed data.
@@ -328,7 +397,7 @@ A `r ref("SurrogateLearner")` can be constructed via:
 surrogate = srlrn(lrn("regr.km", covtype = "matern5_2",
   optim.method = "BFGS", control = list(trace = FALSE)))
 ```
-Here, we use a Gaussian Process with Matérn 5/2 kernel, optimizing the marginal likelihood via BFGS and set `trace = FALSE` to prevent too much output during fitting.
+Here, we use a Gaussian Process with Matérn 5/2 kernel, which uses `BFGS` as an optimizer to find the optimal kernel parameters and set `trace = FALSE` to prevent too much output during fitting.
 
 When using a `r ref("Surrogate")` interactively, i.e., outside of an `r ref("OptimizerMbo")` or `r ref("TunerMbo")` like below, the `archive` of the instance must be specified:
 
@@ -358,16 +427,14 @@ surrogate$learner$model
 @fig-bayesian-optimization-mean-se visualizes the mean and uncertainty prediction of the surrogate model.
 Note that when using a Gaussian Process that interpolates the training data, the standard deviation prediction is zero for training data.
 
-```{r, echo=FALSE}
-prediction = surrogate$predict(xydt[, surrogate$x_cols, with = FALSE])
-xydt[, c("mean", "se") := prediction]
-```
-
 ```{r}
-#| echo: false
+#| echo: TRUE
 #| label: fig-bayesian-optimization-mean-se
 #| fig-cap: Mean and uncertainty prediction (lightblue) of the Gaussian Process surrogate model trained on an initial design of four points (black). Ribbons represent the mean plus minus the standard deviance prediction.
 #| fig-alt: Mean and uncertainty prediction of the Gaussian Process surrogate model trained on an initial design of four points. The mean prediction closely follows the true sinusoidal function that is being modelled. The standard deviation prediction is high in unexplored areas and low in areas where points were already evaluated.
+prediction = surrogate$predict(xydt[, surrogate$x_cols, with = FALSE])
+xydt[, c("mean", "se") := prediction]
+
 ggplot() +
   geom_point(aes(x = x, y = y), size = 2, data = instance$archive$data) +
   geom_line(aes(x = x, y = y), data = xydt) +
@@ -388,6 +455,7 @@ $$
 \alpha_{\mathrm{EI}}(\mathbf{x}) = \mathbb{E} \left[ \max \left( f_{\mathrm{min}} - Y(\mathbf{x}), 0 \right) \right]
 $$
 Here, $Y(\mathbf{x)}$ is the surrogate model prediction (a random variable) for a given point $\mathbf{x}$ (which when using a Gaussian Process follows a normal distribution) and $f_{\mathrm{min}}$ is the current best function value observed so far (when assuming minimization) -- also called the incumbent.
+<!--
 Assuming a normally distributed posterior predictive distribution of the surrogate model, the Expected Improvement can be calculated analytically:
 $$
 \alpha_{\mathrm{EI}}(\mathbf{x})= \begin{cases} \left( f_{\mathrm{min}} - \mu\left(\mathbf{x}\right) \right) \Phi(Z(\mathbf{x})) + \sigma(\mathbf{x}) \phi(Z(\mathbf{x})) & \text { if } \sigma(\mathbf{x})>0 \\ 0 & \text { if } \sigma(\mathbf{x}) = 0, \end{cases}
@@ -397,6 +465,7 @@ $$
 Z(\mathbf{x}) = \begin{cases} \frac{f_{\mathrm{min}} - \mu(\mathbf{x})}{\sigma(\mathbf{x})} & \text { if } \sigma(\mathbf{x})>0 \\ 0 & \text { if } \sigma(\mathbf{x}) = 0, \end{cases}
 $$
 and $\mu(\mathbf{x})$ and $\sigma(\mathbf{x})$ are the mean and standard deviation of the surrogate model posterior predictive at $\mathbf{x}$ and $\Phi$ and $\phi$ are the cumulative distribution function and probability density function of the standard normal distribution.
+-->
 
 To get an overview of other available acquisition functions, the following dictionary can be inspected:
 
@@ -432,19 +501,17 @@ Afterwards, we can evaluate the acquisition function for every point of the doma
 acq_function$eval_dt(data.table(x = 0.25))
 ```
 
-```{r, echo=FALSE}
-ei_values = acq_function$eval_dt(xydt[, surrogate$x_cols, with = FALSE])
-xydt[, ei := ei_values]
-```
-
 @fig-bayesian-optimization-ei shows that the Expected Improvement is high in regions where the mean prediction of the Gaussian Process is low but the standard deviation prediction suggests uncertainty.
 As a result, the Expected Improvement is often multi-modal.
 
 ```{r}
-#| echo: false
+#| echo: True
 #| label: fig-bayesian-optimization-ei
 #| fig-cap: Expected Improvement (darkred) based on the mean and uncertainty prediction (lightblue) of the Gaussian Process surrogate model trained on an initial design of four points (black). Ribbons represent the mean plus minus the standard deviation prediction.
 #| fig-alt: Expected Improvement based on the mean and uncertainty prediction of the Gaussian Process surrogate model. The Expected Improvement is high where the mean prediction is low but the standard deviation prediction still suggests some uncertainty.
+ei_values = acq_function$eval_dt(xydt[, surrogate$x_cols, with = FALSE])
+xydt[, ei := ei_values]
+
 ggplot() +
   geom_point(aes(x = x, y = y), size = 2, data = instance$archive$data) +
   geom_line(aes(x = x, y = y), data = xydt) +
@@ -452,14 +519,19 @@ ggplot() +
     data = xydt) +
   geom_ribbon(aes(x = x, min = mean - se, max = mean + se),
     fill = "steelblue", colour = NA, alpha = 0.1, data = xydt) +
-  geom_line(aes(x = x, y = ei * 40), linewidth = 1, colour = "darkred", linetype = 1, data = xydt) +
-  scale_y_continuous("y", sec.axis = sec_axis(~ . * 0.025, name = "EI", breaks = c(0, 0.025, 0.05))) +
+  geom_line(aes(x = x, y = ei * 40), linewidth = 1, colour = "darkred",
+            linetype = 1, data = xydt) +
+  scale_y_continuous("y", sec.axis = sec_axis(~ . * 0.025, name = "EI",
+                                              breaks = c(0, 0.025, 0.05))) +
   theme_minimal()
 ```
 
 ### Acquisition Function Optimizer
 
-To find the most promising next candidate for evaluation, the acquisition function itself must be optimized.
+In practice, evaluating all potential candidates and selecting the best one is not feasible and computationally expensive (and for continuous search spaces theoretically impossible).
+To overcome this challenge, an optimizer is used to efficiently search the space of potential candidates.
+The optimizer's objective is to identify the most promising points for evaluation by maximizing the acquisition function within a limited computational budget.
+
 Internally, an `r ref("OptimInstance")` is constructed using the acquisition function as an `r ref("bbotk::Objective")`.
 
 An acquisition function optimizer\index{acquisition function optimizer}[Acquisition Function Optimizer]{.aside} is then used to solve this optimization problem.
@@ -499,7 +571,9 @@ instance$eval_batch(candidate)
 
 Of course, users usually do not want to perform all steps of the BO loop manually.
 Instead one can simply construct an `r ref("OptimizerMbo")` and use it to optimize the instance.
-Note that when not using `r mlr3mbo` interactively, i.e., outside of an `r ref("OptimizerMbo")` or `r ref("TunerMbo")`, passing arguments such as `archive` to the `surrogate` is not required:
+Again, note that the `r ref("loop_function")` specifies the overall behavior of the BO algorithm, dictating the structure of the subroutine executed at each iteration as explained.
+Here we use `bayesopt_ego()` (`r ref("mlr_loop_functions_ego")`) loop function as we are performing standard single-objective optimization.
+Moreover, note that when not using `r mlr3mbo` interactively, i.e., outside of an `r ref("OptimizerMbo")` or `r ref("TunerMbo")`, passing arguments such as `archive` to the `surrogate` is not required:
 
 ```{r}
 surrogate = srlrn(lrn("regr.km", covtype = "matern5_2",
@@ -517,6 +591,7 @@ optimizer = opt("mbo",
 ```{r, output=FALSE}
 instance = OptimInstanceSingleCrit$new(objective,
   terminator = trm("evals", n_evals = 20))
+design = data.table(x = c(0.1, 0.34, 0.65, 1))
 instance$eval_batch(design)
 optimizer$optimize(instance)
 ```
@@ -809,7 +884,7 @@ as.data.table(mlr_result_assigners)
 
 For example, `ResultAssignerSurrogate` (`r ref("mlr_result_assigners_surrogate")`) will not simply pick the best point according to the evaluations logged in the `archive` but instead will use a surrogate model to predict the mean of all evaluated points and proceed to choose the point with the best mean prediction as the final result.
 
-## Parallelizing Evaluations
+## Parallelizing Evaluations {#sec-parallel-bayesian-optimization}
 
 The standard behavior of most BO algorithms is to sequentially propose a single candidate that should be evaluated next.
 Still, users may want to use compute resources more efficiently via parallelization.
@@ -821,39 +896,9 @@ Moreover, the `r ref("loop_function")` must be able to support batch proposals o
 This will result in `q` candidates being proposed in each iteration that should be evaluated (synchronously) as a batch in parallel.
 As a result, when using for example an `r ref("ObjectiveRFunDt")` as an `r ref("Objective")` inside an`r ref("OptimInstance")`, the `r ref("data.table")` will contain `q` candidates given as rows and users must parallelize the evaluation of these candidates manually.
 This can be easily done relying on the `r ref_pkg("future")` package.
-We provide an example in the exercises.
+We provide an example in the exercises section.
 
-## Practical Considerations in Bayesian Optimization
-
-`r mlr3mbo` tries to use 'intelligent' defaults regarding the choice of surrogate model, acquisition function, acquisition function optimizer and even the loop function.
-For example, in the case of a purely numeric search space, `r mlr3mbo` will by default use a Gaussian Process as surrogate model and a random forest as fallback learner and additionally encapsulates (see @sec-encapsulation-fallback) the learner via the `r ref_pkg("evaluate")` package.
-In the case of a mixed or hierarchical search space, `r mlr3mbo` will use a random forest as surrogate model.
-As a result of defaults existing for all building blocks, users can perform BO without specifying any building blocks and can still expect decent optimization performance.
-To see an up-to-date overview of these defaults, users should inspect the following man page: `?mbo_defaults`
-
-In practice, users may prefer a more robust BO variant over a potentially better performing but unstable variant.
-For example, Gaussian Processes are highly subject to the choice of kernel but also the kernel parameters themselves which are usually obtained via maximum likelihood estimation.
-Suboptimal parameter values can result in white noise models with a constant mean and standard deviation prediction (except for the interpolation of training data).
-In this case, the surrogate model will not provide useful mean and standard deviation predictions resulting in poor overall performance of the BO algorithm.
-Moreover, fitting a vanilla Gaussian Process scales cubic in the number of data points and therefore the overhead of the BO algorithm grows with the number of iterations.
-Besides, vanilla Gaussian Processes natively cannot handle categorical input variables or dependencies in the search space (recall that in HPO we often deal with mixed hierarchical spaces).
-In contrast, a random forest -- populary used as a surrogate model in SMAC, see @Lindauer2022 -- is cheap to train, quite robust in the sense that it is not as sensitive to its hyperparameters as a Gaussian Process, and can easily handle mixed hierarchical spaces.
-On the downside, a random forest is not really Bayesian (i.e., there is no posterior predictive distribution) and suffers from poor uncertainty estimates and poor extrapolation.
-Nevertheless, random forests usually perform quite well as surrogate model in BO.
-
-Warmstarting is a technique in optimization where previous optimization runs are used to improve the convergence rate and final solution of a new, related optimization run.
-In Bayesian optimization, warmstarting can be achieved by providing a set of likely well-performing configurations as part of the initial design.
-This approach can be particularly advantageous because it allows the surrogate model to start with prior knowledge of the optimization landscape in relevant regions.
-In `r mlr3mbo`, warmstarting is straightforward by specifying a custom intial design.
-Furthermore, a convenient feature of `r mlr3mbo` is the ability to continue optimization in an online fashion even after an optimization run has been terminated.
-Both `r ref("OptimizerMbo")` and `r ref("TunerMbo")` support this feature, allowing optimization to resume on a given instance even if the optimization was previously interrupted or terminated.
-
-Determining when to stop an optimization run is an important practical consideration.
-Common termination criteria include stopping after a fixed number of function evaluations or when a given walltime budget has been reached (see also @sec-terminator).
-Another option is to stop the optimization when a certain performance level is achieved or when performance improvement stagnates.
-In the context of BO, it can also be sensible to stop the optimization if the best acquisition function value falls below a certain threshold.
-For instance, terminating the optimization if the Expected Improvement of the next candidate(s) is negligible can be a reasonable approach.
-More practical considerations in BO can also be found in @hpo_practical.
+## Robustness {#sec-robustness-bayesian-optimization}
 
 Optimization is an automatic process that should ideally not rely on manual intervention.
 Robustness of an optimization algorithm is almost as important as good performance.
@@ -889,7 +934,39 @@ In the worst-case (all iterations erroring out), the BO algorithm will therefore
 Ideally, the learner wrapped within the surrogate model makes use of encapsulation and can rely on a fallback learner (see @sec-encapsulation-fallback) that will jump into action before this final safety net of proposing the next candidate uniformly at random is triggered.
 Note that the value of the acquisition function is always also logged into the archive of the optimization instance.
 To make sure that the BO algorithm behaved as expected, users should always inspect the log of the optimization process by looking at the archive and checking whether the acquisition function column is populated as expected.
-This can be done by simply inspecting the `$data` logged in the `r ref("Archive")` of the `r ref("OptimInstance")`.
+This can be done by simply inspecting the `data` logged in the `r ref("Archive")` of the `r ref("OptimInstance")` (`instance$archive$data`).
+
+## Practical Considerations in Bayesian Optimization {#sec-practical-bayesian-optimization}
+
+`r mlr3mbo` tries to use 'intelligent' defaults regarding the choice of surrogate model, acquisition function, acquisition function optimizer and even the loop function.
+For example, in the case of a purely numeric search space, `r mlr3mbo` will by default use a Gaussian Process as surrogate model and a random forest as fallback learner and additionally encapsulates (see @sec-encapsulation-fallback) the learner via the `r ref_pkg("evaluate")` package.
+In the case of a mixed or hierarchical search space, `r mlr3mbo` will use a random forest as surrogate model.
+As a result of defaults existing for all building blocks, users can perform BO without specifying any building blocks and can still expect decent optimization performance.
+To see an up-to-date overview of these defaults, users should inspect the following man page: `?mbo_defaults`
+
+In practice, users may prefer a more robust BO variant over a potentially better performing but unstable variant.
+For example, Gaussian Processes are highly subject to the choice of kernel but also the kernel parameters themselves which are usually obtained via maximum likelihood estimation.
+Suboptimal parameter values can result in white noise models with a constant mean and standard deviation prediction (except for the interpolation of training data).
+In this case, the surrogate model will not provide useful mean and standard deviation predictions resulting in poor overall performance of the BO algorithm.
+Moreover, fitting a vanilla Gaussian Process scales cubic in the number of data points and therefore the overhead of the BO algorithm grows with the number of iterations.
+Besides, vanilla Gaussian Processes natively cannot handle categorical input variables or dependencies in the search space (recall that in HPO we often deal with mixed hierarchical spaces).
+In contrast, a random forest -- popularly used as a surrogate model in SMAC, see @Lindauer2022 -- is cheap to train, quite robust in the sense that it is not as sensitive to its hyperparameters as a Gaussian Process, and can easily handle mixed hierarchical spaces.
+On the downside, a random forest is not really Bayesian (i.e., there is no posterior predictive distribution) and suffers from poor uncertainty estimates and poor extrapolation.
+Nevertheless, random forests usually perform quite well as surrogate model in BO.
+
+Warmstarting is a technique in optimization where previous optimization runs are used to improve the convergence rate and final solution of a new, related optimization run.
+In Bayesian optimization, warmstarting can be achieved by providing a set of likely well-performing configurations as part of the initial design.
+This approach can be particularly advantageous because it allows the surrogate model to start with prior knowledge of the optimization landscape in relevant regions.
+In `r mlr3mbo`, warmstarting is straightforward by specifying a custom initial design.
+Furthermore, a convenient feature of `r mlr3mbo` is the ability to continue optimization in an online fashion even after an optimization run has been terminated.
+Both `r ref("OptimizerMbo")` and `r ref("TunerMbo")` support this feature, allowing optimization to resume on a given instance even if the optimization was previously interrupted or terminated.
+
+Determining when to stop an optimization run is an important practical consideration.
+Common termination criteria include stopping after a fixed number of function evaluations or when a given walltime budget has been reached (see also @sec-terminator).
+Another option is to stop the optimization when a certain performance level is achieved or when performance improvement stagnates.
+In the context of BO, it can also be sensible to stop the optimization if the best acquisition function value falls below a certain threshold.
+For instance, terminating the optimization if the Expected Improvement of the next candidate(s) is negligible can be a reasonable approach.
+More practical considerations in BO can also be found in @hpo_practical.
 
 ## Conclusion
 
@@ -916,7 +993,7 @@ A more in-depth introduction to `r mlr3mbo` can be found its `r link("https://ml
 1. Minimize the 2D Rastrigin function $f: [-5.12, 5.12] \times [-5.12, 5.12] \rightarrow \mathbb{R}$, $\mathbf{x} \mapsto 10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$, $D = 2$ via BO (standard sequential single-objective BO via `bayesopt_ego()`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `opt("nloptr")` as acquisition function optimizer (similarly as above).
 Specify a budget of 40 function evaluations.
 Use either a Gaussian Process with Matérn 5/2 kernel (`"regr.km"`, similarly as above) or a random forest (`"regr.ranger"`) as surrogate model and compare the anytime performance (similarly as in @fig-bayesian-sinusoidal_bo_rs) of these two BO algorithms.
-As an inital design, use the following points:
+As an initial design, use the following points:
 ```{r}
 initial_design = data.table(
   x1 = c(-3.95, 1.16, 3.72, -1.39, -0.11, 5.00, -2.67, 2.44),
@@ -942,7 +1019,7 @@ surrogate_rf = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
 2. Minimize the following function: $f: [-10, 10] \rightarrow \mathbb{R}^2, x \mapsto \left(x^2, (x - 2)^2\right)$.
 Use the ParEGO algorithm (`r ref("mlr_loop_functions_parego")`) in a batch setting of four candidates (`q = 4`) and parallelize the actual objective function evaluation using the `r ref_pkg("future")` package (using four workers in a `multisession` plan).
 Construct the objective function using the `r ref("ObjectiveRFunMany")` class.
-For illustrative reasons, suspend the execution for five seconds every time a point is to be evaluated (making use of the `?Sys.sleep()` function).
+For illustrative reasons, suspend the execution for five seconds every time a point is to be evaluated (making use of the `Sys.sleep()` function).
 Use the following surrogate model, acquisition function and acquisition function optimizer (recall that ParEGO uses a scalarization approach to multi-objective optimization):
 ```{r}
 surrogate = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
