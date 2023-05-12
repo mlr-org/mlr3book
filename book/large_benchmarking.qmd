@@ -12,8 +12,6 @@ abstract:
   However, running large-scale experiments requires not only datasets, but also significant computational resources, and it can be beneficial to leverage High-Performance Computing (HPC) clusters to speed up the experiment execution.
   In the second section, we will show how the R package [`batchtools`](https://github.com/mllg/batchtools) and its mlr3 integration [`mlr3batchmark`](https://github.com/mlr-org/mlr3batchmark) can considerably simplify the process of working on HPC clusters.
   Once the experiments are complete, statistical analysis is required to draw conclusions from the results using the [`mlr3benchmark`](https://github.com/mlr-org/mlr3benchmark) package for post-hoc analyses.
-params:
-    rebuild_cache: true
 ---
 
 # Large-Scale Benchmark Experiments {#sec-large-benchmarking}
@@ -27,27 +25,6 @@ lgr::get_logger("mlr3oml")$set_threshold("off")
 library(mlr3batchmark)
 library(batchtools)
 library(mlr3oml)
-
-if (is.null(params$rebuild_cache)) {
-  unlockBinding("params", environment())
-  # rebuild_cache only influences the openml cache which is available on the CI as well
-  params = list(rebuild_cache = FALSE)
-  lockBinding("params", environment())
-}
-unlink("experiment", recursive = TRUE)
-unlink("experiment_custom", recursive = TRUE)
-if (params$rebuild_cache) {
-  unlink("openml", recursive = TRUE)
-  dir.create("openml")
-}
-
-options(mlr3oml.cache = here::here("book", "openml", "cache"))
-# IMPORTANT:
-# For both experiments, we always create the registry in a "normal" way up until the experiments are run
-# After that, we load the experiment registry (which is under a different path howver)
-# For this reason the experiment registry must not be printer after the experiments are done
-# attemps to solve this did not work (for me at least) because of cache dependencies etc.
-
 ```
 
 In the world of machine learning, there are many methods that are hard to evaluate using mathematical analysis alone.
@@ -279,7 +256,6 @@ By setting `number_classes` to 2, we only receive datasets where the default tar
 To keep the output readable, we only show the first 5 results from that query.
 
 ```{r large_benchmarking-014}
-#| eval: !expr params$rebuild_cache
 odatasets = list_oml_data(
   limit = 5,
   number_features = c(1, 4),
@@ -287,17 +263,6 @@ odatasets = list_oml_data(
   number_classes = 2
 )
 ```
-
-```{r large_benchmarking-015}
-#| echo: false
-path = here::here("book", "openml", "odatasets_list.rds")
-if (params$rebuild_cache) {
-  saveRDS(odatasets, path)
-} else {
-  odatasets = readRDS(path)
-}
-```
-
 
 The table below confirms that indeed only datasets with the specified properties were returned.
 We only show a subset of the columns for readability.
@@ -322,23 +287,9 @@ One example for such a benchmark suite is the `r link("https://www.openml.org/se
 Other collections available on OpenML include the `r link("https://www.openml.org/search?type=study&study_type=task&id=271", "AutoML benchmark")` [@amlb2022] or a `r link("https://www.openml.org/search?type=study&study_type=task&id=304", "benchmark for tabular deep learning")` [@grinsztajn2022why].
 
 ```{r large_benchmarking-017}
-#| eval: !expr params$rebuild_cache
 otask_collection = ocl(id = 99)
 ```
 
-```{r large_benchmarking-018}
-#| echo: false
-#| output: false
-
-# Collections are not cached (because they can be altered on OpenML).
-# This is why we load it from disk
-path = here::here("book", "openml", "otask_collection.rds")
-if (params$rebuild_cache) {
-  saveRDS(otask_collection, path)
-} else {
-  otask_collection = readRDS(path)
-}
-```
 
 We can create an `r ref("OMLCollection")` using `r ref("mlr3oml::ocl()")`.
 We see that the CC-18 contains 72 classification tasks on different datasets.
@@ -359,21 +310,11 @@ However, as the CC-18 contains not only binary classification tasks we use `r re
 We pass the task IDs from the CC-18 as argument `task_id` and request the number of classes to be 2.
 
 ```{r large_benchmarking-021}
-#| eval: !expr params$rebuild_cache
 binary_cc18 = list_oml_tasks(
   task_id = otask_collection$task_ids, number_classes = 2)
 ```
 
-```{r large_benchmarking-022}
-#| echo: false
-#| output: false
-path = here::here("book", "openml", "binary_cc18.rds")
-if (params$rebuild_cache) {
-  saveRDS(binary_cc18, path)
-} else {
-  binary_cc18 = readRDS(path)
-}
-```
+
 
 In order to keep the runtime reasonable in later examples, we only use the first six tasks.
 
@@ -498,7 +439,7 @@ Furthermore, we set the registry's `seed` to 1 and the `packages` to `r ref_pkg(
 library(batchtools)
 
 reg = makeExperimentRegistry(
-  file.dir = "./experiment",
+  file.dir = NA,
   seed = 1,
   packages = "mlr3verse"
 )
@@ -651,12 +592,12 @@ If you are unsure about the resource requirements, you can start a subset of job
 Measured runtimes and memory usage can be queried with `r ref("batchtools::getJobTable()")` and finally used to better estimate the required resources for the remaining jobs.
 
 ```{r large_benchmarking-038}
-#| eval: false
 submitJobs(
   ids = chunks,
   resources = list(ncpus = 1, walltime = 3600, memory = 8000),
   reg = reg
 )
+waitForJobs(reg = reg)
 ```
 
 
@@ -668,18 +609,7 @@ One option is to use `r link("https://github.com/tmux/tmux/wiki", "TMUX (Termina
 
 ###  Job Monitoring, Evaluation, and Error Handling {#sec-batchtools-monitoring}
 
-```{r large_benchmarking-039}
-#| include: false
-#| cache: false
-if (params$rebuild_cache || !length(list.files(file.path("experiment_finished", "results")))) {
-  submitJobs(ids = chunks, reg = reg)
-  waitForJobs(reg = reg)
-  if (file.exists("experiment_finished")) unlink("experiment_finished", recursive = TRUE)
-  fs::dir_copy("experiment", "experiment_finished")
-}
-reg = loadRegistry("experiment_finished")
-# DONT PRINT THE REGISTRY AFTER THAT. FIX IN THE FUTURE BUT THE CACHING IS QUITE TRICKY
-```
+
 
 After submitting the jobs, the next step is to wait for experiments to finish.
 In case you terminated your running R session after submitting the jobs, you can load the experiment registry using `r ref("loadRegistry()")` to continue where you left off.
@@ -856,23 +786,11 @@ We are now ready to submit the jobs to the cluster.
 By specifying no job IDs, all experiments are submitted as independent jobs, i.e. one computational job executes one resample experiment.
 
 ```{r}
-#| eval: false
-submitJos()
+submitJobs(reg = reg)
+waitForJobs(reg = reg)
 ```
 
 
-```{r large_benchmarking-053}
-#| include: false
-#| cache: false
-
-if (params$rebuild_cache || !length(list.files(file.path("experiment_custom_finished", "results")))) {
-  submitJobs(ids = chunks, reg = reg)
-  waitForJobs(reg = reg)
-  if (file.exists("experiment_custom_finished")) unlink("experiment_custom_finished", recursive = TRUE)
-  fs::dir_copy("experiment_custom", "experiment_custom_finished")
-}
-reg = loadRegistry("experiment_custom_finished")
-```
 
 When a cluster jobs finishes, it stores its return value in the registry folder.
 We can retrieve the job results using `r ref("batchtools::loadResult()")`.
