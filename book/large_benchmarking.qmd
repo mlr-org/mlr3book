@@ -430,20 +430,22 @@ While the first three bullet points should be relatively clear, the fourth needs
 By configuring the scheduling system through a cluster function, it is possible to make the interaction with the scheduling system independent of the scheduling software.
 We will come back to this later and show how to change it to work on a Slurm cluster.
 
-We create a registry in a temporary directory - usually you would store it in a subdirectory of your home dir which is shared via a network file system.
+We create a registry in a subdirectory of our working directory - on a real cluster, make sure that this folder is stored on a shared network filesystem, otherwise the nodes cannot access it.
 Furthermore, we set the registry's `seed` to 1 and the `packages` to `r ref_pkg("mlr3verse")`, which will make the package available in all our experiments.
 
+```{r include = FALSE}
+#| cache: false
+if (dir.exists("experiments"))
+    unlink("experiments", recursive = TRUE)
+```
 
 ```{r large_benchmarking-027}
 #| cache: false
 library(batchtools)
 
-# temporary directory where all files are stored
-file.dir = tempfile()
-
 # create registry
 reg = makeExperimentRegistry(
-  file.dir = file.dir,
+  file.dir = "./experiments",
   seed = 1,
   packages = "mlr3verse"
 )
@@ -491,7 +493,7 @@ There are 30 jobs for each problem (i.e. task-resampling combination), as there 
 The problem names are not particularly informative as they represent hashes of the task-resampling combinations.
 
 ```{r large_benchmarking-031}
-summarizeExperiments(by = c("task_id", "learner_id"))
+summarizeExperiments(by = c("task_id", "learner_id"), reg = reg)
 ```
 
 The function `r ref("batchtools::getJobTable()")` can be used to get more detailed information about the jobs.
@@ -522,8 +524,8 @@ The warning below is unproblematic and we therefore ignore it.
 
 ```{r large_benchmarking-033}
 #| output: true
-result = testJob(1, external = TRUE)
-result$learner_state$log
+result = testJob(1, external = TRUE, reg = reg)
+result$learner_state$train_time
 ```
 
 In case something goes wrong, `r ref_pkg("batchtools")` comes with a bunch of useful debugging utilities covered in @sec-batchtools-monitoring.
@@ -552,6 +554,7 @@ cf = makeClusterFunctionsSlurm(template = "slurm-simple")
 To proceed with the examples on a local machine, set the cluster functions to a Socket backend.
 ```{r large_benchmarking-035}
 #| output: false
+#| cache: false
 cf = makeClusterFunctionsSocket()
 ```
 
@@ -560,14 +563,15 @@ It is possible to customize the cluster function.
 More information is available in the documentation of the `r ref_pkg("batchtools")` package.
 :::
 
-We update the value of the `$cluster.function` and save the registry.
+We update the value of the `$cluster.functions` and save the registry.
 This only has to be done manually when modifying the fields explicitly.
 Functions like `r ref("batchmark()")` internally save the registry when required.
 
 ```{r large_benchmarking-036}
 #| eval: false
-reg$cluster.function = cf
-saveRegistry(reg)
+#| cache: false
+reg$cluster.functions = cf
+saveRegistry(reg = reg)
 ```
 
 The jobs are submitted to the scheduler via `r ref("batchtools::submitJobs()")`.
@@ -595,6 +599,7 @@ If you are unsure about the resource requirements, you can start a subset of job
 Measured runtimes and memory usage can be queried with `r ref("batchtools::getJobTable()")` and finally used to better estimate the required resources for the remaining jobs.
 
 ```{r large_benchmarking-038}
+#| cache: false
 submitJobs(
   ids = chunks,
   resources = list(ncpus = 1, walltime = 3600, memory = 8000),
@@ -621,7 +626,7 @@ In case you terminated your running R session after submitting the jobs, you can
 
 ```{r large_benchmarking-040}
 #| eval: false
-reg = loadRegistry(file.dir)
+reg = loadRegistry("./experiments")
 ```
 
 In any large scale experiment many things can and will go wrong, even if we test our jobs beforehand using `r ref("batchtools::testJob()")` as recommended earlier.
@@ -637,41 +642,56 @@ getStatus(reg = reg)
 To query the ids of jobs in the respective categories, see `r ref("findJobs()")` and, e.g., `findNotSubmitted()` or `findDone()`.
 
 In our case, all experiments finished and none expired or crashed - albeit we took some countermeasures by extending our base learners with fallback learners and integrating them in the pipeline "robustify".
-Nonetheless, we should inspect warning messages and log outputs.
+Nonetheless, it makes sense to check the logs for suspicious messages and warnings with `r ref("grepLogs()")` before proceeding with the analysis of the results.
 For this purpose, we have the set encapsulation before to `"try"`: in contrast to `"evaluate"` or `"callr"` encapsulation, `"try"` does not capture the output from messages, warnings or errors and stores them in the learner's log.
 All output is printed to the console and redirected to a log file so that `batchtools` can operate on it with functions like `r ref("getLog()")` or `r ref("grepLogs()")`.
 
-In the following examlpe, we search for the string "warning" in all log files of successfully terminated jobs (`r ref("findDone()")`).
-The job ids with warnings are summarized with `r ref("summarizeExperiments()")` and we print one log file to investigate the warning message.
+In the following, we extend the design with the debug learner which randomly errors with a probability of 50%.
+By just calling `r ref("batchmark()")` with the new design again, the new experiments will be added.
 
+```{r}
+#| cache: false
+extra_design = benchmark_grid(
+  learners = lrns("classif.debug", error_train = 0.5),
+  tasks = tasks,
+  resampling = resamplings,
+  paired = TRUE
+)
 
-```{r large_benchmarking-043}
-warning_ids = grepLogs(ids = findDone(), pattern = "warning", ignore.case = TRUE, fixed = TRUE, reg = reg)
-
-# overview: which tasks / learners have warnings?
-summarizeExperiments(warning_ids, by = c("task_id", "learner_id"), reg = reg)
-
-# example log
-writeLines(getLog(warning_ids[1], reg = reg))
+batchmark(extra_design, reg = reg)
 ```
 
-The summary shows that the logistic regression threw warnings for three tasks.
+We can check the new state and submit the jobs which have not been submitted yet (i.e., the new jobs):
+```{r}
+#| cache: false
 
-We can also load individual experiment results with `r ref("loadResult()")`.
+getStatus(reg = reg)
 
-```{r large_benchmarking-042}
-result = loadResult(warning_ids[1], reg = reg)
-names(result)
+ids = findNotSubmitted(reg = reg)
+submitJobs(reg = reg)
+waitForJobs(reg = reg)
 ```
 
-This is the same object as returned by `r ref("testJob()")` earlier and an internal data structure.
-Jobs with warnings can be debugged again with `testJob()` and - if necassary - restarted with
-```{r, eval = FALSE}
-submitJobs(warnings_ids, reg = reg)
+After these jobs terminated, we can get a summary of all jobs which failed:
+
+```{r}
+error_ids = findErrors(reg = reg)
+summarizeExperiments(error_ids, by = c("task_id", "learner_id"), reg = reg)
 ```
 
-For the logisitic regression however, warnings usually indicate that there were problems to fit a proper model, and the used implementation often defaults to predicting the mean.
-Restarting would yield the same results for this specific case.
+Unsurprisingly, all failed jobs have one thing in common: the debug learner.
+
+Finally, it is time to collect the results.
+The results for benchmark experiments defined with `r ref("batchmark")` can be collected with `r ref("reduceResultsBatchmark")` which constructs a regular `r ref("BenchmarkResult")`.
+It is also possible to retrieve single results with `r ref("loadResult()")`, but the returned values would need to reconstructed to mlr3 objects manually as only a subset of the objects is returned for efficiency.
+Here, we only collect results which were not produced by the debug learner.
+
+```{r}
+ids = findExperiments(algo.pars = learner_id != "classif.debug", reg = reg)
+bmr = reduceResultsBatchmark(ids, reg = reg)
+print(bmr)
+```
+
 
 
 ### Custom Experiment Definition {#sec-custom-experiment-definition}
@@ -684,12 +704,16 @@ There is not one single way how to achieve this, and we here show a solution tha
 Unless you have a specific reason to customize your experiment definition, we recommend using `r ref_pkg("mlr3batchmark")`.
 Like before, the first step is to create an experiment registry.
 
+```{r include = FALSE}
+#| cache: false
+if (dir.exists("experiments-custom"))
+    unlink("experiments-custom", recursive = TRUE)
+```
+
 ```{r large_benchmarking-046}
 #| cache: false
-file.dir = tempfile()
-
 reg = makeExperimentRegistry(
-  file.dir = file.dir,
+  file.dir = "./experiments-custom",
   seed = 1,
   packages = "mlr3verse"
 )
@@ -768,7 +792,7 @@ library(data.table)
 algorithm_design = list(run_learner = data.table(learner = learners))
 print(algorithm_design$run_learner)
 
-addExperiments(algo.designs = algorithm_design)
+addExperiments(algo.designs = algorithm_design, reg = reg)
 ```
 
 We confirm that the algorithm, problems, and experiments (jobs) were added successfully.
