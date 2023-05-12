@@ -42,7 +42,7 @@ if (params$rebuild_cache) {
 }
 
 options(mlr3oml.cache = here::here("book", "openml", "cache"))
-# IMPORTANT: 
+# IMPORTANT:
 # For both experiments, we always create the registry in a "normal" way up until the experiments are run
 # After that, we load the experiment registry (which is under a different path howver)
 # For this reason the experiment registry must not be printer after the experiments are done
@@ -82,8 +82,7 @@ The metric of choice is the classification accuracy.
 Note that we "robustify" both learners to work on a wide range of tasks using the respective preprocessing pipeline, c.f. @sec-pipelines.
 The `ppl("robustify")` creates a preprocessing pipeline, i.e. a predefined `r ref("Graph")` consisting of common operations such as missing value imputation or feature encoding.
 By specifying the learner during construction of the pipeline, some preprocessing operations can be omitted, e.g. when a learner can handle missing values itself.
-Moreover, we specify the fallback learner to be a featureless learner (compare @sec-fallback).
-
+Moreover, we specify the fallback learner to be a featureless learner (compare @sec-fallback) and we use `"try"` as encapsulation which will be discussed later in this chapter.
 <!-- FIXME: reference to robustify specifically when preprocessing chapter is ready -->
 
 ```{r large_benchmarking-002}
@@ -94,13 +93,15 @@ learner_logreg = as_learner(
   ppl("robustify", learner = learner_logreg) %>>% learner_logreg)
 learner_logreg$id = "logreg"
 learner_logreg$fallback = lrn("classif.featureless")
+learner_logreg$encapsulate = c(train = "try", predict = "try")
 
 # create random forest pipeline
 learner_ranger = lrn("classif.ranger")
 learner_ranger = as_learner(
   ppl("robustify", learner = learner_ranger) %>>% learner_ranger)
 learner_ranger$id = "ranger"
-learner_logreg$fallback = lrn("classif.featureless")
+learner_ranger$fallback = lrn("classif.featureless")
+learner_ranger$encapsulate = c(train = "try", predict = "try")
 
 # create full grid design with holdout resampling
 design = benchmark_grid(
@@ -697,42 +698,44 @@ The current status of the computation can be queried with `r ref("getStatus()")`
 getStatus(reg = reg)
 ```
 
-In our case, all experiments finished and none expired or crashed.
+To query the ids of jobs in the respective categories, see `r ref("findJobs()")` and, e.g., `findNotSubmitted()` or `findDone()`.
+
+In our case, all experiments finished and none expired or crashed - albeit we took some countermeasures by extending our base learners with fallback learners and integrating them in the pipeline "robustify".
 Nonetheless, we should inspect warning messages and log outputs.
-The `stdout` of the individual jobs is saved in the batchtools registry and can be accessed through functions like `r ref("getLog()")` or `r ref("grepLogs()")`.
-However, encapsulation (c.f. @sec-encapsulation) was automatically set to `r ref_pkg("evaluate")` when we specified the fallback learner for the logistic regression and the random forest.
-Therefore, we should focus on the logs saved in the learners, as warnings and errors were suppressed from `stdout`.
-To do so, we first use `r ref("mlr3batchmark::reduceResultsBatchmark()")` to assemble the individual job results into a `r ref("BenchmarkResult")`.
-The resulting object is the same (except for seeding) that we would have obtained by calling `r ref("benchmark()")` on the `large_design` from earlier.
+For this purpose, we have the set encapsulation before to `"try"`: in contrast to `"evaluate"` or `"callr"` encapsulation, `"try"` does not capture the output from messages, warnings or errors and stores them in the learner's log.
+All output is printed to the console and redirected to a log file so that `batchtools` can operate on it with functions like `r ref("getLog()")` or `r ref("grepLogs()")`.
+
+In the following examlpe, we search for the string "warning" in all log files of successfully terminated jobs (`r ref("findDone()")`).
+The job ids with warnings are summarized with `r ref("summarizeExperiments()")` and we print one log file to investigate the warning message.
+
 
 ```{r large_benchmarking-043}
-bmr = reduceResultsBatchmark(reg = reg)
-bmr
+warning_ids = grepLogs(ids = findDone(), pattern = "warning", ignore.case = TRUE, fixed = TRUE)
+
+# overview: which tasks / learners have warnings?
+summarizeExperiments(warning_ids, by = c("problem", "algorithm", "learner_id"), reg = reg)
+
+# example log
+writeLines(getLog(warning_ids[1]))
 ```
 
-The printed output shows that the logistic regression threw warnings for three tasks.
-However, no error was encountered and therefore no fallback learner triggered.
-As an example, we access the warning for the first resample result, which was caused by 0-1 probabilities we already encountered earlier when testing the job.
+The summary shows that the logistic regression threw warnings for three tasks.
 
-```{r large_benchmarking-045}
-bmr$resample_result(1)$learners[[1]]$warning
-```
-
-We can also load individual experiment results.
-Below, we first search for specific job IDs using `r ref("findExperiments()")` and then load the result using `r ref("loadResult()")`.
+We can also load individual experiment results with `r ref("loadResult()")`.
 
 ```{r large_benchmarking-042}
-ids = findExperiments(
-  algo.pars = learner_id == "logreg", prob.pars = task_id == "kr-vs-kp", 
-  reg = reg
-)
-ids$job.id
-result_1 = loadResult(ids$job.id[1], reg = reg)
-names(result_1)
+result = loadResult(warning_ids[1], reg = reg)
+names(result)
 ```
 
 This is the same object as returned by `r ref("testJob()")` earlier and an internal data structure.
-For most use cases it is recommended to simply use `r ref("reduceResultsBatchmark()")`.
+Jobs with warnings can be debugged again with `testJob()` and - if necassary - restarted with 
+```{r, eval = FALSE}
+submitJobs(warnings_ids, reg = reg)
+```
+
+For the logisitic regression however, warnings usually indicate that there were problems to fit a proper model, and the used implementation often defaults to predicting the mean.
+Restarting would yield the same results for this specific case.
 
 
 ### Custom Experiment Definition {#sec-custom-experiment-definition}
