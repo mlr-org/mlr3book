@@ -515,6 +515,7 @@ msr("classif.costs", costs = C)
 
 ```{r solutions-026}
 #| cache: false
+#| include: false
 library("mlr3oml")
 lgr::get_logger("mlr3oml")$set_threshold("off")
 options(mlr3oml.cache = file.path("openml", "cache"))
@@ -548,8 +549,7 @@ if (params$rebuild_cache) {
 }
 ```
 
-
-We can then find all tasks with less than 4000 observations using `r ref("mlr3oml::list_oml_tasks()")`.
+We can find all tasks with less than 4000 observations by specifying this constraint in `r ref("mlr3oml::list_oml_tasks()")`.
 
 ```{r solutions-030}
 #| eval: !expr params$rebuild_cache
@@ -567,23 +567,19 @@ if (params$rebuild_cache) {
 }
 ```
 
-This returns a table matching the query.
+This returns a table which only contains matching tasks from the AutoML benchmark.
 
 ```{r solutions-032}
-tbl
+tbl[, .(task_id, data_id, name, NumberOfInstances)]
 ```
 
+We can create mlr3 tasks from these OpenML IDs using `tsk("oml")`.
 
-
-We can create mlr3 tasks using `tsk("oml")`.
-
-
-<!-- This is automatically cached through the mlr3oml cache -->
 ```{r solutions-033}
 tasks = lapply(tbl$task_id, function(id) tsk("oml", task_id = id))
 ```
 
-We continue with defining the learners, robustify them and then, register a featureless fallback learner.
+Below, we define the robustified learners with a featureless fallback learner.
 
 ```{r solutions-034}
 learner_ranger = as_learner(
@@ -598,7 +594,7 @@ learner_rpart = as_learner(
     po("learner", lrn("regr.rpart"))
 )
 learner_rpart$id = "rpart"
-learner_ranger$fallback = lrn("regr.featureless")
+learner_rpart$fallback = lrn("regr.featureless")
 
 learners = list(learner_ranger, learner_rpart)
 ```
@@ -616,44 +612,43 @@ design
 ### Executing the Experiments using batchtools {.unnumbered .unlisted}
 
 We start with loading the relevant libraries and creating a registry.
-By specifying the registry to `NA` we are using a temporary directory.
+By specifying the registry's `file.dir` to `NA` we are using a temporary directory.
 
 ```{r solutions-036}
 #| cache: false
 library("mlr3batchmark")
 library("batchtools")
 
-reg = makeExperimentRegistry(NA, seed = 1, packages = "mlr3verse")
+reg = makeExperimentRegistry(
+  file.dir = NA, 
+  seed = 1, 
+  packages = "mlr3verse"
+)
 ```
 
 Then, we change the cluster function to "Multicore" (or "Socket" if you are on Windows).
 
 ```{r solutions-037}
 #| cache: false
-reg$cluster.function = makeClusterFunctionsMulticore()
+reg$cluster.functions = makeClusterFunctionsMulticore()
 
 # Windows:
-# reg$cluster.function = makeClusterFunctionsSocket()
+# reg$cluster.functions = makeClusterFunctionsSocket()
 
 saveRegistry(reg)
 ```
 
-The next step is to populate the registry with the experiments and submit them.
+The next two steps are to populate the registry with the experiments and to submit them.
+By specifying no IDs in `submitJobs()`, all jobs returned by `findNotSubmitted()` are queued, which in this case are all existing jobs.
 
 ```{r solutions-038}
 #| output: false
 batchmark(design, reg = reg)
 submitJobs(reg = reg)
-```
-
-```{r solutions-039}
-#| echo: false
-#| output: false
 waitForJobs(reg = reg)
 ```
 
-
-After they are finished, we collect the results.
+After the execution of the experiment finished, we can collect the results.
 
 ```{r solutions-040}
 bmr = reduceResultsBatchmark(reg = reg)
@@ -670,7 +665,7 @@ bma = as_benchmark_aggr(bmr, measures = msr("regr.mse"))
 bma
 ```
 
-This allows us to conduct a friedman test.
+We can now use the `$friedman_test()` method of the benchmark aggregate to apply said test to the experiment results.
 Note that we don't need a post-hoc test, because we are only comparing two algorithms.
 
 ```{r solutions-042}
@@ -679,13 +674,13 @@ bma$friedman_test()
 
 This experimental design was not able to detect a significant difference on the 5% level.
 
-We can inspect the ranks using the `$rank_data()` method of the `r ref("BenchmarkAggr")`.
+Next, we inspect the ranks using the `$rank_data()` method of the `r ref("BenchmarkAggr")`, where we specify `minimize` to `TRUE`, because a lower mean square error is better.
 
 ```{r solutions-043}
 bma$rank_data(minimize = TRUE)
 ```
 
-The random forest is better on 7 of the 10 datasets.
+The random forest is better on 7 of the 10 tasks.
 
 ## Solutions to @sec-interpretation
 
