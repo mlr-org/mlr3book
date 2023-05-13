@@ -79,7 +79,7 @@ learner
 ```
 
 Here we have constructed a classification SVM, `classif.svm`, selected the type of model as `"C-classification"`, set the kernel to `"radial"`, and specified that we plan to tune the `cost` and `gamma` parameters over the range $[0.1,100000]$ and $[0.1,1]$ respectively (though these are usually tuned on a log scale, see @sec-logarithmic-transformations).
-Note that calling `$train()` on a learner with tune token will throw an error.
+Note that calling `$train()` on a learner with a tune token (e.g., `cost=<RangeTuneToken>`) will throw an error.
 
 Now we have decided which hyperparameters to tune, we must now specify when we will be happy that they have been tuned 'enough', i.e., how we define the optimal hyperparameter configuration.
 
@@ -609,17 +609,17 @@ rr$aggregate()
 
 We can see that the nested resampling is a much closer estimate of the true generalization error, and in fact in the case the internal performance measure was actually worse than the true generalization error.
 
-## Defining Search Spaces {#sec-defining-search-spaces}
+## More Advanced Search Spaces {#sec-defining-search-spaces}
 
-In this section, we will cover more advanced techniques for defining search spaces.
+Up until now we have only considered tuning overly simplistic search spaces limited to numeric hyperparameters.
+In this section we will first look at how to tune different scalar parameter classes with `r ref("to_tune")`, and then how to define your own search space with `r ref("ParamSet")` to create more advanced search spaces that may include vector tuning, transformations, and parameter dependencies.
+Finally, we will consider how to derive parameter sets from other learners and establish search spaces in the literature.
 
-{{< include _optional.qmd >}}
+### Scalar parameter tuning
 
-### Defining Search Spaces from Scratch {#sec-search-space-scratch}
-
-In @sec-tuning-instance we have seen how one can conveniently define the tuning space of a learner using a `r ref("TuneToken")` that can be constructed with the `r ref("to_tune()")` function.
-In this section, we will show how to define such search spaces from scratch and also cover more advanced techniques.
-To start, we will revisit an example from earlier, where we have tuned the `cost` and `gamma` parameters of an SVM classifier.
+The `to_tune` function can be used to parameters of any class, whether they are scalar or vectors.
+TO best understand this function, we will consider what is happening behind the scenes.
+When `to_tune` is used in a learner, implicitly a `r ref("ParamSet")` is created just for the tuning search space:
 
 ```{r optimization-039}
 learner = lrn("classif.svm",
@@ -628,23 +628,53 @@ learner = lrn("classif.svm",
   kernel = "radial",
   type = "C-classification"
 )
-```
 
-When an auto tuner is created from such a learner, the search space is automatically constructed from the tune tokens.
-This search space is an object of class `r ref("ParamSet")`.
-
-```{r optimization-040}
 learner$param_set$search_space()
 ```
 
-This object can also be created "by hand" and passed explicitly as the `search_space` argument of the `r ref("auto_tuner")`.
-The `r ref("TuneToken")` is merely a user-friendly mechanism that allows for a more convenient definition of search spaces.
+Recall from @sec-param-set, that the `class` field corresponds to the hyperparameter class as defined in `r ref_pkg("paradox")`.
+In this example, we can see that `gamma` hyperparameter has class `r ref("ParamDbl")`, with `lower = 0.1` and `upper = 1`, which was automatically created by `to_tune` as we passed two numeric values to this function.
+If we wanted to tune over a non-numeric hyperparameter, we can still use `to_tune`, which will 'guess' the correct class to construct in the resulting parameter set.
+For example, say we wanted to tune the numeric `cost`, factor `kernel`, and logical `scale` hyperparameter in our SVM:
 
-We can define the search space from above by calling `r ref("paradox::ps()")`.
-The function takes named `r ref("paradox::Domain")` arguments and creates a `r ref("paradox::ParamSet")` from them.
+```{r}
+learner = lrn("classif.svm",
+  cost  = to_tune(1e-1, 1e5),
+  kernel = to_tune(c("radial", "linear")),
+  shrinking = to_tune(),
+  type = "C-classification"
+)
 
-In order to define this search space, we have to pick the right type for each parameter.
-As of writing this book, there are five domain constructors that produce different parameters when passed to `ps()`.
+learner$param_set$search_space()
+```
+
+Here the `kernel` hyperparameter is a factor, so we simply pass in a vector corresponding to the levels we want to tune over.
+The `shrinking` hyperparameter is a logical, there are only two possible values this could take so we do not need to pass anything to `to_tune`, it will automatically recognize this is a logical from `learner$param_set` and passes this detail to `learner$param_set$search_space()`.
+In fact, for factor parameters, we could also use `to_tune` without any arguments if we want to tune over all possible values:
+
+```{r}
+lrn("classif.svm", kernel = to_tune(c("radial", "linear")))$param_set$search_space()
+```
+
+Finally, we can only use `to_tune` to treat numeric parameters as factors if we only want to tune over a small subset of possible values, for example if we wanted to find the optimal number of trees in a random forest we might only consider three scenarios: 100, 200, or 400 trees:
+
+```{r}
+lrn("classif.ranger", num.trees = to_tune(c(100, 200, 400)))$param_set$search_space()
+```
+
+Before we look at vector parameter tuning, we must first learn how to create parameter sets from scratch.
+
+:::{.callout-warning}
+Treating an integer as a factor for tuning results in “unordered” hyperparameters.
+Therefore algorithms that make use of ordering information, e.g., evolutionary strategies, will perform worse when ordering is ignored.
+For these algorithms, it would make more sense to define a `r ref("ParamDbl")` or `r ref("ParamInt")` (@sec-tune-ps) with a more fitting transformation (@sec-tune-trafo).
+:::
+
+### Defining Search Spaces with `ps` {#sec-tune-ps}
+
+As we have seen, `to_tune` is a helper function that creates a parameter set that will go on to be used by `ti`/`tune`/`auto_tune` during the tuning process.
+However, there will be use-cases where you will need to create a parameter set manually using `r ref("paradox::ps()")`.
+This function takes named arguments of class `r ref("Param")`, which can be created using the sugar functions in @tbl-paradox-define.
 
 | Constructor      | Description                          | Underlying Class    |
 |------------------|--------------------------------------|---------------------|
@@ -656,112 +686,75 @@ As of writing this book, there are five domain constructors that produce differe
 
 : `r ref("Domain")` Constructors and their resulting `r ref("Param")`. {#tbl-paradox-define}
 
-For the purpose of defining search spaces, the relevant arguments of the domain constructors fall into one of three categories:
+As a simple example, let's look at how to create a search space to tune `cost` and `gamma` again:
 
-1. Define the **range of values** over which to tune; these are e.g. `lower` and `upper` for `r ref("p_int")` and `r ref("p_dbl")` or `levels` for `r ref("p_fct")`.
-1. **Dependencies** between parameters via the argument `depends`.
-   It is an expression that must involve other parameters and be of the form `<param> == <scalar>`, `<param> %in% <vector>`, or multiple of these chained by `&&`.
-1. Parameter **transformations** via a `trafo`.
-   This allows to modify the sampling distribution.
-
-
-We can recreate the search space from earlier using the `p_dbl()` function.
-
-```{r optimization-041}
+```{r}
 search_space = ps(
   cost  = p_dbl(lower = 1e-1, upper = 1e5),
-  gamma = p_dbl(lower = 1e-1, upper = 1)
+  kernel = p_fct(c("radial", "linear")),
+  shrinking = p_lgl()
 )
-
-search_space
 ```
 
-::: {.callout-note}
-Because the `r ref("ParamSet")` class is also used to represent the hyperparameter spaces of objects like learners or pipeops (see @sec-pipelines), the domain constructors also have other arguments.
-These will be covered in @sec-extending.
-:::
+This search space would then be passed to the `search_space` argument in `auto_tuner`:
 
-When creating a search space, one has to ensure that the resulting space is bounded.
-A search space is bounded if all parameters are bounded:
+```{r}
+ti(task_sonar, lrn("classif.svm", type = "C-classification"), rsmp3, msr_ce, trm("none"), search_space = search_space)
+```
 
-1. `ParamFct` and `ParamLgl` are always bounded
-1. `ParamInt` and `ParamDbl` are bounded if `lower` and `upper` are finite
-1. `ParamUty` is never bounded.
-
-One can check whether a `ParamSet` (or `Param`) is bounded by accessing the `$is_bounded` field.
+:::{.callout-warning}
+When manually creating search spaces, make sure all numeric hyperparameters in your search space are bounded, e.g., if you are trying to tune a hyperparameter that could take any in value $(-\infty, \infty)$ then the tuning process will throw an error if you do not pass lower and upper limits to `p_dbl` or `p_int`.
+You can use `$is_bounded` on the constructed `r ref("ParamSet")` if you are unsure:
 
 ```{r optimization-042}
 ps(cost = p_dbl(lower = 0.1, upper = 1))$is_bounded
 ps(cost = p_dbl(lower = 0.1, upper = Inf))$is_bounded
 ```
-
-Creating a search space with an unbounded parameter will result in an error since the tuner cannot sample from an unbounded space.
-
-As a second example, we define a search space in which we search the optimal `cost` parameter in the range $[0.1, 1]$ and the best kernel of all values `"polynomial"` and `"radial"`.
-
-```{r optimization-043}
-search_space = ps(
-  cost   = p_dbl(lower = 0.1, upper = 1),
-  kernel = p_fct(levels = c("polynomial", "radial"))
-)
-search_space
-```
-
-It is also possible to specify dependencies between parameters.
-The SVM, for example, has the `degree` parameter that is only valid when the `kernel` is `"polynomial"`.
-We can specify this constraint by using the `depends` argument of the domain constructor.
-To tune the `degree` parameter, one would need to do the following:
-
-```{r optimization-044}
-search_space = ps(
-  cost   = p_dbl(0, 1),
-  kernel = p_fct(c("polynomial", "radial")),
-  degree = p_int(1, 3, depends = (kernel == "polynomial"))
-)
-```
-
-We notice that the `cost` parameter is taken on a linear scale.
-We assume, however, that the difference of cost between 0.1 and 1 should have a similar effect as the difference between 1 and 10.
-Therefore, it makes more sense to tune it on a *logarithmic scale*.
-This is done by using a **transformation** (`trafo`), which allow to exercise more fine-grained control over the sampling distribution.
-This is a function that is applied to a parameter after it has been sampled by the tuner.
-We can tune `cost` on a logarithmic scale by sampling on the linear scale $[-1, 1]$ and computing $e^x$ from that value.
-
-```{r optimization-045}
-search_space = ps(
-  cost   = p_dbl(-1, 1, trafo = function(x) exp(x)),
-  kernel = p_fct(c("polynomial", "radial"))
-)
-```
-
-@fig-technical-paradox-tuning-log visualizes the resulting design.
-
-```{r optimization-046}
-#| echo: false
-#| label: fig-technical-paradox-tuning-log
-#| fig-cap: Design points from a grid search when tuning an SVM. The resolution is 5 and the cost parameter on a logarithmic scale.
-dat2 = rbindlist(generate_design_grid(search_space, 5)$transpose())
-
-ggplot(data = dat2, aes(cost, kernel)) +
-    geom_point(
-      color = viridis::viridis(1, begin = 0.5),
-      alpha = 0.8) +
-    theme_minimal()
-```
-
-:::{.callout-tip}
-Because the log-scale transformation is so common, the domain constructors `p_int()` and `p_dbl()` have a flag `logscale` that can be set to apply a logarithmic transformation (see @sec-logarithmic-transformations).
 :::
 
-It is even possible to attach another transformation to the `r ref("ParamSet")` as a whole that gets executed after individual parameter's transformations were performed.
-It is given through the `.extra_trafo` argument and should be a function with parameters `x` and `param_set` that takes a list of parameter values in `x` and returns a modified list.
-This transformation can access all parameter values of a configuration and modify them with interactions.
-It is even possible to add or remove parameters.
+### Transformations and vector tuning {#sec-tune-trafo}
 
-In our example we now assume that the parameter `cost` should be set to a higher value when the `kernel` is `"polynomial"`.
+{{< include _optional.qmd >}}
 
-```{r optimization-047}
-search_space = ps(
+In @sec-logarithmic-transformations we saw how to quickly apply log transformations with `to_tune`.
+As you now know, `to_tune` is just a wrapper that creates `r ref("ParamSet")` objects, so let's look at what is actually taking place when we set `logscale = TRUE`:
+
+```{r}
+lrn("classif.svm", cost = to_tune(1e-5, 1e5, logscale = TRUE))$param_set$search_space()
+```
+
+Notice that now the `lower` and `upper` fields correspond to the transformed bounds, i.e. $[log(1e-5), log(1e5)]$.
+To manually create the same transformation, we can pass the transformation to the `trafo` argument in `p_dbl`:
+
+```{r optimization-045}
+ss = ps(cost = p_dbl(1e-5, 1e5, trafo = function(x) exp(x)))
+ss
+```
+
+In this case we do not see the transformation in the `lower` and `upper` fields, however we can confirm it is correctly set by making use of the `$trafo()` method, which takes a named list and applies the specified transformations
+
+```{r}
+ss$trafo(list(cost = 1))
+```
+
+Where transformations become the most powerful is in the ability to pass arbitrary functions that can act on single parameters of the entire parameter set.
+As an example, consider a simple transformation to add '2' to our range:
+
+```{r}
+ss = ps(cost = p_dbl(0, 3, trafo = function(x) x + 2))
+ss$trafo(list(cost = 1))
+```
+
+Simple transformations such as this can even be added directly to a learner by passing a `Param` object to `to_tune`:
+
+```{r}
+lrn("classif.svm", cost = to_tune(p_dbl(0, 3, trafo = function(x) x + 2)))
+```
+
+More complex transformations that require multiple arguments require the `.extra_trafo` argument in `ps`:
+
+```{r}
+ss = ps(
   cost = p_dbl(-1, 1, trafo = function(x) exp(x)),
   kernel = p_fct(c("polynomial", "radial")),
   .extra_trafo = function(x, param_set) {
@@ -771,30 +764,20 @@ search_space = ps(
     x
   }
 )
+ss$trafo(list(cost = 1, kernel = "radial"))
+ss$trafo(list(cost = 1, kernel = "polynomial"))
 ```
 
-An exemplary design is depicted in @fig-technical-paradox-trafo.
+In this transformation we first exponentiate the value of `cost` and then add '2' if the `kernel` is `"polynomial"`. Note that `.extra_trafo` takes a function with parameters `x` and `param_set`.
+During tuning, `x` will be a list containing the configuration being tested, and `param_set` is the whole parameter set.
 
-```{r optimization-048}
-#| echo: false
-#| label: fig-technical-paradox-trafo
-#| fig-cap: Design grid for tuning a SVM. The resolution is 5, the cost parameter is logarithmically transformed when points with a `kernel` equal to `"polynomial"` are shifted to the right by a value of 2.
-dat3 = rbindlist(generate_design_grid(search_space, 5)$transpose())
+#### Vector transformations {.unnumbered .unlisted}
 
-ggplot(data = dat3, aes(cost, kernel)) +
-    geom_point(
-      color = viridis::viridis(1, begin = 0.5),
-      alpha = 0.8) +
-    theme_minimal()
-```
+{{< include _optional.qmd >}}
 
-The available types of search space parameters are limited: continuous, integer, discrete, and logical scalars.
-There are many machine learning algorithms, however, that take parameters of other types, for example vectors or functions.
-These can not be defined in a search space `r ref("ParamSet")`, and they are often given as `r ref("ParamUty")` (which is always unbounded) in the `r ref("Learner")`'s `r ref("ParamSet")`.
-When trying to tune over these hyperparameters, it is necessary to perform a transformation that changes the type of the parameter.
-
-An example is the `class.weights` parameter of the SVM, which takes a named vector of class weights with one entry for each target class.
-The transformation that would tune `class.weights` for the `sonar` data set could be:
+Any function can be passed to `trafo` and `.extra_trafo`, which enables tuning of 'untyped' parameters of class `r ref("ParamUty")` that could be vectors, functions, or any non-atomic class.
+By example, consider the `class.weights` parameter of the SVM, which takes a named vector of class weights with one entry for each target class.
+To tune this parameter we could tune a scalar and then transform this to a vector:
 
 ```{r optimization-049}
 search_space = ps(
@@ -803,94 +786,72 @@ search_space = ps(
 )
 ```
 
-A common use-case is the necessity to specify a list of values that should all be tried (or sampled from).
-It may be the case that a hyperparameter accepts function objects as values and a certain list of functions should be tried.
-Or it may be that a choice of special numeric values should be tried.
-For this, the `r ref("p_fct")` constructor's `level` argument may be a value that is not a `character` vector, but something else.
-If, for example, only the values 0.1, 3, and 10 should be tried for the `cost` parameter, even when doing random search, then the following search space would achieve that:
-
-```{r optimization-050}
-search_space = ps(
-  cost = p_fct(c(0.1, 3, 10)),
-  kernel = p_fct(c("polynomial", "radial"))
-)
-```
-
-This is equivalent to the following:
-```{r optimization-051}
-search_space = ps(
-  cost   = p_fct(c("0.1", "0.3", "10"),
-    trafo = function(x) list(`0.1` = 0.1, `3` = 3, `10` = 10)[[x]]),
-  kernel = p_fct(c("polynomial", "radial"))
-)
-```
-
-This makes sense when considering that factorial tuning parameters are always `character` values:
-
-```{r optimization-052}
-search_space = ps(
-  cost   = p_fct(c(0.1, 3, 10)),
-  kernel = p_fct(c("polynomial", "radial"))
-)
-typeof(search_space$params$cost$levels)
-```
-
-:::{.callout-warning}
-Be aware that this results in an "unordered" hyperparameter.
-Tuning algorithms that make use of ordering information of parameters, like evolutionary strategies or model-based optimization, will perform worse when this is done.
-For these algorithms, it may make more sense to define a `r ref("p_dbl")` or `r ref("p_int")` with a more fitting transformation.
-:::
-
-### Creating Search Spaces from Learners {#sec-search-space-token}
-
-In @sec-tuning-instance we have seen how one can conveniently define the tuning space of a learner using a `r ref("TuneToken")`.
-We will now show how some of the advanced features from @sec-search-space-scratch can also be used through this mechanism.
-
-A `r ref("TuneToken")` can also be constructed with a `r ref("Domain")` object, i.e. something constructed with a `p_<type>` call.
-This makes it possible to also specify dependencies and transformations of parameters.
-Dependencies are usually taken from the `r ref("ParamSet")`  of the learner, so we don't need to specify them.
-But being able to set a dependency with a `r ref("TuneToken")` is helpful when we work with pipelines (see @sec-pipelines).
-However, to keep the example simple, let's show it here again on an SVM.
-
-```{r optimization-053}
-learner = lrn("classif.svm",
-  kernel  = to_tune(c("linear", "polynomial")),
-  gamma   = to_tune(p_dbl(1e-4, 1e4, depends = kernel == "polynomial"))
-)
-
-learner$param_set$search_space()
-```
-
-Setting up a transformation works similarly.
+In other cases, we may need to tune two or more 'pseudoparameters' that do not exist in our learner's parameter set, but are required to tune a vector parameter.
+For example, say we want to tune the architecture of a neural network, in which we need to decide the number of layers and the number of nodes in each layer, this is the case in the `num_nodes` hyperparameter in the `lrn("surv.coxtime")` learner.
+In this case the learner expects a vector where each element corresponds to the number of nodes and the length corresponds to the number of layers.
+We could then tune this as follows:
 
 ```{r}
-learner = lrn("classif.svm",
-  cost = to_tune(p_dbl(-1, 1, trafo = function(x) exp(x)))
+ss = ps(
+  num_layers = p_int(lower = 1, upper = 20),
+  num_nodes_per_layer = p_int(4, 64),
+  .extra_trafo = function(x, param_set) {
+    x$num_nodes = rep(x$num_nodes_per_layer, x$num_layers)
+    x$num_layers = NULL
+    x$num_nodes_per_layer = NULL
+    x
+  }
 )
 ```
 
-It is even possible to define whole `r ref("ParamSet")`s that get tuned over for a single parameter.
-This may be especially useful for vector hyperparameters that should be searched along multiple dimensions.
-In this special case, the `.extra_trafo` must return a list with a single element, as it corresponds to a single hyperparameter that is being tuned.
-Suppose the `class.weights` hyperparameter should be tuned along two dimensions:
+Here we are tuning the pseudo-parameter `num_layers` between 1 and 20, then tuning the pseudo-parameter `num_nodes_per_layer` between 4 and 64, then we are combining these into a vector called `num_nodes` (the real hyperparameter) and removing the pseudo-parameters.
 
-```{r optimization-055}
-par = ps(
-  M = p_dbl(0.1, 0.9),
-  R = p_dbl(0.1, 0.9),
-  .extra_trafo = function(x, param_set) {
-    list(c(M = x$M, R = x$R))
-  }
-)
-learner$param_set$set_values(class.weights = to_tune(par))
+```{r}
+ss$trafo(list(num_layers = 4, num_nodes_per_layer = 12))
+```
+
+Once again, we could pass this straight to the learner using `to_tune` but this time passing the whole `ParamSet` object:
+
+```{r}
+learner = lrn("surv.coxtime")
+learner$param_set$set_values(num_nodes = to_tune(ss))
 learner$param_set$search_space()
 ```
 
-:::{.callout-tip}
-The `.extra_trafo` from `par` parameter set only has access to the parameters `M` and `R` and not the other parameters from the learner's search space.
-:::
+However note that in this case the transformation would only have access to the pseudo-hyperparameters and not the rest of the parameters in the learner's parameter set.
 
-### Recommended Search Spaces {#sec-tuning-spaces}
+### Hyperparameter dependencies
+
+{{< include _optional.qmd >}}
+
+Hyperparameter dependencies occur when a hyperparameter should only be set if another hyperparameter has a particular value.
+For example, the `degree` parameter in SVM is only valid when `kernel` is "polynomial".
+In the `ps()` function, we specify this using the `depends` argument, which takes a named argument of the form `<param> == value` or `<param> %in% <vector>`:
+
+```{r}
+ps(
+  kernel = p_fct(c("polynomial", "radial")),
+  degree = p_int(1, 3, depends = (kernel == "polynomial")),
+  gamma = p_dbl(1e-5, 1e5, depends = (kernel %in% c("polynomial", "radial")))
+)
+```
+
+Above we have said that `degree` should only be set if `kernel` is (`==`) `"polynomial"`, and `gamma` should only be set if `kernel` is one of (`%in%`) `"polynomial"`, `"radial"`, or `"sigmoid"`.
+In practice, the underlying implementation would simply ignore unused parameters, so if we passed `degree` to `r ref("e1071::svm()")` when `kernel` is not polynomial, then the `degree` parameter would simply be ignored.
+However, this would be incredibly wasteful during tuning if we were trying to tune `degree` when the kernel was not polynomial, hence setting the dependency tells the tuning process to tune `degree` iff `kernel` is `"polynomial"` and to ignore it otherwise.
+
+Dependencies can also be passed straight into a learner using `to_tune`:
+
+```{r}
+lrn("classif.svm",
+  kernel = to_tune(c("polynomial", "radial")),
+  degree = to_tune(p_int(1, 3, depends = (kernel == "polynomial")))
+)$param_set$search_space()
+```
+
+### Recommended Search Spaces with `mlr3tuningspaces` {#sec-tuning-spaces}
+
+{{< include _optional.qmd >}}
 
 Selected search spaces can require a lot of background knowledge or expertise.
 The package `r ref_pkg("mlr3tuningspaces")` tries to make HPO more accessible by providing implementations of published search spaces for many popular machine learning algorithms.
@@ -898,19 +859,20 @@ These search spaces should be applicable to a wide range of data sets, however, 
 The search spaces are stored in the dictionary `r ref("mlr_tuning_spaces")`.
 
 ```{r optimization-056}
-as.data.table(mlr_tuning_spaces)
+library(mlr3tuningspaces)
+as.data.table(mlr_tuning_spaces)[, .(key, label)]
 ```
 
 The tuning spaces are named according to the scheme `{learner-id}.{tuning-space-id}`.
-The `default` tuning spaces are published in @hpo_practical.
-More tuning spaces are part of the random bot experiments `rbv1` and `rbv2` that are published in @kuehn_2018 and @binder2020.
+The `default` tuning spaces are published in @hpo_practical, other tuning spaces are part of the random bot experiments `rbv1` and `rbv2` published in @kuehn_2018 and @binder2020.
 The sugar function `r ref("lts()")` is used to retrieve a `r ref("TuningSpace")`.
 
 ```{r optimization-057}
-lts("classif.rpart.default")
+rpart_hypers = lts("classif.rpart.default")
+rpart_hypers
 ```
 
-A tuning space can be passed to `ti()` as the `search_space`.
+A tuning space can be passed to `ti()` or `auto_tuner()` as the `search_space`.
 
 ```{r optimization-058}
 instance = ti(
@@ -919,58 +881,53 @@ instance = ti(
   resampling = rsmp("cv", folds = 3),
   measures = msr("classif.ce"),
   terminator = trm("evals", n_evals = 20),
-  search_space = lts("classif.rpart.rbv2")
+  search_space = rpart_hypers
 )
 ```
 
-Alternatively, we can explicitly set the search space of a learner with `r ref("TuneToken", "TuneTokens")`
+Alternatively, as loaded search spaces are just a collection of tune tokens, we could also pass these straight to a learner:
 
 ```{r optimization-059}
-vals = lts("classif.rpart.default")$values
-vals[1]
+vals = rpart_hypers$values
+vals
 learner = lrn("classif.rpart")
 learner$param_set$set_values(.values = vals)
+learner$param_set
 ```
 
-When passing a learner to `r ref("lts()")`, the default search space from the @hpo_practical article is applied.
+We could also apply the default search spaces from @hpo_practical by passing the learner to `r ref("lts()")`:
 
 ```{r optimization-060}
-#| result: false
 lts(lrn("classif.rpart"))
 ```
 
-It is possible to simply overwrite a predefined tuning space in construction, for example here we change the range of the `maxdepth` hyperparameter in rpart:
+Finally, it is possible to overwrite a predefined tuning space in construction, for example changing the range of the `maxdepth` hyperparameter in a decision tree:
 
 ```{r optimization-061}
 lts("classif.rpart.rbv2", maxdepth = to_tune(1, 20))
 ```
 
-
-
 ## Multi-Objective Tuning {#sec-multi-metrics-tuning}
 
 So far we have considered optimizing a model with respect to one metric, but multi-metric, or `r define("multi-objective")` optimization, is also possible.
-A simple example of multi-objective optimization might be optimizing a classifier to minimize false positive and false negative predictions.
-As a more complex example, consider the problem of deploying a classifier in a healthcare setting.
-One the one hand, we are usually interested in using a model that makes the best possible predictions.
-On the other hand, strong performing models such as deep neural networks or gradient boosted trees with many boosting iterations often can be very hard to interpret (e.g., understanding how a model arrives at a certain prediction can be difficult).
-Especially in healthcare applications interpretability or model complexity can be highly relevant (often a model is more likely to be trusted and adapted in practice if it can provide insight into its reasoning) and in this case, we may be interested in minimizing *both* the classification error and the complexity of the model.
+A simple example of multi-objective optimization might be optimizing a classifier to minimize false positive *and* false negative predictions.
+In another example, consider the single-objective problem of tuning a deep neural network to enable the best possible performance.
+The best performing model is likely to be the hardest to interpret with many layers, which would not be appropriate when interpretability is very important, for example in healthcare.
+In this case we might want to simultaneously minimize the classification error and model complexity.
 
-In general, when optimizing multiple metrics, these will be in competition (if they were not we would only need to optimize with respect to one of them) and so no single configuration exists that optimizes all metrics.
-Focus is therefore given to the concept of `r index("Pareto optimality")`.
-One hyperparameter configuration is said to `r index("Pareto-dominate")` another one if the resulting model is equal or better in all metrics and strictly better in at least one metric.
-All configurations that are not Pareto-dominated by any other configuration are called Pareto efficient and the set of all these configurations is the `r define("Pareto set")`.
-In contrast, the metric values coresponding to these non-dominated confgurations are referred to as the `r define("Pareto front")`.
+By definition, optimization of multiple metrics means these will be in competition (otherwise we would only optimize one of them) and therefore in general no *single* configuration exists that optimizes all metrics.
+We therefore instead focus on the concept of `r index("Pareto optimality")`.
+One hyperparameter configuration is said to `r index("Pareto-dominate")` another if the resulting model is equal or better in all metrics and strictly better in at least one metric.
+For example say we are minimizing classification error, CE, and complexity, CP, for configurations A and B with CE of $CE_A$ and $CE_B$ respectively and CP of $CP_A$ and $CP_B$ respectively.
+Then, A pareto-dominates B if: 1) $CE_A \geq CE_B$ and $CP_A > CP_B$ or; 2) $CE_A > CE_B$ and $CP_A \geq CP_B$.
+All configurations that are not Pareto-dominated by any other configuration are called `r index('Pareto-efficient')` and the set of all these configurations is the `r define("Pareto set")`.
+The metric values corresponding to these Pareto set are referred to as the `r define("Pareto front")`.
 
-The goal of multi-objective HPO is to approximate the true, unknown Pareto front.
-More methodological details on multi-objective HPO can be found in @hpo_multi.
-
+The goal of multi-objective HPO is to approximate the true (but known) Pareto front.
 We will now demonstrate multi-objective HPO by tuning a decision tree on the `r ref("mlr_tasks_sonar", "sonar")` data set with respect to the classification error, as a measure of model performance, and the number of selected features, as a measure of model complexity (in a decision tree the number of selected features is straightforward to obtain by simply counting the number of unique splitting variables).
-We will tune
+Methodological details on multi-objective HPO can be found in @hpo_multi.
 
-* the complexity hyperparameter `cp` that controls when the learner considers introducing another branch.
-* the `minsplit` hyperparameter that controls how many observations must be present in a leaf for another split to be attempted.
-* the `maxdepth` hyperparameter that limits the depth of the tree.
+We will tune `cp`, `minsplit`, and `maxdepth`:
 
 ```{r optimization-082}
 learner = lrn("classif.rpart",
@@ -983,7 +940,7 @@ measures = msrs(c("classif.ce", "selected_features"))
 ```
 
 Note that as we tune with respect to multiple measures, the function `ti` creates a `r ref("TuningInstanceMultiCrit")` instead of a `r ref("TuningInstanceSingleCrit")`.
-We also have to set `store_models = TRUE` because this is required by the selected features measure.
+We also have to set `store_models = TRUE` as this is required by the selected features measure.
 
 ```{r optimization-083}
 instance = ti(
@@ -997,8 +954,7 @@ instance = ti(
 instance
 ```
 
-As before we will then select and run a tuning algorithm.
-Here we use a random search:
+As before we will select and run a tuning algorithm, in this example we will use random search:
 
 ```{r optimization-084,output=FALSE}
 tuner = tnr("random_search", batch_size = 30)
@@ -1006,7 +962,6 @@ tuner$optimize(instance)
 ```
 
 Finally, we inspect the best-performing configurations, i.e., the Pareto set, and visualize the corresponding estimated Pareto front (@fig-pareto).
-Note that the number of selected features can be fractional, as in this example, it is determined through resampling and calculated as an average across the number of selected features per cross-validation fold.
 
 ```{r optimization-085}
 instance$archive$best()[, .(cp, minsplit, maxdepth, classif.ce, selected_features)]
@@ -1043,7 +998,18 @@ ggplot(as.data.table(instance$archive), aes(x = selected_features, y = classif.c
   theme_minimal()
 ```
 
+Determining which configuration to use from the Pareto front is up to you.
+By definition there is no optimal configuration so this may depend on your use-case, for example if you would prefer lower complexity at the cost of higher error than you might prefer a configuration where `selected_features = 1`.
+You can select one configuration and pass it to a learner for training using `$result_learner_param_vals`, so if we want to select the second configuration we would run:
 
+```{r}
+learner = lrn("classif.rpart")
+learner$param_set$values = instance$result_learner_param_vals[[2]]
+learner$param_set
+```
+
+As multi-objective tuning requires manual intervention to select a configuration, it is not possible to use `auto_tuner`.
+Furthermore, it can also be quite difficult to compare multiple models over multiple measures.
 
 ## Multi-Fidelity Tuning via Hyperband {#sec-hyperband}
 
