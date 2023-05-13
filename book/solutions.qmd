@@ -763,3 +763,191 @@ ranger_ceteris = predict_profile(ranger_exp, player_1)
 plot(ranger_ceteris, variables = num_features) +
   ggtitle("Ceteris paribus for R. Lewandowski", " ")
 ```
+
+## Solutions to @sec-bayesian-optimization
+
+1. We first construct the objective function and optimization instance:
+
+```{r}
+rastrigin = function(xdt) {
+  D = ncol(xdt)
+  y = 10 * D + rowSums(xdt^2 - (10 * cos(2 * pi * xdt)))
+  data.table(y = y)
+}
+
+objective = ObjectiveRFunDt$new(
+  fun = rastrigin,
+  domain = ps(x1 = p_dbl(lower = -5.12, upper = 5.12),
+    x2 = p_dbl(lower = -5.12, upper = 5.12)),
+  codomain = ps(y = p_dbl(tags = "minimize")),
+  id = "rastrigin2D")
+
+instance = OptimInstanceSingleCrit$new(
+  objective = objective,
+  terminator = trm("evals", n_evals = 40))
+```
+
+Based on the different surrogate models, we can construct two optimizers:
+
+```{r}
+surrogate_gp = srlrn(lrn("regr.km", covtype = "matern5_2",
+  optim.method = "BFGS", control = list(trace = FALSE)))
+
+surrogate_rf = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
+  se.method = "jack"))
+
+acq_function = acqf("cb", lambda = 1)
+
+acq_optimizer = acqo(opt("nloptr", algorithm = "NLOPT_GN_ORIG_DIRECT"),
+  terminator = trm("stagnation", iters = 100, threshold = 1e-5))
+
+optimizer_gp = opt("mbo",
+  loop_function = bayesopt_ego,
+  surrogate = surrogate_gp,
+  acq_function = acq_function,
+  acq_optimizer = acq_optimizer)
+
+optimizer_rf = opt("mbo",
+  loop_function = bayesopt_ego,
+  surrogate = surrogate_rf,
+  acq_function = acq_function,
+  acq_optimizer = acq_optimizer)
+```
+
+We then evaluate the given initial design on the instance and optimize it with the first BO algorithm using a Gaussian Process as surrogate model:
+
+```{r, output=FALSE}
+initial_design = data.table(
+  x1 = c(-3.95, 1.16, 3.72, -1.39, -0.11, 5.00, -2.67, 2.44),
+  x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46))
+
+instance$eval_batch(initial_design)
+
+optimizer_gp$optimize(instance)
+
+gp_data = instance$archive$data
+gp_data[, y_min := cummin(y)]
+gp_data[, nr_eval := seq_len(.N)]
+gp_data[, surrogate := "Gaussian Process"]
+```
+
+Afterwards, we clear the instance, evaluate the initial design again and optimize the instance with the second BO algorithm using a random forest as surrogate model:
+
+```{r, output=FALSE}
+instance$archive$clear()
+
+instance$eval_batch(initial_design)
+
+optimizer_rf$optimize(instance)
+
+rf_data = instance$archive$data
+rf_data[, y_min := cummin(y)]
+rf_data[, nr_eval := seq_len(.N)]
+rf_data[, surrogate := "Random Forest"]
+```
+
+We collect all data and visualize the anytime performance:
+
+```{r}
+library(ggplot2)
+library(viridisLite)
+all_data = rbind(gp_data, rf_data)
+ggplot(aes(x = nr_eval, y = y_min, colour = surrogate), data = all_data) +
+  geom_step() +
+  scale_colour_manual(values = viridis(2, end = 0.8)) +
+  labs(y = "Best Observed Function Value", x = "Number of Function Evaluations",
+       colour = "Surrogate Model") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+2. We first construct the non-parallelized objective function and the optimization instance:
+
+```{r}
+schaffer1 = function(xss) {
+  evaluations = lapply(xss, FUN = function(xs) {
+    Sys.sleep(5)
+    list(y1 = xs$x, y2 = (xs$x - 2)^2)
+  })
+  rbindlist(evaluations)
+}
+
+objective = ObjectiveRFunMany$new(
+  fun = schaffer1,
+  domain = ps(x = p_dbl(lower = -10, upper = 10)),
+  codomain = ps(y1 = p_dbl(tags = "minimize"), y2 = p_dbl(tags = "minimize")),
+  id = "schaffer1")
+
+instance = OptimInstanceMultiCrit$new(
+  objective = objective,
+  terminator = trm("run_time", secs = 60))
+```
+
+Using the surrogate, acquisition function and acquisition function optimizer that are provided, we can proceed to optimize the instance via ParEGO:
+
+```{r}
+surrogate = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
+  se.method = "jack"))
+
+acq_function = acqf("ei")
+
+acq_optimizer = acqo(opt("random_search", batch_size = 100),
+  terminator = trm("evals", n_evals = 100))
+
+optimizer = opt("mbo",
+  loop_function = bayesopt_parego,
+  surrogate = surrogate,
+  acq_function = acq_function,
+  acq_optimizer = acq_optimizer,
+  args = list(q = 4))
+```
+
+```{r, output=FALSE}
+optimizer$optimize(instance)
+```
+
+We observe that 12 points were evaluated in total (which makes sense as the objective function evaluation is not yet parallelized and the overhead of each function evaluation is given by 5 seconds).
+While the points are appropriately evaluated in batches of size `q = 4` (with the initial design automatically constructed as the first batch), we don't experience any acceleration of the optimization process unless the function evaluation is explicitly parallelized.
+
+```{r}
+nrow(instance$archive$data)
+instance$archive$data[, c("x", "timestamp", "batch_nr")]
+```
+
+We now parallelize the evaluation of the objective function and proceed to optimize the instance again:
+
+```{r}
+library(future)
+library(future.apply)
+plan("multisession", workers = 4)
+
+schaffer1_parallel = function(xss) {
+  evaluations = future_lapply(xss, FUN = function(xs) {
+    Sys.sleep(5)
+    list(y1 = xs$x, y2 = (xs$x - 2)^2)
+  })
+  rbindlist(evaluations)
+}
+
+objective_parallel = ObjectiveRFunMany$new(
+  fun = schaffer1_parallel,
+  domain = ps(x = p_dbl(lower = -10, upper = 10)),
+  codomain = ps(y1 = p_dbl(tags = "minimize"), y2 = p_dbl(tags = "minimize")),
+  id = "schaffer1_parallel")
+
+instance_parallel = OptimInstanceMultiCrit$new(
+  objective = objective_parallel,
+  terminator = trm("run_time", secs = 60))
+```
+
+```{r, output=FALSE}
+optimizer$optimize(instance_parallel)
+```
+
+By parallelizing the evaluation of the objective function we used our compute resources much more efficiently and evaluated many more points:
+
+```{r}
+nrow(instance_parallel$archive$data)
+instance_parallel$archive$data[, c("x", "timestamp", "batch_nr")]
+```
+
