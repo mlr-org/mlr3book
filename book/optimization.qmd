@@ -1285,23 +1285,24 @@ ggplot(data, aes(x = subsample.frac, y = classif.ce, group = i)) +
 
 {{< include _optional.qmd >}}
 
-This section is devoted to advanced tuning techniques.
-The topics are not necessary for a basic understanding of tuning but make tuning more efficient and robust.
+This section is devoted to advanced tuning techniques, which are not necessary for a basic understanding of tuning but will make tuning more efficient and robust.
 
-### Encapsulation and Fallback Learner {#sec-encapsulation-fallback}
+### Error Handling {#sec-encapsulation-fallback}
 
-Until now, we have focused on working examples, but to demonstrate encapsulation we will now consider 'broken' examples, e.g., where learners do not converge, run out of memory, or terminate with an error.
-To get an error in the following examples, we filter the `sonar` task to only one class.
+Error handling is discussed in detail in @sec-error-handling, however we will briefly discuss it here in the context of tuning as encapsulation and fallback learners are essential in complex tuning experiments.
+
+Until now, we have focused on examples that do not error, but to demonstrate the purpose of encapsulation and fallback learners, we must consider examples that *will* error, for example those where learners do not converge, run out of memory, or terminate with an error.
+To demonstrate error handling then we will filter the `sonar` task to only one class.
 
 ```{r}
-task = tsk("sonar")
-task$filter(seq(10))
+task = tsk("sonar")$filter(seq(10))
 ```
+
+#### Encapsulation {.unnumbered .unlisted}
 
 Since tuning is an automated process, there is no opportunity for manual intervention, we therefore, mitigate errors by making use of `r define("encapsulation")`.
 Encapsulation allows errors in training to be isolated and handled, without disrupting the tuning process.
-In `r mlr3`, encapsulation is controlled by passing arguments to the `encapsulate` field in any learner, as in the example below.
-The possible options are `evaluate` and `callr` named after the packages of the same name.
+In `r mlr3`, encapsulation is controlled by passing arguments to the `encapsulate` field in any learner, as in the example below, note that encapsulation is set individually for training and predicting, which can be useful if, for example, we are happy to ignore errors in training but want to manually debug any errors in prediction.
 
 ```{r optimization-035}
 learner = lrn("classif.svm",
@@ -1314,9 +1315,7 @@ learner = lrn("classif.svm",
 learner$encapsulate = c(train = "evaluate", predict = "evaluate")
 ```
 
-Note that encapsulation is set individually for training and predicting.
-This separation could be useful if, for example, we are happy to ignore errors in training but want to manually debug any errors in prediction.
-There are currently two options for encapsulating a learner, via the packages `r ref_pkg("evaluate")` and `r ref_pkg("callr")`.
+The possible options to `encapsulate` are `evaluate` and `callr` named after the packages of the same name.
 `r ref_pkg("evaluate")` catches any errors that occur and allows the process to continue, whereas `r ref_pkg("callr")` encapsulation spawns a separate R process (thus comes with more computational overhead) (see @sec-encapsulation).
 This way `r ref_pkg("callr")` also guards against segmentation faults which would tear down the complete R session.
 Both packages allow setting a timeout, which is useful when a learner does not converge.
@@ -1328,19 +1327,21 @@ learner$timeout = c(train = 30, predict = 30)
 ```
 
 With encapsulation, exceptions and timeouts do not stop the tuning.
-Instead, the error message is recorded and a fallback learner is fitted.
+If encapsulation is used during training then a fallback learner must also be selected because the archive needs to include performance values for each configuration.
 
-Fallback learners allow scoring a result when no model was fitted during training.
-A common approach is to predict a weak baseline e.g. predicting the mean of the target (`lrn("regr.featureless")`), or the majority class (`lrn("classif.featureless")`).
+#### Fallback learners {.unnumbered .unlisted}
+
+Fallback learners are essentially learners that are fitted if the learner of interest fails.
+A common approach is to use a featureless learner, `classif/regr.featureless`.
 See @sec-fallback for more detailed information.
 
-Below we set `r ref("mlr_learners_classif.featureless")` as the featureless learner which always predicts the most frequent label.
+Below we set `classif.featureless`, which always predicts the most frequent label, by passing this learner to the `$fallback` field.
 
 ```{r optimization-037}
 learner$fallback = lrn("classif.featureless")
 ```
 
-Errors and warnings that occurred during tuning are stored in the archive.
+We can now run our experiment and see errors and warnings that occurred during tuning in the archive.
 
 ```{r optimization-038}
 instance = tune(
@@ -1353,19 +1354,19 @@ instance = tune(
 )
 
 as.data.table(instance$archive)[, .(cost, gamma, classif.ce, errors, warnings)]
+
+# Reading the error in the first resample result
+instance$archive$resample_result(1)$errors
 ```
 
-
-::: {.callout-note}
-When tuning, encapsulation should always be combined with a fallback learner, because the archive must contain a performance value for each configuration.
-:::
+We can see the tuning ran without breaking because encapsulate captured the errors and logged them before the fallback learners were used for fitting and predicting.
 
 ### Memory Management {#sec-memory-management}
 
 Running a large tuning experiment requires a lot of working memory, especially when using nested resampling.
 Most of the memory is consumed by the models since each resampling iteration creates one new model.
 The option `store_models` in the functions `r ref("ti()")` and `r ref("auto_tuner()")` allows us to enable the storage of the models.
-Storing the models is disabled by default and in most cases, it is not necessary to save the models.
+Storing the models is disabled by default and in most cases is not required.
 
 The archive stores a `r ref("ResampleResult")` for each evaluated hyperparameter configuration.
 The contained `r ref("Prediction")` objects can take up a lot of memory, especially with large data sets and many resampling iterations.
@@ -1373,20 +1374,18 @@ We can disable the storage of the resample results by setting `store_benchmark_r
 Note that without the resample results, it is no longer possible to score the configurations on another measure.
 
 When we run nested resampling with many outer resampling iterations, additional memory can be saved if we set `store_tuning_instance = FALSE` in the `r ref("auto_tuner()")` function.
-The functions `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` will then no longer work.
+However, the functions `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` would then no longer work.
 
 The option `store_models = TRUE` sets `store_benchmark_result` and `store_tuning_instance` to `TRUE` because the models are stored in the benchmark results which in turn is part of the instance.
 This also means that `store_benchmark_result = TRUE` sets  `store_tuning_instance` to `TRUE`.
 
 Finally, we can set `store_models = FALSE` in the `r ref("resample()")` or `r ref("benchmark()")` functions to disable the storage of the auto tuners when running nested resampling.
-This way we can still access the aggregated performance (`rr$aggregate()`) but do not have any information about the inner resampling anymore.
-
+This way we can still access the aggregated performance (`rr$aggregate()`) but lose information about the inner resampling.
 
 ## Conclusion
 
-In this chapter, we learned how to optimize a model using tuning instances, about different tuners and terminators, search spaces and transformations, how to make use of the automated methods for quicker implementation in larger experiments, and the importance of nested resampling.
+In this chapter, we learned how to optimize a model using tuning instances, about different tuners and terminators, search spaces and transformations, how to make use of automated methods for quicker implementation in larger experiments, and the importance of nested resampling.
 The most important functions and classes we learned about are in @tbl-api-optimization alongside their R6 classes.
-If you are interested in learning more about the underlying R6 classes to gain finer control of these methods, then you are invited to take a look at the online documentation.
 
 | S3 function | R6 Class | Summary |
 | ------------------- | -------- | -------------------- |
@@ -1400,14 +1399,11 @@ If you are interested in learning more about the underlying R6 classes to gain f
 
 :Core S3 'sugar' functions for model optimization in mlr3 with the underlying R6 class that are constructed when these functions are called (if applicable) and a summary of the purpose of the functions. {#tbl-api-optimization}
 
-### Resources{.unnumbered .unlisted}
+We have a few practical examples of tuning that may be useful for more specific use-cases, including:
 
-The `r link("https://cheatsheets.mlr-org.com/mlr3tuning.pdf", "mlr3tuning cheatsheet")` summarizes the most important functions of mlr3tuning and the `r link("https://mlr-org.com/gallery.html#category:tuning", "mlr3 gallery")` features a collection of case studies and demonstrations about optimization, most notably learn how to:
-
-  - Apply advanced methods in the `r link("https://mlr-org.com/gallery.html#category:practical_tuning_series", "practical tuning series")`.
-  - Optimize an rpart classification tree with only a `r link("https://mlr-org.com/gallery/2022-11-10-hyperparameter-optimization-on-the-palmer-penguins/", "few lines of code")`.
-  - Tune an XGBoost model with `r link("https://mlr-org.com/gallery/2022-11-04-early-stopping-with-xgboost/", "early stopping")`.
-  - Quickly load and tune over search spaces that have been published in literature with `r link("https://mlr-org.com/gallery/2021-07-06-introduction-to-mlr3tuningspaces/", "mlr3tuningspaces")`.
+  - Optimizing an rpart classification tree with only a `r link("https://mlr-org.com/gallery/2022-11-10-hyperparameter-optimization-on-the-palmer-penguins/", "few lines of code")`.
+  - Tuning an XGBoost model with `r link("https://mlr-org.com/gallery/2022-11-04-early-stopping-with-xgboost/", "early stopping")`.
+  - Loading and tuning search spaces with `r link("https://mlr-org.com/gallery/2021-07-06-introduction-to-mlr3tuningspaces/", "mlr3tuningspaces")`.
 
 ## Exercises
 
