@@ -83,7 +83,13 @@ This is where `r ref_pkg("mlr3pipelines")` [@mlr3pipelines] steps in: it takes m
 Individual, frequently encountered building blocks, such as missing value imputation or majority vote ensembling, are provided as an (R6-)object, which we call a `r define("PipeOp")`.
 These PipeOps can be connected using directed edges inside a `r define("Graph")` (or `r define("Pipeline")`) to represent the flow of data between operations.
 
-Some examples of what can be implemented with `r mlr3pipelines` are:
+:::{.callout-tip}
+The `r ref("Graph")` class represents an object similar to a directed acyclic graph (DAG), since the input of a PipeOp can not depend on its output and hence cycles are not allowed.
+However, the resemblance to a DAG is not perfect, since the `r ref("Graph")` class allows for multiple edges between nodes.
+A term such as "directed acyclic multigraph" would be more accurate, but we will stick to the term "Graph" for simplicity.
+:::
+
+Some examples of operations that can be performed with `r mlr3pipelines` are:
 
 * Data manipulation and preprocessing operations, e.g. PCA, feature filtering, missing value imputation.
 * Task subsampling for speed or for handling of imbalanced classes.
@@ -275,7 +281,7 @@ po()
 
 ## `Graph`: Networks of `PipeOp`s {#sec-pipelines-graphs}
 
-### Basics: Sequential `Graph`s
+### Basics: Building a `Graph`
 
 PipeOps are used to represent individual computational steps in ML pipelines.
 These pipelines themselves are defined by `r ref("Graph")` objects.
@@ -352,7 +358,7 @@ Inspecting these results may help understanding the inner workings of Graphs, in
 ```{r 05-pipelines-in-depth-021-x, eval = TRUE}
 gr$keep_results = TRUE
 result = gr$predict(single_line_iris)
-intermediate = gr$pipeops$scale$.result
+intermediate = gr$pipeops$mutate$.result
 intermediate
 intermediate[[1]]$data()
 ```
@@ -387,7 +393,9 @@ gr = po_area %>>% learner_rpart  # could just as well use po_rpart
 gr$plot(horizontal = TRUE)
 ```
 
-To use a Graph as a learner within `r mlr3`, it is necessary to wrap it in a `r ref("GraphLearner")` object, by using `r ref("as_learner", "as_learner()")`.
+To use a Graph as a learner within `r mlr3`, it is necessary to wrap it in a `r ref("GraphLearner")` object, since there are various differences between the classes.
+Most impportantly, the return values of the `$train()` and `$predict()` methods differ between Graphs and learners.
+Convert a Graph to a `r ref("GraphLearner")` by using `r ref("as_learner", "as_learner()")`.
 ```{r 05-pipelines-modeling-2, eval = TRUE}
 graph_learner = as_learner(gr)
 ```
@@ -444,7 +452,7 @@ However, this method is does not work for ensembling `r ref("GraphLearner")` obj
 ### Pipeline Hyperparameters {#sec-pipelines-hyperparameters}
 
 Just like `r ref("Learner")`s, PipeOps have *hyperparameters* provided by the `r mlr3book::ref_pkg("paradox")` package.
-They can be accessed through the `$param_set` field and provide information about the parameters that can be changed.
+They can be accessed through the `$param_set` field and provide information about the hyperparameters that can be changed.
 
 ```{r 05-pipelines-in-depth-032, eval = TRUE}
 po_pca = po("pca")
@@ -468,21 +476,13 @@ gr = po_pca %>>% po("scale", center = TRUE)
 gr$param_set
 ```
 
+:::{.callout-warning}
 When a learner gets encapsulated in a `r ref("PipeOpLearner")` through `as_pipeop()`, its `ParamSet` is exposed.
 When this PipeOp then becomes part of a Graph, the hyperparameters get prefixed with the PipeOp's ID, which is the learner's ID by default.
 When a Graph is turned back into a learner using `as_learner()`, the resulting `r ref("GraphLearner")` retains the Graph's `r ref("ParamSet")`.
 This means, the original learner's hyperparameters are now prefixed with the learner's ID.
-
-```{r 05-pipelines-in-depth-037, eval = TRUE}
-learner_rpart = lrn("classif.rpart", maxdepth = 2)
-learner_rpart$param_set$values
-po_rpart = as_pipeop(learner_rpart)
-po_rpart$param_set$values
-gr = po_pca %>>% po_rpart
-gr$param_set$values
-graph_learner = as_learner(gr)
-graph_learner$param_set$values
-```
+So for example, if a `r ref("LearnerClassifRpart", "lrn(\"classif.rpart\")")` is encapsulated in a Graph, its `maxdepth` hyperparameter becomes `classif.rpart.maxdepth`.
+:::
 
 The hyperparameters of a `r ref("GraphLearner")` can be changed directly (recommended), but they can also be accessed indirectly by modifying the underlying Graph's, PipeOp's, or learner's hyperparameters.
 The following demonstrates the many options. Notice how all these changes are ultimately reflected in the `r ref("GraphLearner")`'s `$param_set$values` field.
@@ -556,9 +556,11 @@ Processing the first five lines of the "Pima" dataset with this Graph shows how 
 They are imputed, and the corresponding `"missing"`-columns indicate where values were missing.
 ```{r 05-pipelines-modeling-004, eval = TRUE}
 pima_head = tsk("pima")$filter(1:5)
-pima_head$data()
-result = gr$train(pima_head)
-result[[1]]$data()
+pima_head$data(cols = c("diabetes", "insulin", "triceps"))
+result = gr$train(pima_head)[[1]]
+result$data(
+  cols = c("diabetes", "insulin", "missing_insulin", "triceps", "missing_triceps")
+)
 ```
 
 ### `po("select")`, `po("featureunion")`, and `affect_columns`
@@ -606,12 +608,17 @@ Solving the problem with the `affect_columns` hyperparameter would then work as 
 sel_petal = selector_grep("^Petal")
 sel_not_petal = selector_invert(sel_petal)
 
-gr = po("pca", affect_columns = sel_petal) %>>%
-  po("scale", affect_columns = sel_not_petal)
+gr = po("scale", affect_columns = sel_not_petal) %>>%
+  po("pca", affect_columns = sel_petal)
 
 result = gr$train(tsk("iris"))
 result[[1]]$head()
 ```
+
+:::{.callout-warning}
+Care should be taken with this approach if PipeOps rename or add columns.
+In this example, if the `r ref("PipeOpPCA", "po(\"pca\")")` were used before the `r ref("PipeOpScale", "po(\"scale\")")`, the `r ref("PipeOpPCA", "po(\"pca\")")` would add columns `"PC1"` and `"PC2"`, and the `r ref("PipeOpScale", "po(\"scale\")")` would scale these columns as well, since they would match `sel_not_petal`.
+:::
 
 Solving this using parallel paths makes use of the `r ref("PipeOpSelect", "po(\"select\")")` operator.
 It removes all features that are not selected by a given Selector, making it possible to have independent data processing streams for different feature subsets.
@@ -649,22 +656,17 @@ result[[1]]$head()
 
 ### Example: Bagging {#sec-pipelines-bagging}
 
-The basic idea of Bagging, introduced by [@Breiman1996], is to create multiple predictors and then aggregate those to a single, more powerful predictor:
-
-> "... multiple versions are formed
-> by making bootstrap replicates of the learning set
-> and using these as new learning sets" [@Breiman1996]
-
+The basic idea of Bagging, introduced by [@Breiman1996], is to create multiple predictors and then aggregate those to a single, more powerful predictor.
 Predictions are aggregated by averaging (regression) or majority vote (classification).
-The idea behind bagging is that a set of weak, but different (i.e., only weakly correlated) predictors can be combined in order to arrive at a single, better predictor.
+The underlying intuition behind bagging is that averaging set of weak, but different (i.e., only weakly correlated) predictors can reduce the variance of the overall prediction.
 
-We can achieve this by downsampling our data before training a learner, repeating this a number of times, and then performing a majority vote on the predictions.
+We can achieve this by subsampling our data before training a learner, repeating this a number of times, and then performing a majority vote on the predictions.
 A schematic is shown in @fig-pipelines-bagging.
 
 
 ```{r eval = TRUE}
 #| label: fig-pipelines-bagging
-#| fig-cap: "Graph that performs Bagging by independently subsampling data and fitting individual decision tree learners. The resulting predictions are aggregated by a majority vote PipeOp."
+#| fig-cap: "Graph that performs Bagging by independently subsampling data and fitting individual decision tree learners. The resulting predictions are aggregated by a majority vote PipeOp. Note that the name of the majority vote PipeOp is \"classif.avg\" for naming consistency."
 #| fig-alt: "Bagging Graph. Data flows through independent subsampling PipeOps and decision tree learners, to be combined by a majority vote PipeOp."
 #| out.width: "70%"
 #| echo: false
@@ -718,6 +720,7 @@ The main difference is that the random forest also performs "feature bagging", w
 We can implement using the `r ref("PipeOpSelect", "po(\"select\")")` operator and a custom `Selector`.
 We also use the `r ref("pipeline_bagging", "ppl(\"bagging\")")` method mentioned above.
 It makes use of the `r ref("Multiplicity")` construct, which is a more efficient way of building massively parallel Graphs.
+We therefore need to tell `r ref("PipeOpClassifAvg", "po(\"classifavg\")")` to accept a `r ref("Multiplicity")` object as input, which is done by setting `collect_multiplicity = TRUE`.
 Here we use 300 trees, just as the random forest.
 
 ```{r 05-bagging-ex}
@@ -748,7 +751,7 @@ bmr$aggregate(msrs(c("classif.ce", "time_both")))
 
 The result shows that we managed to build a learner that behaves and performs very closely to `r ref("ranger::ranger")`.
 The `time_both` measure also tells us that our implementation is slower by orders of magnitude, since `r ref("ranger::ranger")` is written in C++.
-However, it also took us much less time construct our custom learner, compared to what the authors of `r ref("rpart::rpart")` likely needed.
+However, it also took us much less time construct our custom learner, compared to what the authors of `r ref("ranger::ranger")` likely needed.
 If the goal is to construct new kinds of learning algorithms that work for a specific purpose, then computer time is often much cheaper than developer time!
 
 
