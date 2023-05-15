@@ -835,35 +835,27 @@ Enabling the debug mode should only be done to investigate problems, however, an
 In mlr3, `r ref("Task")` objects store their data in an abstract data object, the `r ref("DataBackend")`.
 A `r index("data backend")` provides a unified API to retrieve subsets of the data or query information about it, regardless of how the data is actually stored on the system.
 The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` as a very fast and efficient in-memory database.
-For example, we can query the dimensions of the penguins task:
-```{r technical-033}
-task = tsk("penguins")
-backend = task$backend
-backend$nrow
-backend$ncol
-```
 
-While storing the Task's data in memory is most efficient w.r.t. accessing it for model fitting, this has two major disadvantages:
+While storing the Task's data in memory is most efficient with respect to accessing it for model fitting, there are two major disadvantages:
 
 1. Although only a small proportion of the data is required, the complete data frame sits in memory and consumes memory.
   This is especially a problem if you work with large tasks or many tasks simultaneously, e.g., for benchmarking.
-2. During parallelization, the complete data needs to be transferred to the workers which can increase the overhead.
+1. During parallelization (@sec-parallelization), the complete data needs to be transferred to the workers which can increase the overhead.
 
 To avoid these drawbacks, especially for larger data, it can be necessary to interface out-of-memory data to reduce the memory requirements.
 This way, only the part of the data which is currently required by the learners will be placed in the main memory to operate on.
 There are multiple options to archive this:
 
-1. `r ref("DataBackendDplyr")` which interfaces the R package `r ref_pkg("dbplyr")`, extending `r ref_pkg("dplyr")` to work on many popular `r index("SQL")` databases like `r link("https://mariadb.org/", "MariaDB")`, `r link("https://www.postgresql.org/", "PostgresSQL")` or `r link("https://www.sqlite.org", "SQLite")`.
-2. `r ref("DataBackendDuckDB")` for the impressive `r link("https://duckdb.org/", "DuckDB")` database connected via `r ref_pkg("duckdb")`: a fast, zero-configuration alternative to SQLite.
-3. `r ref("DataBackendDuckDB")`, again, but for `r link("https://parquet.apache.org/", "Parquet files")`.
-  The data does not need to be converted to DuckDB's native storage format, you can work directly on directories containing one or multiple files stored in the popular Parquet format.
+1. `r ref("DataBackendDplyr")` which interfaces the R package `r ref_pkg("dbplyr")`, extending `r ref_pkg("dplyr")` to work on many popular `r index("SQL")` databases like *MariaDB*, *PostgresSQL*, or *SQLite*.
+2. `r ref("DataBackendDuckDB")` for the impressive *DuckDB* database connected via `r ref_pkg("duckdb")`, which is a fast, zero-configuration alternative to SQLite.
+3. `r ref("DataBackendDuckDB")` for `r index("Parquet files")`. This means the data does not need to be converted to DuckDB's native storage format and instead you can work directly on directories containing one or multiple files stored in the popular Parquet format.
 
-In the following, we will show how to work with data backends that are available through `r ref_pkg("mlr3db")`.
+In the following, we will show how to work with each of these choices using `r ref_pkg("mlr3db")`.
 
 ### Databases with DataBackendDplyr
 
 To demonstrate the `r ref("mlr3db::DataBackendDplyr")` we use the NYC flights data set from the `r ref_pkg("nycflights13")` package and move it into a `r index("SQLite")` database.
-Although `r ref("as_sqlite_backend()")` provides a convenient function to perform this step, we construct the database manually here.
+Although `r ref("mlr3db::as_sqlite_backend()")` provides a convenient function to perform this step, we construct the database manually here.
 
 ```{r technical-034, message = FALSE}
 # load data
@@ -887,120 +879,94 @@ rm(flights)
 ```
 
 With the SQLite database stored in file `path`, we now re-establish a connection and switch to `r ref_pkg("dplyr")`/`r ref_pkg("dbplyr")` for some essential preprocessing.
-If you had a real `r index("database management system")` (DBMS), this would be the first step now:
 
-```{r technical-035, echo = FALSE}
+```{r technical-035, message = FALSE}
 # establish connection
 con = DBI::dbConnect(RSQLite::SQLite(), path)
 
 # select the "flights" table, enter dplyr
-library("dplyr")
-library("dbplyr")
+library(dplyr)
+library(dbplyr)
 tbl = tbl(con, "flights")
 ```
 
-As databases are intended to store large volumes of data, a natural first step is to slice and dice the data to suitable dimensions.
-Therefore, we build up an SQL query in a step-wise fashion using `r ref_pkg("dplyr")` verbs and start by selecting a subset of columns to work on:
+As databases are intended to store large volumes of data, a natural first step is to subset and filter the data to suitable dimensions.
+Therefore, we build up an SQL query in a step-wise fashion using `r ref_pkg("dplyr")` verbs and:
+
+1. Select a subset of columns to work on;
+2. Remove observations where the arrival delay (`arr_delay`) has a missing value;
+3. Filter the data to only use every second row (to reduce example runtime); and
+4. Merge factor levels of the feature `carrier` so infrequent carriers are replaced by level "other".
 
 ```{r technical-036}
+# 1. subset columns
 keep = c("row_id", "year", "month", "day", "hour", "minute", "dep_time",
   "arr_time", "carrier", "flight", "air_time", "distance", "arr_delay")
 tbl = select(tbl, all_of(keep))
-```
 
-Additionally, we remove those observations where the arrival delay (`arr_delay`) has a missing value:
-
-```{r technical-037}
+# 2. filter by missing
 tbl = filter(tbl, !is.na(arr_delay))
-```
 
-To reduce the runtime for this example, we also filter the data to only use every second row:
-
-```{r technical-038}
+# 3. select every other row
 tbl = filter(tbl, row_id %% 2 == 0)
-```
 
-The factor levels of the feature `carrier` are merged so that infrequent carriers are replaced by level "other":
-
-```{r technical-039}
+# 4. merge infrequent carriers
 tbl = mutate(tbl, carrier = case_when(
   carrier %in% c("OO", "HA", "YV", "F9", "AS", "FL", "VX", "WN") ~ "other",
   TRUE ~ carrier))
 ```
 
-Next, the processed table is used to create a `r ref("mlr3db::DataBackendDplyr")` from `r mlr3db`:
+Having prepared our data, we can now create a `r ref("mlr3db::DataBackendDplyr")` using `r mlr3db` and can then query basic information from our new `r ref("DataBackend")`:
 
 ```{r technical-040}
-library("mlr3db")
+library(mlr3db)
 b = as_data_backend(tbl, primary_key = "row_id")
-```
-
-We can now use the interface of `r ref("DataBackend")` to query some basic information about the data:
-
-```{r technical-041}
-b$nrow
-b$ncol
+c(nrow = b$nrow, ncol = b$ncol)
 b$head()
 ```
 
-Note that the `r ref("DataBackendDplyr")` does not know about any rows or columns we have filtered out with `r ref_pkg("dplyr")` before, it just operates on the view we provided.
+Note that the `r ref("DataBackendDplyr")` can only operate on the data we provided, so does not 'know' about the rows and columns we already filtered out (this is in contrast to using `$filter` and `$subset` as in <!-- TODO ADD REFERENCE TO ADVANCED TASK ROLES -->).
 
-As we now have constructed a backend, we can switch over to `r mlr3` for model fitting on a task based on the previously created `r ref("mlr3db::DataBackendDplyr")`:
+With a backend constructed, we can now use the standard `mlr3` API:
 
 ```{r technical-042}
 task = as_task_regr(b, id = "flights_sqlite", target = "arr_delay")
-learner = lrn("regr.rpart")
 resampling = rsmp("subsampling", ratio = 0.02, repeats = 3)
 ```
 
-We pass all these objects to `r ref("resample()")` to perform a subsampling on 2% of the observations three times.
-In each iteration, only the required subset of the data is queried from the SQLite database and passed to `r ref("rpart::rpart()")`:
+Above we created a regression task by passing a backend as the first argument and then created a resampling strategy where we will subsample 2% of the observations three times.
+In each resampling iteration, only the required subset of the data is queried from the SQLite database and passed to our learner:
 
-```{r technical-043}
-rr = resample(task, learner, resampling)
-print(rr)
-
-measures = msrs(c("regr.mse", "time_train", "time_predict"))
+```{r technical-043, message=FALSE}
+rr = resample(task, lrn("regr.rpart"), resampling)
+measures = msrs(c("regr.rmse", "time_train", "time_predict"))
 rr$aggregate(measures)
 ```
 
-Note that we still have an active connection to the database.
-To properly close it, we remove the `tbl` object referencing the connection and then close the connection.
+As we have finished our experiment we can now close our connection, which we can do by removing the `tbl` object referencing the connection and then closing it.
 
 ```{r technical-044}
 rm(tbl)
 DBI::dbDisconnect(con)
 ```
 
-
 ### Parquet Files with DataBackendDuckDB
 
-We have already demonstrated how to operate on a SQLite database.
-`r index("DuckDB")` databases (using `r ref("DataBackendDuckDB")`) provide a modern alternative to SQLite, tailored to the needs of machine learning.
-To convert a `data.frame` to DuckDB, we provide the helper function `r ref("as_duckdb_backend()")`.
-Only two arguments are required: the `data.frame` to convert, and a `path` to store the data.
-
-While this is useful while working with many tasks simultaneously in order to keep the memory requirements reasonable, the more frequent use case for DuckDB are nowadays [`r index("Parquet")` files](https://en.wikipedia.org/wiki/Apache_Parquet).
+`r index("DuckDB")` databases provide a modern alternative to SQLite, tailored to the needs of machine learning.
 Parquet is a popular column-oriented data storage format supporting efficient compression, making it far superior to other popular data exchange formats such as CSV.
 
-To demonstrate working with Parquet files, we first query the location of an example data set shipped with `r ref_pkg("mlr3db")`:
+Converting a `data.frame` to DuckDB is easily possible by passing the `data.frame` to convert and the `path` to store the data to `r ref("mlr3db::as_duckdb_backend()")`.
+By example, below we we first query the location of an example data set in a Parquet file shipped with `r ref_pkg("mlr3db")` and then convert the resulting `r ref("DataBackendDuckDB")` object into a classification task, all without loading the dataset into memory:
 
 ```{r technical-045}
 path = system.file(file.path("extdata", "spam.parquet"), package = "mlr3db")
-```
-
-We can then create a `r ref("DataBackendDuckDB")` based on this file and convert the backend to a classification task, all without loading the dataset into memory:
-
-```{r technical-046}
 backend = as_duckdb_backend(path)
-task = as_task_classif(backend, target = "type")
-print(task)
+as_task_classif(backend, target = "type")
 ```
 
-Accessing the data internally triggers a query and data is fetched to be stored in an in-memory `data.frame`, but only the required subsets.
+Accessing the data internally triggers a query and the required subsets of data are fetched to be stored in an in-memory `data.frame`.
 After the retrieved data is processed, the garbage collector can release the occupied memory.
-The backend can also operate on a folder with multiple parquet files, which is documented in `r ref("as_duckdb_backend()")`.
-
+The backend can also operate on a folder with multiple parquet files.
 
 ## Extending mlr3 {#sec-extending}
 
