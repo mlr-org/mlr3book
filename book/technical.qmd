@@ -18,66 +18,72 @@ This includes the following topics:
 
 ## Parallelization {#sec-parallelization}
 
+{{< include _optional.qmd >}}
+
 The term `r index("parallelization")` refers to running multiple algorithms in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 Not all algorithms can be parallelized, but when they can, parallelization allows significant savings in computation time.
 
-In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, `r link("https://en.wikipedia.org/wiki/Thread_(computing)", "threads")` or `r link("https://en.wikipedia.org/wiki/Fork_(system_call)", "processes")` are ways to utilize all cores on a local machine.
-If you have multiple machines on the other hand, the machines need a way to communicate and exchange information, e.g. via protocols like network sockets or the `r link("https://en.wikipedia.org/wiki/Message_Passing_Interface", "Message Passing Interface (MPI)")`.
+In general, there are many possibilities to parallelize, depending on the hardware to run the computations: If you only have a single CPU with multiple cores, then *threads* or *processes* are ways to utilize all cores on a local machine.
+If you have multiple machines on the other hand, they can communicate and exchange information via protocols such as *network sockets* or the *Message Passing Interface* (MPI).
 Larger computational sites rely on a scheduler to orchestrate the computation for multiple users and offer a shared network file system all machines can access.
 Interacting with scheduling systems on compute clusters is covered in @sec-hpc-exec using the R package `r ref_pkg("batchtools")`.
-We do not want to delve too deep into such details here, but want to introduce some terminology which helps us to discuss parallelization on a more abstract level:
 
-* We call the hardware to parallelize on together with the respective interface provided by an R package the `r define("parallelization backend")`.
-  As many parallelization backends have different APIs, we are using the `r ref_pkg("future")` package as an abstraction layer for many parallelization backends.
-  `r mlr3` just interfaces `r ref_pkg("future")` while the user can control how the code is executed by configuring a backend prior to starting the computations.
-* The R session or process which orchestrates the computational work is called `r define("main")`, and it starts computational `r define("jobs")`.
-* The R sessions, processes, or machines which receive the jobs, do the calculation and then send back the result are called `r define("workers")`.
+There are a few pieces of terminology associated with parallelization that we will use in this section:
 
-An important step in parallel programming involves the identification of sections of the program flow which are both time-consuming (`r define("bottlenecks")`) and also can run independently of a different section.
-The key characteristic is that these sections do not depend on each other, i.e. section A can be ran without waiting for results from section B.
-Fortunately, these sections are comparably easy to spot for machine learning experiments:
+* The `r define("parallelization backend")` is the hardware to parallelize with a respective interface provided by an R package.
+  Many parallelization backends have different APIs, so we use the `r ref_pkg("future")` package as a unified, abstraction layer for many parallelization backends.
+  From a user-perspective, `r mlr3` interfaces with `r ref_pkg("future")` directly so all you will need to do is configure the backend prior to starting any computations.
+* `r define("Main")` is the R session or process that orchestrates the computational work, called `r define("jobs")`.
+* `r define("Workers")` are the R sessions, processes, or machines that receive the jobs, perform calculations, and then send the results back to main.
 
-1. The training of a learning algorithm (or other computationally intensive parts of a machine learning pipeline, c.f. @sec-pipelines) *may* contain independent sections which can run in parallel, e.g.
+::: {.callout-tip}
+# Reproducibility
+
+Reproducibility is often a concern during parallelization because special Pseudorandom number generators (PRNGs) may be required (@future119).
+However, `r ref_pkg("future")` ensures that all workers will receive the exactly same PRNG streams, independent of the number of workers (@future119).
+Therefore in `mlr3` experiments will be reproducible as long as you use `set.seed` at the start of your scripts (with the PRNG of your choice).
+
+Note we can never guarantee complete reproducibility as this ultimately depends on the computational accuracy of the hardware, the processor instructions used, compiler versions and optimization flags, and/or the `r index("BLAS")` library for linear algebra R links to.
+:::
+
+An important step in parallel programming involves the identification of sections of the program flow that are both time-consuming (`r index("bottlenecks")`) and can run independently of a different section, i.e., section A's jobs are not dependent on the results of section B's jobs, and vice versa.
+Fortunately, these sections are relatively easy to spot for machine learning experiments:
+
+1. Training of a learning algorithm (or other computationally intensive parts of a machine learning pipeline) *may* contain independent sections which can run in parallel, e.g.
     * A single decision tree iterates over all features to find the best split point, for each feature independently.
     * A random forest usually fits hundreds of trees independently.
     * Many feature filters work in a univariate fashion, i.e. calculate a numeric score for each feature independently.
 
-   The key principle that makes parallelization for these examples (and in general in many fields of statistics and ML) is called `r define("data parallelism")`:
-   The same operation is performed concurrently on different elements of the input data.
+   The key principle that makes parallelization possible for these examples (and in general in many fields of statistics and ML) is called `r define("data parallelism")`, which means the same operation is performed concurrently on different elements of the input data.
    Parallelization of learning algorithms is covered in @sec-parallel-learner.
-1. A resampling consists of independent repetitions of train-test-splits (@sec-parallel-resample).
-1. A benchmark consists of multiple independent resamplings (@sec-parallel-benchmark).
-1. Tuning (@sec-optimization) is repeated benchmarking, embedded in a sequential procedure which determines the hyperparameter configuration to try next.
-   In addition to parallelization of the benchmark, some tuners propose multiple configurations to evaluate independently in each sequential step, which provides a second level for parallelization discussed in @sec-nested-resampling-parallelization.
-1. The predictions of a single learner for multiple observations is independent (@sec-parallel-predict).
+2. Resampling consists of independent repetitions of train-test-splits and benchmarking consists of multiple independent resamplings (@sec-parallel-resample).
+3. Tuning (@sec-optimization) is repeated benchmarking, embedded in a sequential procedure which determines the hyperparameter configuration to try next.
+   In addition to parallelization of the benchmark, some tuners propose multiple configurations to independently evaluate in each sequential step, which provides a second level for parallelization (@sec-nested-resampling-parallelization).
+4. Predictions of a single learner for multiple observations are independent (@sec-parallel-predict).
 
-When computational problems are so easy to parallelize like the examples listed in (1)-(4), they are often referred to as `r define("embarrassingly parallel")`.
-Whenever you can put the heavy lifting into a function and call it with a map-like function like `lapply()`, you are facing an embarrassingly parallel problem.
-Such problems are straightforward to parallelize, e.g., in R with the `r ref_pkg("furrr")` package which provides parallel counterparts for popular sequential map-like functions from the `r ref_pkg("purrr")` package.
+These examples are referred to as `r define("embarrassingly parallel")` as they are so easy to parallelize.
+In other words, if you can write a computation into a function that can be passed to map-like functions such as `r ref("lapply()")`, then you have an embarrassingly parallel problem.
+Such problems are straightforward to parallelize in R, for example with the `r ref_pkg("furrr")` package, which provides parallel counterparts for popular sequential map-like functions from the `r ref_pkg("purrr")` package.
 
-However, it does not make practical sense to actually execute in parallel every operation that can be parallelized.
+However, it does not make practical sense to execute in parallel every operation that can be parallelized.
 Starting and terminating workers as well as possible communication between workers comes at a price in the form of additionally required runtime which is called `r define("parallelization overhead")`.
-The overhead strongly varies from parallelization backend to parallelization backend and must be carefully weighed against the runtime of the sequential execution to determine if parallelization is worth the effort.
-If the sequential execution is comparably fast, enabling parallelization often just introduces additional complexity for very little runtime savings or can even slow down the execution.
+This overhead strongly varies between parallelization backends and must be carefully weighed against the runtime of the sequential execution to determine if parallelization is worth the effort.
+If the sequential execution is comparably fast, enabling parallelization may introduce additional complexity with little runtime savings, or could even slow down the execution.
+It can be possible to control the `r define("granularity")` of the parallelization to reduce the parallelization overhead.
+For example, we could reduce the overhead of parallelizing a `for`-loop with 1000 iterations on 4 CPU cores by chunking the work of the 1000 jobs into 4 computational jobs performing 250 iterations each, resulting in 4 bigger jobs and not 1000 small ones.
 
-Sometimes, it is possible to control the `r define("granularity")` of the parallelization to reduce the parallelization overhead.
-For example, if you want to parallelize a `for`-loop with 1000 iterations on 4 CPU cores, the overhead can be reduced by chunking the work of the 1000 jobs into 4 computational jobs performing 250 iterations each.
-So 4 bigger jobs are calculated instead of 1000 small ones.
-
-This effect is illustrated in the following code chunk using a socket cluster.
-Note that this parallel backend already comes with an option to control the chunk size (`chunk.size`), but for other backends you must chunk manually which is also demonstrated:
+This effect is illustrated in the following code chunk using a `r index('socket cluster')` with the `r ref_pkg("parallel")` package, which conveniently has a `chunk.size` option so we do not need to manually create chunks:
 ```{r technical-001, eval = TRUE}
 # set up a socket cluster with 4 workers on the local machine
 library(parallel)
 cores = 4
 cl = makeCluster(cores)
-print(cl)
 
 # vector to operate on
-x = 1:1000
+x = 1:10000
 
 # fast function to parallelize
-f = function(x) sqrt(x + 1)
+f = function(y) sqrt(y + 1)
 
 
 # unchunked approach: 1000 jobs
@@ -87,51 +93,40 @@ system.time({
 
 # chunked approach: 4 jobs
 system.time({
-  parSapply(cl, x, f, chunk.size = 250)
-})
-
-# manual chunking: 4 jobs
-chunks = rep(1:cores, each = length(x) %/% cores)
-jobs = split(x, chunks)
-system.time({
-  parLapply(cl, jobs, function(chunk, .fun) sapply(chunk, .fun) ,
-    .fun = f, chunk.size = 1)
+  parSapply(cl, x, f, chunk.size = 2500)
 })
 ```
 
 
 Whenever you have the option to control the granularity by setting the chunk size, you should aim for at least as many jobs as workers and also the runtime of each worker should be at least several seconds.
 This ensures that you can fully utilize the system and that the parallelization overhead stays reasonable.
-If you have heterogeneous runtimes, also consider grouping jobs together so that the runtime of the chunks get homogeneous.
-If there is a good estimate for the runtime, `batchtools::binpack()` (create an arbitrary number of chunks, each with a specified maximum combined runtime) and `batchtools::lpt()` (pack a specified number of chunks, each with arbitrary but homogeneous runtime) can prove useful - both are documented together with the `r ref("batchtools::chunk()")` helper.
-For unknown runtimes, randomizing the order of jobs sometimes helps if there is a systematic relationship between the order of the jobs and their runtime.
-This prevents the long jobs, for example, from all being executed at the end, which leads to avoidable underutilization.
-`r mlr3misc` ships with the functions `r ref("chunk()")` and `r ref("chunk_vector()")` to conveniently chunk vectors and also shuffles them per default.
-There are also options to control the chunk size for parallelization started from within mlr3 - these are described later in @sec-parallel-resample.
+If you have heterogeneous runtimes, also consider grouping jobs together so that the runtime of the chunks are more homogeneous.
+If runtimes can be estimated, then `r ref("batchtools::binpack()")` and `r ref('batchtools::lpt()')` are useful for chunking jobs.
+If runtimes cannot be estimated, then it can be useful to randomize the order of jobs, this can prevent long jobs all being executed at the end, which leads to avoidable underutilization of resources.
+`r mlr3misc` ships with the functions `r ref("chunk()")` and `r ref("chunk_vector()")` to conveniently chunk jobs and also shuffles them per default.
+There are also options to control the chunk size for parallelization in `mlr3`, which are discussed in @sec-parallel-resample.
 
 
 ### Parallelization of Learners {#sec-parallel-learner}
 
-The most atomic part of `r mlr3` which can be parallelized are calls to external code, i.e. the execution of certain `r ref("PipeOp")` objects, `r ref("Filter")` objects or `r ref("Learner")` objects.
-For these objects, `r mlr3` merely provides a unified interface to control the execution.
-The parallelization is implemented by the respective package authors of the (external) algorithms `r mlr3` calls.
+At the lowest level, calls to external code can be parallelized if available in underlying implementations.
+For these objects, e.g., certain learners, filters, and pipeops, `r mlr3` simply provides a unified interface to control the execution.
 
 Most of these algorithms are parallelized via threading, e.g., the random forest implementation in `r ref_pkg("ranger")` or the boosting implemented in `r ref_pkg("xgboost")`.
 For example, while fitting a single decision tree, each split that divides the data into two disjoint partitions requires a search for the best cut point on all $p$ features.
 So instead of iterating over all features sequentially, the search can be broken down into $p$ threads, each searching for the best cut point on a single feature.
 These threads can easily be parallelized by the scheduler of the operating system, as there is no need for communication between the threads.
 After all threads have finished, the results are collected and merged before terminating the threads.
-I.e., for our example of the decision tree, (1) the $p$ best cut points per feature are collected and then (2) aggregated to the single best cut point across all features by just iterating over the $p$ results sequentially.
+So in the decision tree example, the $p$ best cut points per feature are collected and then aggregated to the single best cut point across all features by iterating over the $p$ results sequentially.
 
 
-:::{.callout-note}
+:::{.callout-tip}
 Parallelization on GPUs is not covered in this book.
 `mlr3` only distributes the fitting of multiple learners, e.g., during resampling, benchmarking, or tuning.
 On this rather abstract level, GPU parallelization does not work efficiently.
 However, some learning procedures can be compiled against CUDA/OpenCL to utilize the GPU while fitting a single model.
 We refer to the respective documentation of the learner's implementation, e.g., `r link("https://xgboost.readthedocs.io/en/stable/gpu/")` for XGBoost.
 :::
-
 
 
 Threading is implemented in the compiled code of the package (e.g., in C or C++).
@@ -162,24 +157,21 @@ set_threads(learner, n = 4)
 # auto-detect cores on the local machine
 set_threads(learner)
 ```
-In the last line, we did not set the number of threads, letting the package fall back to a heuristic to detect the correct number.
-This heuristic is sometimes flaky, and utilizing all available cores is occasionally counterproductive as overburdening the system often has negative effects on the overall runtime.
-The function which determines the number of CPUs for `r mlr3` is implemented in `r ref("parallelly::availableCores()")` and works well for many setups.
-See `r link("https://www.jottr.org/2022/12/05/avoid-detectcores", "this blog post")` for some background information about the implemented heuristic.
-However, there are still some scenarios where it is better to reduce the number of utilized CPUs manually:
 
-* You want to simultaneously work on the same system, e.g., browse the web or watch a video.
+In the last line, we did not set the number of threads, letting the package fall back to a heuristic to detect the correct number using `r ref("parallelly::availableCores()")`.
+This heuristic is not always ideal (interested reader's might want to look up "Amdahl's Law") and utilizing all available cores is occasionally counterproductive and can slow down overall runtime (@avoiddetect), moreover using all cores is not ideal if:
+
+* You want to simultaneously use your system for other purposes.
 * You are on a multi-user system and want to spare some resources for other users.
 * You have a CPU with heterogeneous cores, for example, the energy-efficient "Icestorm" cores on a Mac M1 chip.
   These are comparably slower than the high-performance "Firestorm" cores and not well suited for heavy computations.
-* You have linked R to a threaded [BLAS](https://en.wikipedia.org/wiki/Basic_Linear_Algebra_Subprograms) implementation like [OpenBLAS](https://www.openblas.net/), and your learners make heavy use of linear algebra.
+* You have linked R to a threaded BLAS implementation like OpenBLAS and your learners make heavy use of linear algebra.
 
-You can manually set the number of CPUs to overrule the heuristic via option `"mc.cores"`:
+We recommend manually setting the number of CPUs in your system's `.Rprofile` file:
 
 ```{r technical-004, eval = FALSE}
 options(mc.cores = 4)
 ```
-We recommend setting this in your system's `.Rprofile` file, c.f. `r ref("Startup")`.
 
 There are some other approaches for parallelization of learners, e.g. by directly supporting one specific parallelization backend or a parallelization framework like `r ref_pkg("foreach")`.
 If this is supported, parallelization must be explicitly activated, e.g. by setting a hyperparameter.
@@ -187,86 +179,69 @@ If you need to parallelize on the learner level because a single model fit takes
 In many scenarios it makes more sense to parallelize on a different level like resampling or benchmarking which is covered in the following subsections.
 
 
+### Parallelization of Resamplings and Benchmarks {#sec-parallel-resample}
 
+In addition to parallel learners, most machine learning experiments can be easily parallelized during resampling.
+By definition, resampling is performed by aggregating over independent repetitions of multiple train-test splits.
 
-### Parallelization of Resamplings {#sec-parallel-resample}
+`r mlr3` makes use of `r ref_pkg("future")` to enable parallelization over resampling iterations using the parallel backend configured by the user via the `r ref("future::plan()")` function.
 
-In addition to parallel learners, most machine learning experiments include a very easy handle for parallelization: the resampling.
-By definition, resampling is performed to get an unbiased performance estimator by aggregating over **independent** repetitions of multiple train-test splits.
-
-`r mlr3` has "marked" this loop of independent iterations as parallelizable and uses an additional abstraction layer to support a broad range of parallel backends: the `r ref_pkg("future")` package.
-The loop is executed via the `r ref_pkg("future")` parallelization framework, using the parallel backend configured by the user via the `r ref("future::plan()")` function.
-
-In this section, we will use the spam task and a simple `lrn("classif.rpart")`.
-We use the `r ref("future::multisession")` plan (which internally uses socket clusters from the `parallel` package, see `r ref("parallel::makeCluster()")`) that should work on all operating systems.
+By example, we will look at parallelizing three-fold cross-validation for a decision tree on the spam task, this is also illustrated in @fig-parallel-overview.
+We use the `r ref("future::multisession")` plan (which internally uses socket clusters from the `parallel` package) that should work on all operating systems.
 
 ```{r technical-005}
-# query the currently active plan
+# the currently active plan is 'sequential' by default
 future::plan()
-
-# define objects to perform a resampling
-task = tsk("spam")
-learner = lrn("classif.rpart")
-resampling = rsmp("cv", folds = 3)
-
 # select the multisession backend to use
 future::plan("multisession")
 
-# run the resampling in parallel and measure runtime
+# run our experiment
+task = tsk("spam")
+learner = lrn("classif.rpart")
+resampling = rsmp("cv", folds = 3)
 system.time({
   resample(task, learner, resampling)
 })
 ```
 
-By default, all CPUs of your machine are used unless you specify the argument `workers` in `r ref("future::plan()")` (possible problems with the value returned by the heuristic have already been discussed in the previous @sec-parallel-learner).
-If you compare runtimes between the parallel backend and sequential execution (`plan("sequential")`) here, you should see a decrease in the reported elapsed time.
-However, in practice, you cannot expect the runtime to fall linearly as the number of cores increases (`r link("https://en.wikipedia.org/wiki/Amdahl%2527s_law", "Amdahl's law")`).
+By default, all CPUs of your machine are used unless you specify the argument `workers` in `r ref("future::plan()")` (see previous section with issues that might cause).
 In contrast to threads, the technical overhead for starting workers, communicating objects, sending back results, and shutting down the workers is quite large for the multisession backend.
-The multicore backend (`plan("multicore")`) comes with more overhead than threading, but considerably less overhead in comparison with the multisession backend.
-In fact, with the multicore backend, R objects are copied only when they are modified (copy-on-write), while with the multisession backend, objects are always copied to the respective session prior to any computation.
+
+The `r ref('future::multicore')` backend comes with more overhead than threading, but considerably less overhead than `"multisession"`, as the `"multicore"` backend only copies R objects when modified ('copy-on-write'), whereas  objects are always copied to the respective session prior to any computation for `"multisession"`.
 The multicore backend has the major disadvantage that it is not supported on Windows systems - for this reason, we will stick with the multisession backend for all examples here.
+
 In general, it is advised to only consider parallelization for resamplings where each iteration runs at least a few seconds.
-Note that there are two mlr3 options to control the execution and granularity:
+There are two mlr3 options to control the execution and granularity:
 
 * If `mlr3.exec_random` is set to `TRUE` (default), the order of jobs is randomized in resamplings and benchmarks.
-  This can help if you run a benchmark or tuning with heterogeneous runtimes, e.g., to avoid that all the expensive learners get started last.
+  This can help if you run a benchmark or tuning with heterogeneous runtimes.
 * Option `mlr3.exec_chunk_size` can be used to control how many jobs are mapped to a single `future` and defaults to 1.
   The value of this option is passed to `r ref("future.apply::future_mapply()")` and `future.scheduling` is constantly set to `TRUE`.
 
-Tuning the chunk size can help in some rare cases to mitigate the parallelization overhead.
-For larger problems and longer runtimes, however, this plays a subordinate role.
-
+Tuning the chunk size can help in some rare cases to mitigate the parallelization overhead but is unlikely to be useful in larger problems or longer runtimes.
 
 @fig-parallel-overview illustrates the parallelization from the above example. From left to right:
 
-1. The main process calls the `resample()` function.
-2. The computational task is split into 3 parts for the 3-fold cross-validation.
-3. The folds are passed to 3 workers, each fitting a model on the respective subset of the task and predicting on the left-out observations.
-4. The predictions (and trained models) are communicated back to main process which combines them into a `ResampleResult`.
-
 ```{mermaid}
 %%| label: fig-parallel-overview
-%%| fig-cap: Parallelization of a resampling using a 3-fold cross-validation
+%%| fig-cap: Parallelization of a resampling using 3-fold cross-validation. The main process calls the `resample()` function, which starts the parallelization process and the computational task is split into 3 parts for 3-fold CV. The folds are passed to 3 workers, each fitting a model on the respective subset of the task and predicting on the left-out observations. The predictions (and trained models) are communicated back to main process which combines them into a `ResampleResult`.
 graph LR
-    M[fa:fa-server Main]
+    M[Main]
     S{"resample()"}
     C{ResampleResult}
 
     M --> S
-    S -->|Fold 1| W1[fa:fa-microchip Worker 1]
-    S -->|Fold 2| W2[fa:fa-microchip Worker 2]
-    S -->|Fold 3| W3[fa:fa-microchip Worker 3]
+    S -->|Fold 1| W1[Worker 1]
+    S -->|Fold 2| W2[Worker 2]
+    S -->|Fold 3| W3[Worker 3]
     W1 -->|Prediction 1| C
     W2 -->|Prediction 2| C
     W3 -->|Prediction 3| C
 ```
 
-
-
-### Parallelization of Benchmarks {#sec-parallel-benchmark}
-
 Benchmarks can be seen as a collection of multiple independent resamplings where a combination of a task, a learner, and a resampling strategy defines one resampling to perform.
-In pseudo-code, the calculation can be written down as
+In pseudo-code, the calculation can be written as
+
 ```
 foreach combination of (task, learner, resampling strategy) {
     foreach resampling iteration {
@@ -275,20 +250,16 @@ foreach combination of (task, learner, resampling strategy) {
 }
 ```
 
-For parallelization, there are now two options:
+Therefore we could either:
 
-1. Parallelize over all resamplings, execute each resampling sequentially (parallelize outer loop).
-2. Iterate over all resamplings, execute each resampling in parallel (parallelize inner loop).
+1. Parallelize over all resamplings and execute each resampling sequentially (parallelize outer loop); or
+2. Iterate over all resamplings and execute each resampling in parallel (parallelize inner loop).
 
-If you are transitioning from `r ref_pkg("mlr")`, you might be used to selecting one of these parallelization levels before benchmarking.
-One major drawback of this approach becomes clear when both the outer and inner loop have fewer iterations than there are available workers, resulting in an underutilized system.
-In `r mlr3`, the choice of level is no longer required (except occasionally for nested resampling, briefly described in the following @sec-nested-resampling-parallelization).
-All experiments are rolled out on the same level, i.e., `benchmark()` iterates over the elements of the Cartesian product of the iterations of the outer and inner loops.
+`mlr3` simplifies this decision for you by flattening all experiments to the same level, i.e., `benchmark()` iterates over the elements of the Cartesian product of the iterations of the outer and inner loops.
 Therefore, there is no need to decide whether you want to parallelize the tuning *or* the resampling, you always parallelize both.
-This approach makes the computation fine-grained and gives the `r ref_pkg("future")` backend the opportunity to group the jobs into chunks of suitable size (depending on the number of workers).
+This approach makes the computation fine-grained and gives the `r ref_pkg("future")` backend the opportunity to group the jobs into chunks of suitable size (depending on the number of workers), it also makes the procedure identical to parallelizing resampling:
 
-Parallelization of benchmarks works analogously to resampling:
-```{r technical-006, echo = FALSE}
+```{r technical-006}
 # simple benchmark design
 design = benchmark_grid(
     tsks(c("sonar", "penguins")),
@@ -300,74 +271,64 @@ design = benchmark_grid(
 future::plan("multisession")
 
 # run benchmark in parallel
-benchmark(design)
+benchmark(design)$aggregate()[, .(task_id, learner_id, classif.ce)]
 ```
 
-For larger benchmarks with a cumulative runtime of weeks, months or even years, see @sec-hpc-exec which covers parallelization on high-performance computing clusters.
-
+See @sec-hpc-exec for larger benchmark experiments that may have a cumulative runtime of weeks, months or even years.
 
 ### Nested Resampling Parallelization {#sec-nested-resampling-parallelization}
 
-Like in benchmarking, [nested resampling](#nested-resampling) for tuning also translates into two nested resampling loops.
-But unlike benchmarking, the outer loop iterations are not necessarily independent of each other: depending on the result of the resampling in the first outer loop, different hyperparameters are suggested for the second iteration.
+As in benchmarking, nested resampling (@nested-resampling) for tuning also translates into two nested resampling loops.
+But unlike benchmarking, the outer loop iterations are not necessarily independent of each other as different hyperparameters may be suggested in one iteration based on the results of the previous.
 Therefore, nested loops cannot be flattened, and the user instead has to choose which of the loops to parallelize.
-Let's consider the following example:
-You want to tune the `minsplit` argument of a classification tree using the `r ref("AutoTuner")` of `r mlr3tuning` (simplified version taken from @sec-model-tuning):
+By example, let's tune the `minsplit` argument of a classification tree using an `r ref("AutoTuner")` (@sec-autotuner) and a racing algorithm (which is dependent on previous iterations), we will use two-fold CV for our inner resampling strategy and five-fold CV for our outer resampling strategy; first running sequentially without parallelization:
 
-```{r technical-007, echo = FALSE}
-library("mlr3tuning")
+```{r technical-007}
+library(mlr3tuning)
+# reset to default sequential plan
+future::plan("sequential")
 
-learner = lrn("classif.rpart",
-  minsplit  = to_tune(2, 128, logscale = TRUE)
-)
+learner = lrn("classif.rpart", minsplit  = to_tune(2, 128, logscale = TRUE))
 
 at = auto_tuner(
-  tuner = tnr("random_search"),
+  tuner = tnr("mbo"),
   learner = learner,
-  resampling = rsmp("cv", folds = 2), # inner CV
+  resampling = rsmp("cv", folds = 2),
   measure = msr("classif.ce"),
   term_evals = 20,
 )
-```
-To evaluate the performance on an independent test set, resampling is used:
-```{r technical-008}
+
 resample(
   task = tsk("penguins"),
   learner = at,
-  resampling = rsmp("cv", folds = 5) # outer CV
+  resampling = rsmp("cv", folds = 5)
 )
 ```
 
-Here, we have three opportunities to parallelize:
+To parallelize this experiment, we could either parallelize the outer CV:
 
-1. the inner cross-validation of the auto tuner with 2 folds,
-2. the outer cross-validation of the resampling with 5 folds, and
-3. evaluating all configurations proposed by the random search in a single batch (parameter `batch_size` of `r ref("TunerRandomSearch")`, defaulting to 1).
-
-Because the third opportunity is not always applicable, especially for many advanced tuning algorithms which are only capable of proposing a single configuration in each iteration, we will here focus on the first two opportunities.
-Furthermore, we assume that we have a single CPU with four cores available.
-
-If we opt to parallelize the outer CV, all four cores would be utilized first with the computation of the first 4 resampling iterations.
-The computation of the fifth iteration has to wait.
-The resulting CPU utilization of the nested resampling example on 4 CPUs is visualized in two Figures:
-
-* @fig-parallel-outer as an example for parallelizing the outer 5-fold cross-validation.
   ```{r technical-009, eval = FALSE}
   # Runs the outer loop in parallel and the inner loop sequentially
   future::plan(list("multisession", "sequential"))
   ```
-  We assume that each fit during the inner resampling takes 4 seconds to compute and that there is no other significant overhead.
-  First, each of the four workers starts with the computation of an inner 2-fold cross-validation.
-  As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on CPU1 **after** the first 4 iterations are finished after 8 secs.
-  During the computation of the 5th outer resampling iteration, only CPU1 is utilized, the other 3 CPUs are idling.
-  Note that just setting up the parallelization with a simple `future::plan("multisession")` has the same effect - the most outer loop is parallelized while all subsequent loops default to sequential execution.
 
-* @fig-parallel-inner as an example for parallelizing the inner 2-fold cross-validation.
-  ```{r technical-010, eval = FALSE}
-  # Runs the outer loop sequentially and the inner loop in parallel
-  future::plan(list("sequential", "multisession"))
-  ```
-  Here, the outer loop runs sequentially and distributes the 2 computations for the inner resampling on 2 CPUs. Meanwhile, CPU3 and CPU4 are idling.
+or the inner CV:
+
+```{r technical-010, eval = FALSE}
+# Runs the outer loop sequentially and the inner loop in parallel
+future::plan(list("sequential", "multisession"))
+```
+
+Let's assume we have four cores available and each job takes 4s, and consider each option in turn.
+
+If we parallelize the outer five-fold CV (@fig-parallel-outer), all four cores would be utilized first with the computation of the first 4 resampling iterations and the computation of the fifth iteration has to wait.
+Assume that each fit during the inner resampling takes 4 seconds to compute and that there is no other significant overhead.
+Then, each of the four workers starts with the computation of an inner 2-fold cross-validation.
+As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on CPU1 **after** the first 4 iterations are finished after 8 secs.
+During the computation of the 5th outer resampling iteration, only CPU1 is utilized, the other 3 CPUs are idling.
+In fact, even if we had setup the parallelization with `"multisession"` in both inner and outer CV, it would have the same result, the outer loop is parallelized while all subsequent loops default to sequential execution.
+
+In contrast, if we parallelize the inner two-fold CV (@fig-parallel-inner) then the outer loop would run sequentially and distribute the 2 computations for the inner resampling on 2 CPUs; meanwhile, CPU3 and CPU4 are idling.
 
 ```{mermaid}
 %%| label: fig-parallel-outer
@@ -429,11 +390,7 @@ gantt
 Both possibilities for parallelization are not exploiting the full potential of the 4 CPUs.
 With parallelization of the outer loop, all results are computed after 16s, in contrast to parallelization of the inner loop where the results are only available after 20s.
 
-If possible, the number of iterations can be adapted to the available hardware. There is no law set in stone that you have to select, e.g., 10 folds in cross-validation.
-If you have 4 CPUs and a reasonable variance, 8 iterations are often sufficient, or you do 12 iterations because you get the last two iterations basically for free.
-
-Alternatively, you can also enable parallelization for both loops for nested parallelization, even on different parallelization backends.
-While nesting real parallelization backends is often unintended and causes unnecessary overhead, it is useful in some distributed computing setups.
+It it possible to enable parallelization for both loops for nested parallelization, even on different parallelization backends, which can be useful in some distributed computing setups.
 In this case, the number of workers must be manually tweaked so that the system does not get overburdened:
 
 ```{r technical-011, eval = FALSE}
@@ -444,11 +401,10 @@ future::plan(list(
 ))
 ```
 
-This example would run on 8 cores (`= 2 * 4`) on the local machine, parallelizing the outer resampling on 2, and the inner resampling on 4 workers.
-The [vignette](https://cran.r-project.org/web/packages/future/vignettes/future-3-topologies.html) of the `r ref_pkg("future")` package gives more insight into nested parallelization.
+This example would run on 8 cores on the local machine, parallelizing the outer resampling on 2, and the inner resampling on 4 workers.
 For more background information about parallelization during tuning, see Section 6.7 of @hpo_practical.
 
-:::{.callout-important}
+:::{.callout-tip}
 During tuning with `r mlr3tuning`, you can often adjust the **batch size** of the `r ref("Tuner")`, i.e., control how many hyperparameter configurations are evaluated in parallel.
 If you want full parallelization, make sure that the batch size multiplied by the number of (inner) resampling iterations is at least equal to the number of available workers.
 If you expect homogeneous runtimes, i.e., you are tuning over a single learner or linear pipeline, and you have no hyperparameter which is likely to influence the runtime, aim for a multiple of the number of workers.
@@ -456,6 +412,8 @@ If you expect homogeneous runtimes, i.e., you are tuning over a single learner o
 In general, larger batches allow for more parallelization, while smaller batches imply a more frequent evaluation of the termination criteria.
 We default to a `batch_size` of 1 that ensures that all `r ref("Terminator")`s work as intended, i.e., you cannot exceed the computational budget.
 :::
+
+<!-- FIXME - Not convinced this adds anything as it doesn't talk about future, or how to relate {parallel} to our interface. Complex discussions like this are best discussed in large-scale experiments.
 
 Heterogeneous runtimes add an extra layer of complexity to parallelization.
 This occurs frequently, especially in tuning, when a hyperparameter strongly influences the runtime of the learning procedure.
@@ -469,17 +427,17 @@ After the first batch of jobs is sent to the worker, the next jobs are either st
 
 Method (a) usually comes with less synchronization overhead and is best suited for short jobs with homogeneous runtimes.
 Method (b) is faster if the runtimes are heterogeneous, especially if the parallelization overhead is neglectable in comparison with the runtime for the computation.
-E.g., for `r ref("parallel::mclapply()")`, the behavior of the scheduler can be controlled with the `mc.preschedule` option and `r ref("parallel::parSapply()")` implements Method (a) while `r ref("parallel::parSapplyLB()")` implements scheduling according to method (b).
+E.g., for `r ref("parallel::mclapply()")`, the behavior of the scheduler can be controlled with the `mc.preschedule` option and `r ref("parallel::parSapply()")` implements Method (a) while `r ref("parallel::parSapplyLB()")` implements scheduling according to method (b). -->
 
 
 ### Parallelization of Predictions {#sec-parallel-predict}
 
-Finally, also the prediction of a single learner can be parallelized as the predictions of two observations are independent.
+Finally, predictions from a single learner can be parallelized as the predictions of multiples observations are independent.
 For most learners, training is the bottleneck and parallelizing the prediction is not a worthwhile endeavor, but of course there are exceptions.
 
-Technically, the test data is first split into multiple groups and the predict-method of the learner is applied to each group in parallel using active backend configured via `r ref("future::plan()")`.
+To predict in parallel, the test data is first split into multiple groups and the predict-method of the learner is applied to each group in parallel using an active backend configured via `r ref("future::plan()")`.
 The resulting predictions are then combined internally in a second step.
-However, to avoid predicting in parallel accidentally, parallel predictions must first be enabled in the learner via the `parallel_predict` field:
+To avoid predicting in parallel accidentally, parallel predictions must be enabled in the learner via the `parallel_predict` field:
 
 ```{r technical-012}
 # train random forest on spam task
@@ -491,28 +449,9 @@ learner$train(task)
 future::plan("multisession", workers = 4)
 learner$parallel_predict = TRUE
 
-# perform prediction
-prediction = learner$predict(task)
+# predict
+learner$predict(task)
 ```
-
-The resulting `r ref("Prediction")` is identical to the one computed sequentially.
-
-
-### Reproducibility
-
-Usually, reproducibility is a major concern during parallelization because special (`r link("https://en.wikipedia.org/wiki/Pseudorandom_number_generator", "PRNGs")`) are required (see `r link("https://www.jottr.org/2020/09/22/push-for-statistical-sound-rng/", "this blog post")`.
-A simple `r ref("set.seed()")` is not sufficient when parallelization is involved.
-One general recommendation here is switching from the default `r link("https://en.wikipedia.org/wiki/Mersenne_Twister","Mersenne Twister" )` to Pierre L'Ecuyer's RngStreams (see `r ref("Random")` and `r ref("parallel::RNGstreams")`).
-However, even this parallel PRNG comes with pitfalls w.r.t. reproducibility: if you change the number of workers, you still get different results after setting the seed with `r ref("set.seed()")`.
-
-Luckily, this and many other problems are already addressed by the excellent `r ref_pkg("future")` parallelization framework which `r mlr3` uses under the hood.
-`r ref_pkg("future")` ensures that all workers will receive the exactly same PRNG streams, independent of the number of workers.
-Although correct seeding alone does not guarantee full reproducibility, it is one problem less to worry about.
-You can find more details about the used PRNG in `r link("https://www.jottr.org/2020/09/22/push-for-statistical-sound-rng/", "this blog post")`.
-
-The issue of reproducibility is very complex, and complete reproducibility is very difficult to achieve - this ultimately also depends on the computational accuracy of the hardware, the processor instructions used, compiler versions and optimisation flags, or the `r index("BLAS")` library for linear algebra R links to.
-But since at least parallel PRNGs are not a problem, you should get the same or at least very similar results with a simple `set.seed()` before you run the experiments.
-
 
 ## Error Handling {#sec-error-handling}
 
@@ -546,7 +485,7 @@ learner$train(tsk("penguins"))
 
 Now we can look at how to deal with errors during `mlr3` experiments.
 
-:::{.callout-note}
+:::{.callout-tip}
 If you want to debug errors, make sure you have disabled parallelization to avoid various related pitfalls.
 It may also be helpful to set the option `mlr3.debug` to `TRUE`.
 When this flag is set, `mlr3` does not use `r ref_pkg("future")`, resulting in an easier-to-interpret program flow and `traceback()`.
