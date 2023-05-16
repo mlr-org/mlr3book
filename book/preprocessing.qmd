@@ -17,9 +17,7 @@ We will focus less on data cleaning as this process does not necessitate `r mlr3
 Although deep learning has shown promising results in automating feature engineering, its effectiveness depends on the complexity and nature of the data being processed, as well as the specific problem being addressed.
 Typically it is applicable to natural language processing (NLP) and computer vision (CV) problems, while standard tabular data is lacking in structure for deep learning models to extract meaningful features automatically.
 Furthermore, different problems require different features to be extracted, and deep learning models may not always be able to identify the most relevant features for a given problem without human guidance.
-
 The goal of feature engineering is to prepare the data so that a model can be trained on it, and/or to further improve predictive performance.
-
 It is important to note that feature engineering helps mostly for simpler algorithms, while highly complex models usually gain little from it and require little data preparation to be trained.
 Common difficulties in data include features with (high) skew distributions, high cardinality categorical features, missing observations, high dimensional dimensionality and imbalanced classes in classification tasks.
 
@@ -31,13 +29,11 @@ Since feature selection is such an important aspect of preprocessing it was alre
 ## Ames Housing Data
 
 The data we will be using is an adapted version of the Ames housing data, initially collected by [@de2011ames].
-
 This data was collected as an *alternative to the Boston Housing data as an end of semester regression project* and is used in various other books on `r link("http://www.feat.engineering/intro-intro.html", "feature engineering")` and `r link("https://www.tmwr.org/ames.html","machine learning")` with R.
 Raw and processed versions of the data can be directly loaded from the `AmesHousing` package.
 
 The dataset encompasses data related to 2,930 residential properties situated in Ames, Iowa, sold between 2006 and 2010.
 It contains 81 features on various aspects of the house (basement, garage, size, fence, pool, porch, bedrooms, etc.), size and shape of the lot as well as information about condition and quality.
-
 The prediction target is the sale price in USD, hence it is a regression task (@sec-tasks).
 
 ::: callout-note
@@ -52,15 +48,17 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-url <- "https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
+url = "https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
 
-ames <- fread(url,
+ames = fread(url,
     stringsAsFactors = TRUE
 )
 
 ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
 ```
+
+As expected we see a skewed distribution of prices with a few outliers of very expensive properties.
 
 ## Data Cleaning and Exploratory Data Analysis
 
@@ -107,7 +105,7 @@ For all three cases simple removal is sufficient.
 
 ```{r preproc-0045, echo = TRUE, eval = TRUE, message=FALSE}
 
-to_remove <- c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
+to_remove = c("Lot_Area_m2", "Condition_3", "Misc_Feature_2")
 ```
 
 Next to constant or identical features, further typical problems that should be checked for are
@@ -126,7 +124,7 @@ Before we continue with feature engineering we create a task, choose a suitable 
 library(mlr3verse)
 
 
-ames_task <- TaskRegr$new(
+ames_task = TaskRegr$new(
     backend = ames,
     target = "Sale_Price",
     id = "ames"
@@ -134,9 +132,9 @@ ames_task <- TaskRegr$new(
 
 ames_task$select(setdiff(ames_task$feature_names, to_remove))
 
-measure <- msr("regr.mae")
+measure = msr("regr.mae")
 
-cv10 <- rsmp("cv")
+cv10 = rsmp("cv")
 
 cv10$instantiate(ames_task)
 
@@ -147,11 +145,13 @@ Lastly we want to compute a simple featureless baseline, i.e., always predicting
 
 ```{r preproc-007, echo = TRUE, eval = TRUE, message=FALSE}
 
-baseline_lrn <- lrn("regr.featureless", robust = TRUE)
+baseline_lrn = lrn("regr.featureless", robust = TRUE)
 
-baseline_res <- resample(ames_task, baseline_lrn, cv10)
+baseline_res = resample(ames_task, baseline_lrn, cv10)
 baseline_res$aggregate(measure)
 ```
+
+We see that simply predicting the median houseprice results in a mean absolute error of a bit more than 56.000$.
 
 ## Factor Encoding
 
@@ -207,7 +207,7 @@ First we collapse all levels that occur less than 1% of the time and build a sim
 
 ```{r preproc-009, echo = TRUE, eval = TRUE, message=FALSE}
 
-factor_pipeline <-
+factor_pipeline =
     po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
     po("encodeimpact", affect_columns = selector_cardinality_greater_than(10),
         id = "high_card_enc") %>>%
@@ -223,23 +223,32 @@ While many implementations of tree based algorithms, such as `rpart` or `ranger`
 
 ```{r preproc-010, echo = TRUE, eval = TRUE, message=FALSE}
 
-xgboost_preproc <- GraphLearner$new(
+xgboost_impact = GraphLearner$new(
     factor_pipeline %>>%
         lrn("regr.xgboost", nrounds = 100),
-    id = "regr.xgboost_enc"
+    id = "regr.xgboost_impact"
 )
 
-learners <- list(
+xgboost_one_hot = GraphLearner$new(
+    po("encode") %>>%
+        lrn("regr.xgboost", nrounds = 100),
+    id = "regr.xgboost_one_hot"
+)
+
+
+learners = list(
     baseline = baseline_lrn,
     tree = lrn("regr.rpart"),
-    xgboost = xgboost_preproc
+    xgboost_impact = xgboost_impact,
+    xgboost_one_hot = xgboost_one_hot
 )
 
-design <- benchmark_grid(ames_task, learners = learners, cv10)
-bmr <- benchmark(design)
-plot(bmr, measure = measure)
+design = benchmark_grid(ames_task, learners = learners, cv10)
+bmr = benchmark(design)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
+
+We see that gradient boosted tree with impact encoding results in the best model, even though the improvement over one-hot encoding is quite small.
 
 For further readings and a benchmark study on different encoding strategies we refer to [@pargent2022regularized].
 
@@ -252,7 +261,8 @@ While both `rpart` and `xgboost` from the previous section could handle missing 
 
 For simple imputation techniques, missing values can be replaced with the mean, median, mode, or a sample from the empirical distribution of the feature.
 For categorical features, missing values can easily be replaced by a new separate level, e.g. called `.MISSING`.
-To keep track of the imputation, binary indicator features are added.
+The original information if an observation contained a missing value for each feature might be meaningful for the model.
+So we need keep track of the imputation by adding binary indicator features that are `1` if the feature was missing for an observation and `0` if it was present.
 
 [@ding2010investigation] show that for binary classification and tree-based models a *"separate class is clearly
 the best method to use when the testing set has missing values and the missingness is related to
@@ -261,7 +271,7 @@ For numeric features this means that encoding missing values out-of-range, e.g. 
 
 ```{r preproc-011, echo = TRUE, eval = TRUE, message=FALSE}
 
-impute_pipeline <- list(
+impute_histogram = list(
     po("missind",
         type = "integer",
         affect_columns = selector_type("integer")
@@ -275,64 +285,84 @@ impute_pipeline <- list(
         affect_columns = selector_type("factor")
     )
 
-impute_pipeline$plot()
+impute_histogram$plot()
 ```
 
 ```{r preproc-012, echo = TRUE, eval = TRUE, message=FALSE}
 
-ranger_preproc <- GraphLearner$new(
-    impute_pipeline %>>%
+ranger_impute_histogram = GraphLearner$new(
+    impute_histogram %>>%
         lrn("regr.ranger"),
-    id = "regr.ranger_imp"
+    id = "regr.ranger_imp_histogram"
 )
+
+ranger_impute_oor = GraphLearner$new(
+    po("imputeoor") %>>%
+        lrn("regr.ranger"),
+    id = "regr.ranger_imp_oor"
+)
+
+design = benchmark_grid(ames_task,
+    learners = list(
+        ranger_impute_histogram,
+        ranger_impute_oor
+    ),
+    cv10
+)
+bmr_new = benchmark(design)
+bmr$combine(bmr_new)
+bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
+
+We see that the out-of-range imputation worked slighly better for the random forest, but the difference is again very small.
+Overall our gradient tree boosting with impact encoding is still the best model, so far.
 
 Many more advanced imputation strategies exist.
 For example, in model based imputation, additional machine learning models are trained to predict missing values from other features.
 Multiple imputation resamples the data and imputes each value multiple time to attain more robust estimates.
 These more advanced techniques very rarely improve the model substantially and the simple imputation techniques introduced before are usually sufficient.
 
+## Pipeline Robustify
+
 `r mlr3pipelines` offers a simple and reusable pipeline for (among other things) imputation and factor encoding called `pipeline_robustify`.
 
 ```{r preproc-0135, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-robustify <- mlr3pipelines::pipeline_robustify()
+robustify = mlr3pipelines::pipeline_robustify()
 robustify$plot()
 ```
 
 *Robustify* does the following steps:
 
-1) Constant features are removed
-2) Character features are cast to categorical features
-3) Date/time features are encoded as numeric features
-4) Ordinal features are encoded as categorical features
-5) Numeric features are imputed by sampling from the empirical distribution and missingness indicators are added
-6) Categorical features are encoded with a new level
+1) Constant features are removed as they do not contain any information
+2) Character features are cast to categorical features as many learners require factors
+3) Date/time features are encoded as numeric features as most learners can not handle these types of features
+4) Ordinal features are encoded as categorical features as most learners do not support ordinal features beyond assuming they are categoricals
+5) Numeric features are imputed by sampling from the empirical distribution and missingness indicators are added as a reasonable imputatation strategy discussed above
+6) Missing values of categorical features are encoded with a new level
 7) Factor levels of categorical features are fixed such that during prediction they are the same as during training; possibly dropping empty training factor levels before
 8) Since the previous step can introduce new missing values at prediction time due to non existing factor levels they are imputed with random factor levels
-9) Categorical features levels are collapsed (starting from the rarest factors in the training data) until there are no more than 1000 levels
-10) Categorical features are encoded by one-hot encoding
+9) Categorical features levels are collapsed (starting from the rarest factors in the training data) until there are no more than 1000 levels as to handle high cardinality categorical features without impact encoding
+10) Categorical features are encoded by one-hot encoding to retain all information
 11) Constant features that might have been created in the previous steps are again removed
 
 ```{r preproc-013, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
-lm_preproc <- GraphLearner$new(
+lm_preproc = GraphLearner$new(
     robustify %>>%
         lrn("regr.lm"),
     id = "regr.lm_preproc"
 )
 
-design <- benchmark_grid(ames_task,
-    learners = list(
-        ranger_preproc,
-        lm_preproc
-    ),
+design = benchmark_grid(ames_task,
+    learners = lm_preproc,
     cv10
 )
-bmr_new <- benchmark(design)
+bmr_new = benchmark(design)
 bmr$combine(bmr_new)
-plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
+
+We see that while gradient boosting is still the best model, a simple linear model with the robustify preprocessor is not much worse.
 
 ## Scaling Features and Targets
 
@@ -348,26 +378,28 @@ Luckily, most based models internally scale the data if required by the algorith
 
 ```{r preproc-014, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-log_lm_preproc <- ppl("targettrafo", graph = lm_preproc)
-log_lm_preproc$param_set$values$targetmutate.trafo <- function(x) log(x)
-log_lm_preproc$param_set$values$targetmutate.inverter <- function(x) list(response = exp(x$response))
+log_lm_preproc = ppl("targettrafo", graph = lm_preproc)
+log_lm_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
+log_lm_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
 
 log_lm_preproc$plot()
 
-log_lm_preproc <- GraphLearner$new(
+log_lm_preproc = GraphLearner$new(
     log_lm_preproc,
     id = "regr.log_lm_preproc"
 )
 
-design <- benchmark_grid(ames_task,
+design = benchmark_grid(ames_task,
     learners = log_lm_preproc,
     cv10
 )
-bmr_new <- benchmark(design)
+bmr_new = benchmark(design)
 bmr$combine(bmr_new)
-plot(bmr, measure = measure)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
+
+We see that with the target transformation a simple linear regression is the best model we have seen so far.
+While it is quite possible that proper hyperparameter tuning of the gradient boosting algorithm results in a better predictive performance, this requires much more computational resources.
 
 ## Feature Extraction
 
@@ -376,7 +408,7 @@ However, we do have some data on the power consumption in the kitchen over an av
 
 ```{r preproc-015, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-energy_data <- fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/energy_usage.csv",
+energy_data = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/energy_usage.csv",
     stringsAsFactors = FALSE
 )
 
@@ -388,11 +420,42 @@ For example, we can look at the maximum used wattage, overall used wattage, numb
 
 This is what is typically called feature extraction.
 
+To extract some features we write our own simple `pipeop`
+
 ```{r preproc-016, echo = TRUE, eval = FALSE, message=FALSE, warning=FALSE}
 
-ames_task_ext <- cbind(ames, energy_data)
+PipeOpFuncExtract = R6Class("PipeOpFuncExtract",
 
-ames_task_ext <- TaskRegr$new(
+  inherit = PipeOpTaskPreprocSimple,
+
+  private = list(
+    .transform = function(task) {
+      cols = self$state$dt_columns
+      if (!length(cols)) {
+        return(task)
+      }
+      dt = task$data(cols = cols)
+      dt = as.data.table(private$.transform_dt(dt, task$levels(cols)))
+      task$select(setdiff(task$feature_names, cols))$cbind(dt)
+    },
+
+    .get_state_dt = function(dt, levels, target) list(),
+
+    .transform_dt = function(dt, levels) {
+        ffeats = paste0("att", 1:720)
+        dt[, ..ffeats]
+    }
+  )
+)
+
+
+```
+
+```{r preproc-016, echo = TRUE, eval = FALSE, message=FALSE, warning=FALSE}
+
+ames_task_ext = cbind(ames, energy_data)
+
+ames_task_ext = TaskRegr$new(
     backend = ames_task_ext,
     target = "Sale_Price",
     id = "ames"
@@ -400,17 +463,17 @@ ames_task_ext <- TaskRegr$new(
 
 ames_task$select(setdiff(ames_task$feature_names, to_remove))
 
-operators <- c("min", "max", "mean")
+operators = c("min", "max", "mean")
 
-mutators <- lapply(operators, function(op) {
+mutators = lapply(operators, function(op) {
     as.formula(paste("~", op, "(", paste0("att", c(1:720), collapse = ", "), ")"))
 })
 
-names(mutators) <- operators
+names(mutators) = operators
 
-pom <- po("mutate")
+pom = po("mutate")
 
-pom$param_set$values$mutation <- mutators
+pom$param_set$values$mutation = mutators
 ```
 
 
