@@ -208,6 +208,7 @@ First we collapse all levels that occur less than 1% of the time and build a sim
 ```{r preproc-009, echo = TRUE, eval = TRUE, message=FALSE}
 
 factor_pipeline =
+    po("removeconstants") %>>%
     po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
     po("encodeimpact", affect_columns = selector_cardinality_greater_than(10),
         id = "high_card_enc") %>>%
@@ -417,33 +418,31 @@ plot(as.numeric(energy_data[1, ]), type = "l")
 
 Although we should not directly add these 720 features to our data, we can use some information about the curves to gain insights into the kitchen's overall energy usage.
 For example, we can look at the maximum used wattage, overall used wattage, number of peaks, and other similar features.
-
 This is what is typically called feature extraction.
 
-To extract some features we write our own simple `pipeop`
+To extract some features we write our own simple `PipeOp` that inherits from `PipeOpTaskPreprocSimple` as shown in Chapter (@sec-pipelines).
+The operator is quite simple, as we hardcode all operations.
+First we extract the functional features save them in a new `data.table` called `ffeats`, apply our extractors `mean`, `min`, `max` and `variance` which are appended to the data.
+Finally the original functional features are removed as we do not need them anymore.
 
-```{r preproc-016, echo = TRUE, eval = FALSE, message=FALSE, warning=FALSE}
+
+```{r preproc-0155, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+library(R6)
 
 PipeOpFuncExtract = R6Class("PipeOpFuncExtract",
 
-  inherit = PipeOpTaskPreprocSimple,
+  inherit = mlr3pipelines::PipeOpTaskPreprocSimple,
 
   private = list(
-    .transform = function(task) {
-      cols = self$state$dt_columns
-      if (!length(cols)) {
-        return(task)
-      }
-      dt = task$data(cols = cols)
-      dt = as.data.table(private$.transform_dt(dt, task$levels(cols)))
-      task$select(setdiff(task$feature_names, cols))$cbind(dt)
-    },
-
-    .get_state_dt = function(dt, levels, target) list(),
-
     .transform_dt = function(dt, levels) {
-        ffeats = paste0("att", 1:720)
-        dt[, ..ffeats]
+        ffeat_names = paste0("att", 1:720)
+        ffeats = dt[, ..ffeat_names]
+        dt[, energy_means := apply(ffeats, 1, mean)]
+        dt[, energy_mins := apply(ffeats, 1, min)]
+        dt[, energy_maxs := apply(ffeats, 1, max)]
+        dt[, energy_vars := apply(ffeats, 1, var)]
+        dt[, (ffeat_names) := NULL]
+        return(dt)
     }
   )
 )
@@ -451,36 +450,48 @@ PipeOpFuncExtract = R6Class("PipeOpFuncExtract",
 
 ```
 
-```{r preproc-016, echo = TRUE, eval = FALSE, message=FALSE, warning=FALSE}
+Finally we rerun our benchmark with all candidate models and see how much each learner improves with the feature extraction.
+
+```{r preproc-016, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
 ames_task_ext = cbind(ames, energy_data)
 
 ames_task_ext = TaskRegr$new(
     backend = ames_task_ext,
     target = "Sale_Price",
-    id = "ames"
+    id = "ames_extended"
 )
 
 ames_task$select(setdiff(ames_task$feature_names, to_remove))
 
-operators = c("min", "max", "mean")
+func_extractor = PipeOpFuncExtract$new("energy_extract")
 
-mutators = lapply(operators, function(op) {
-    as.formula(paste("~", op, "(", paste0("att", c(1:720), collapse = ", "), ")"))
-})
+ames_task_ext = func_extractor$train(list(ames_task_ext))[[1]]
 
-names(mutators) = operators
+learners = list(
+    baseline = baseline_lrn,
+    tree = lrn("regr.rpart"),
+    xgboost_impact = xgboost_impact,
+    ranger_impute_oor = ranger_impute_oor,
+    lm_preproc = lm_preproc,
+    log_lm_preproc = log_lm_preproc
+)
 
-pom = po("mutate")
+design = benchmark_grid(list(ames_task_ext, ames_task),
+    learners = learners,
+    cv10
+)
 
-pom$param_set$values$mutation = mutators
+bmr_final = benchmark(design)
+
 ```
 
 
-## Multiple Data Sources
+```{r preproc-017, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-* We paint a somewhat unrealistic picture of how ML works in practice
-* It is rarely the case that a single data source, such as the ames housing data is present
-* Much more often there are many different data sources: Tables, data bases, spreadsheets, ... that need to be consolidated and understood before we can even start to do the above discussed preprocessing steps
-* We illustrate that in a very simple example, where information about renovations of the properties is not present in the data, but in a seperate table in a `many-to-one`relation.
-* First we need to aggregate information from that table and append it to our data.
+bmr_final$aggregate(measure = measure)
+
+
+```
+
+We observe that feature extraction helped all models, except the featureless baseline for obvious reasons.
