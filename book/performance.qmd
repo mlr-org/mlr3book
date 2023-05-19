@@ -6,177 +6,116 @@
 
 <!-- TODO: check links e.g. autoplot etc. -->
 
-In supervised machine learning, a model can only be deployed in practice if it generalizes well to new, unseen data, that is if it has good `r index("generalization performance", aside = TRUE)`.
-Accurate estimation of the generalization performance is crucial for many aspects of machine learning application and research --- whether we want to fairly compare a novel algorithm with established ones or to find the best algorithm for a particular task after tuning.
-Hence, the concept of `r index("performance estimation")` provides information on how well a model will generalize to new data and plays an important role in the context of model comparison (which we will cover in @sec-benchmarking), model selection, and hyperparameter tuning (the topic of @sec-optimization).
-<!-- And if a model has made its way into production use, we naturally want to monitor its performance on newly gathered data to ensure that it still performs well enough to stay in use, or to re-train it if needed. -->
+In supervised machine learning, a model can only be deployed in practice if it generalizes well to new, unseen data, that is if it has a good `r index("generalization performance", aside = TRUE)`.
+Accurate estimation of the generalization performance is crucial for many aspects of machine learning application and research --- whether we want to fairly compare a novel algorithm with established ones, or to find the best algorithm for a particular task after tuning.
+The concept of `r index("performance estimation")` provides information on how well a model will generalize to new data and plays an important role in the context of model comparison ( @sec-benchmarking), model selection, and hyperparameter tuning (@sec-optimization).
 
-To properly assess the generalization performance of a model, we must first decide on a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
-A performance measure typically computes a numeric score indicating how well the model predictions match the ground truth.
-However, it may also reflect other qualities such as the time for training a model or predicting.
+Assessing the generalization performance of a model beings with selecting a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
+As we have seen in @sec-eval, performance measures typically compute a numeric score indicating how well the model predictions match the ground truth (though some technical measure exceptions were seen in @sec-basics-measures-tech).
 Once we have decided on a performance measure, the next step is to adopt a strategy that defines how to use the available data to estimate the generalization performance.
-Unfortunately, using the same data to train and test a model is a bad strategy as it would lead to an overly optimistic performance estimate.
-For example, an overfitted model may perfectly fit the data on which it was trained by merely memorizing it, but it will then only guess randomly on new data.
-Assessing its performance using the same data it was trained would misleadingly suggest a well-performing model.
-This makes it necessary to test a model on independent data that has not been used to train the model.
-However, we typically train a deployed model on all available data, which leaves no further data to assess its generalization performance.
-To address this issue, existing performance estimation strategies withhold a subset of the available data for evaluation purposes.
-This `r index("test set")` is then used to mimic the presence of unseen data and to estimate the generalization performance.
-The process of holding back part of the data for evaluation purposes simulates the application of the deployed model in practice:
-Over time, new data is gathered that was not seen during the model training process.
-The model is used in practice to make predictions on this new data and we trust that it performs as well as reported by the performance estimate.
-<!-- As time moves on, new data is gathered that was never seen during the model training process, the deployed model makes predictions based on this new data, and we trust that the deployed model performs as well as reported by the performance estimate. -->
-Very useful information on performance measures and performance estimation can be found in @japkowicz2011evaluating.
-
-Below, we will learn different strategies to estimate the generalization performance of a `r ref("Learner")` and how to conduct benchmark experiments for comparing multiple learners using the `r mlr3` package.
+Using the same data to train and test a model is a bad strategy as it would lead to an overly optimistic performance estimate, for example a model that is overfitted (fit too closely to the data) could make perfect predictions on training data simply by memorizing it and then only make random guesses for new data.
+In @sec-basics-partition we introduced the `partition()` function, which splits data into data for training the model and data for testing the model and estimating the generalization performance, this is known as the holdout strategy (@sec-holdout-scoring) and is where we will begin this chapter.
+We will then consider more advanced strategies for assessing the generalization performance (@sec-resampling), look at robust methods for comparing models (@sec-benchmarking), and finally will discuss specialized performance measures for binary classification (@sec-roc).
+For an in-depth overview about measures and performance estimation, we recommend @japkowicz2011evaluating.
 
 ## Holdout and Scoring {#sec-holdout-scoring}
 
-A simple strategy for performance estimation is the `r index("holdout")` method, which randomly partitions the data into a single training and test set using a pre-defined splitting ratio.
-The training set is used to create a provisional model as an intermediate result (hereafter abbreviated as an intermediate model), whose sole purpose is to estimate the performance using the test set.
-This performance estimate is then used as a proxy for the performance of the final model trained on all available data which is deployed in practice.
-Ideally, the training set should be as large as possible so that the intermediate model represents the final model trained on all available data well.
-If the training data is too small, the intermediate model learns less complex relationships compared to the final model, resulting in a pessimistically biased performance estimate.
-On the other hand, we also want as much test data as possible to reliably estimate the generalization performance.
-However, both goals are not possible to achieve at the same time if we have only access to a limited amount of data.
-In practice, it is common to use 2/3 of the data as training set and 1/3 as test set for the holdout strategy as this provides a reasonable trade-off between bias and variance of the generalization performance estimate (see also @kohavi1995 and @dobbin2011).
+The goal of ML is to learn a model that can then be used to make predictions about new data.
+For this model to be as accurate as possible, we would ideally train it on as much data as is available.
+However, data is limited and as we have discussed we cannot train and test a model on the same data.
+In practice, one would usually create an `r index('intermediate model', aside = TRUE)`, which is trained on a subset of the available data and then tested on the remainder of the data.
+The performance of this intermediate model, obtained by comparing the model predictions to the ground truth, is an estimate of the generalization performance of the final model.
 
-In @sec-basics, we have already applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
-In the following we will go into more detail regarding the evaluation process, so let us set up a learner and task again:
+The `r index('holdout', aside = TRUE)` strategy is a simple method to create this split between training and testing datasets, whereby the original data is split into two datasets using a defined ratio.
+Ideally, the training dataset should be as large as possible so the intermediate model represents the final model as well possible.
+If the training data is too small, the intermediate model is unlikely to perform as well as the final model, resulting in a pessimistically biased performance estimate.
+On the other hand, if the training data is so large that the test data is too small, then we will not have a reliable estimate of the generalization performance.
+As a rule of thumb, it is common to use 2/3 of the data for training and 1/3 for testing as this provides a reasonable trade-off between bias and variance of the generalization performance estimate (see also @kohavi1995 and @dobbin2011).
+
+In @sec-basics, we used `partition()` to apply the holdout method to a `r ref("Task")` object.
+To recap by example let's split the `penguins` task with a 2/3 holdout, which is the default in `mlr3`:
 
 ```{r performance-003}
 task = tsk("penguins")
-splits = partition(task, ratio = 2/3)
+splits = partition(task)
 learner = lrn("classif.rpart")
 learner$train(task, splits$train)
 pred = learner$predict(task, splits$test)
 ```
 
-The next step is to select a suitable performance measure from the many possibilities available in `r mlr3` in the `r ref("mlr_measures")` dictionary.
-<!-- TODO: Some practical hints on how to choose a perf. measure here? E.g., mse when outliers should be avoided and large absolute errors should be penalized more, mae when errors should be penalized proportionally to the magnitude of the error -->
-Passing the dictionary to the `as.data.table` function provides an overview of implemented measures with additional information from which we can select a suitable performance measure (see also the link provided under *Measures overview* in @sec-appendix-overview-tables).
-
-```{r performance-004}
-msr_tbl = as.data.table(mlr_measures)
-msr_tbl[1:5, .(key, task_type, predict_type, task_properties)]
-```
-
-<!-- ::: {.callout-tip} -->
-We will typically look for a measure that fits our `task_type` at hand (e.g., `"classif"` for the `penguins` task).
-Looking at the `task_properties` columns is useful to identify performance measures that support only binary classification tasks (indicated by `"twoclass"` in the `task_properties` column) such as the `"classif.auc"` measure (see also @sec-roc-space for more details on the AUC).
-Similarly, some measures require the learner to predict probabilities (indicated by `"prob"` in the `predict_type` column), while others require predicting discrete class labels (indicated by `"response"`).
-Note that some measures list a `NA` as `task_type`, or do not list any `task_properties`, which indicates that they do not have specific requirements in that regard.
-When constructing a learner, we could specify `predict_type = "prob"` to support measures that are not defined on class labels but on probabilities, such as the aforementioned AUC.
-<!-- An overview of common performance measures implemented in `r mlr3`, including a short description can also be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables. -->
-<!-- ::: -->
-
-From @sec-predicting, we know that a `r ref("Prediction")` object contains both predictions (column `response`) and ground truth (column `truth`).
-In performance estimation, we are usually interested in calculating a numeric score that quantifies the differences between predicted values and ground truth values.
-In `r mlr3`, this score is computed by a `r ref("Measure")` object, which usually defines how the differences between predicted and ground truth values are quantified.
-`r ref("Measure")` objects can be created by passing the `key` from the `r ref("mlr_measures")` dictionary of the selected performance measure to the `msr()` function:
+We can now estimate the generalization performance of a final model by evaluating the quality of the predictions from our intermediate model.
+As we have seen in @sec-eval, this is simply a case of choosing one or more measures and passing them to the `$score()` function.
+So to estimate the accuracy of our final model we would pass the accuracy measure to our intermediate model:
 
 ```{r}
-measure = msr("classif.acc")
-measure
+pred$score(msr("classif.acc"))
 ```
 
-Many performance measures are based on point-wise losses, i.e., they compute the differences between the predicted values and ground truth values first on observation level and then aggregate the individual loss values into a single numeric score (composite loss).
+Many performance measures are based on point-wise losses, which means they compute the differences between the predicted values and ground truth values first on an observation level and then aggregate the individual loss values into a single numeric score (composite loss).
 For example, the classification accuracy compares whether the predicted values from the `response` column have the same value as the ground truth values from the `truth` column of the `r ref("Prediction")` object.
 Hence, for each observation, the point-wise loss takes either value 1 (if `response` and `truth` have the same value) or 0 otherwise.
 The `$score()` method summarizes these individual loss values into a composite loss by counting the fraction of observations where the point-wise loss is 1 (i.e., the fraction of observations where `response` and `truth` have the same value).
-Other performance measures exist that are not based on point-wise losses, as they are not defined on observation level, but on a set of observations.
-Examples include the AUC measure (see also @sec-roc-space).
-In @fig-score, we illustrate the input-output behavior of the `$score()` method.
+Other performance measures that are not point-wise instead act on a set of observations, we will return to this in detail when we look at the AUC measure in @sec-roc.
+@fig-score illustrates the input-output behavior of the `$score()` method, we will return to this as we turn to more complex evaluation strategies.
 
 ```{r performance-017}
 #| echo: false
 #| label: fig-score
 #| fig-cap: "Illustration of the `$score()` method which aggregates predictions of multiple observations contained in a prediction object into a single numeric score"
 #| fig-align: "center"
-#| fig-alt: "A funnel-shaped diagram. Illustration of the `$score()` method which aggregates predictions of multiple observations contained in a prediction object into a single numeric score."
+#| fig-alt: A funnel-shaped diagram where the far left box shows the output from a classification prediction object with row_ids, truth, and response columns. Next to this is a box that just says '$score()', which then passes to the right in a funnel shape to a box that says 'classif.acc 0.920354'.
 knitr::include_graphics("Figures/predict-score-single.drawio.svg")
 ```
-
-The code below shows how to estimate the classification accuracy using the `$score()` method of the previously created `r ref("Prediction")` object:
-
-```{r}
-pred$score(measure)
-```
-
-It is also possible to create a list of multiple measures using the `msrs()` function and pass it to the `$score()` method to compare a vector of scores.
-
-```{r}
-measures = msrs(c("classif.acc", "classif.ce"))
-pred$score(measures)
-```
-
-A `r ref("Measure")` can also provide meta information such as the time it took to train the model or the time to make predictions.
-These measures do not use of the information contained in the `r ref("Prediction")` object and therefore require passing the trained learner to the `$score()` method, which includes the corresponding elapsed time information:
-
-```{r}
-measures = msrs(c("time_train", "time_predict"))
-pred$score(measures, learner = learner)
-```
-
-::: {.callout-tip}
-More information about a specific performance measure, including its mathematical definition, can be obtained using the `$help()` method of a `r ref("Measure")` object, which opens the help page of the corresponding measure, e.g., `msr("classif.acc")$help()` provides all information about the classification accuracy.
-:::
 
 ## Resampling {#sec-resampling}
 
 `r index("Resampling")` strategies repeatedly split all available data into multiple training and test sets, with one repetition corresponding to what is called a resampling iteration in `r mlr3`.
 An intermediate model is then trained on each training set and the remaining test set is used to measure the performance in each resampling iteration.
-The generalization performance is finally estimated by aggregating the performance scores over multiple resampling iterations (see @fig-ml-abstraction for an illustration).
-Resampling methods allow using more data points for testing, while keeping the training sets to learn the intermediate models as large as possible.
+The generalization performance is finally estimated by aggregating the performance scores over multiple resampling iterations (@fig-ml-abstraction).
 By repeating the data splitting process often enough, more data points can be used for both training and testing, allowing a more efficient use of all available data for performance estimation.
-<!-- Repeating the data splitting process often enough increases the likelihood that each data point is part of both the train and test set, making more efficient use of all available data for performance estimation. -->
-<!-- Repeating the data splitting process often enough increases the likelihood that across all resampling iterations each data point will be used for training and testing, allowing more efficient use of all available data for performance estimation. -->
-Furthermore, a high number of resampling iterations can reduce the variance and result in a more reliable performance estimate.
-<!-- , which allows us to be more confident in our performance estimates. -->
-This effectively means that the performance estimate is less likely affected by an unlucky split (e.g., a split that does not reflect the original data distribution).
-<!-- , which is a known issue of the holdout method. -->
-However, since resampling strategies create multiple intermediate models trained on different parts of the available data and average their performance, they evaluate the performance of the learning algorithm that induced these intermediate models, rather than the performance of the final model which is deployed in practice.
+Furthermore, a high number of resampling iterations can reduce the variance in our scores and thus result in a more reliable performance estimate.
+This means that the performance estimate is less likely to be affected by an unlucky split (e.g., a split that does not reflect the original data distribution), which is a known issue of the holdout method.
+An important but subtle distinction to note is that resampling strategies create multiple intermediate models trained on different parts of the available data and average their performance, this means they evaluate the performance of the *learning algorithm* that induced these intermediate models and not the performance of the final model itself.
 <!-- It is therefore important to train the intermediate models on nearly all data points from the same distribution so that the intermediate models and the final model are similar. -->
 The best we can do if we only have access to a limited amount of data is to estimate the performance of the final model by the performance of the learning algorithm.
 
 ```{r performance-002, echo=FALSE}
 #| label: fig-ml-abstraction
-#| fig-cap: "A general abstraction of the performance estimation process: The available data is (repeatedly) split into (a set of) training data and test data (data splitting / resampling process). The learner is applied to each training data and produces intermediate models (learning process). Each intermediate model along with its associated test data produces predictions. The performance measure compares these predictions with the associated actual target values from each test data and computes a performance value for each test data. All performance values are aggregated into a scalar value to estimate the generalization performance (evaluation process)."
+#| fig-cap: "A general abstraction of the performance estimation process. The available data is (repeatedly) split into (a set of) training data and test data (data splitting / resampling process). The learner is trained on each training dataset and produces intermediate models (learning process). Each intermediate model makes predictions based on the features in the test data. The performance measure compares these predictions with the ground truth from the test data and computes a performance value for each test dataset. All performance values are aggregated into a scalar value to estimate the generalization performance (evaluation process)."
 #| fig-align: "center"
-#| fig-alt: "A flowchart-like diagram with 3 overlapping boxes. Left box has the caption 'Data splitting / resampling process', upper right box has caption 'Learning process', and lower right box has caption 'Evaluation process'. The process starts in the left box with 'Data' and an arrow to 'Resampling Strategy', which bifurcates into two elements stacked vertically: 'Train Set(s)' above and 'Test Set(s)' below. The 'Train set(s)' element leads to a large blue box with the caption 'Learning process'. There, the 'Train set(s)' flows into the Learner, together with 'Hyperparameters'. An arrow points from the 'Learner' to a stack of 'Intermediate Model(s)'. One thick arrow goes down into the yellow box to a stack of 'Prediction(s)'. And arrow goes from there to 'Performance measure'. The 'Test set(s)' from earlier also have an arrow to 'Performance measure'. From there, a thick arrow goes to 'Performance Value(s)', which has a final dashed arrow to 'Aggregated Performance'."
+#| fig-alt: "A flowchart-like diagram with 3 overlapping boxes. Left box has the caption 'Data splitting / resampling process', upper right box has caption 'Learning process', and lower right box has caption 'Evaluation process'. The process starts in the left box with 'Data' and an arrow to 'Resampling Strategy', which separates into two elements stacked vertically: 'Train Set(s)' above and 'Test Set(s)' below. The 'Train set(s)' element leads to a 'Learner' box, which is inside the larger 'Learning Process' box. A box that says 'Hyperparameters' also sits within the 'Learning Process' and is connected with an arrow also pointing to 'Learner'. An arrow points from the 'Learner' to a stack of 'Intermediate Model(s)'. One thick arrow goes down into the yellow box to a stack of 'Prediction(s)'. An arrow goes from there to 'Performance measure'. The 'Test set(s)' from earlier also have an arrow to 'Performance measure'. From there, a thick arrow goes to 'Performance Value(s)', which has a final dashed arrow to 'Aggregated Performance'."
 knitr::include_graphics("Figures/ml_abstraction-2.svg")
 ```
 
-<!-- Existing resampling strategies differ in how they partition the available data into training and test set. -->
 A variety of resampling strategies exist, each with their respective advantages and disadvantages, which depend on the number of available samples, the task complexity, and the type of model.
-For example, the $k$-fold `r index("cross-validation")` method randomly partitions the data into $k$ non-overlapping subsets, called folds (see @fig-cv-illustration).
-Then $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as test data exactly once in each of the $k$ iterations.
-The $k$ performance estimates resulting from each fold are then aggregated to obtain a more reliable performance estimate.
-This makes cross-validation a popular strategy, as each observation is guaranteed to be used in one of the test sets throughout the procedure, making efficient use of the available data for performance estimation.
-Common values for $k$ are 5 and 10, resulting in each training set containing a factor of 4/5 or 9/10 of the original data.
-Several variations of cross-validation exist, including repeated $k$-fold cross-validation where the entire process illustrated in @fig-cv-illustration is repeated multiple times, and leave-one-out cross-validation (LOO-CV) where the number of folds is equal to the number of observations, leading to the test set in each fold consisting of exactly one observation.
-While LOO-CV sounds like a good strategy in general as it reduces variance, it is computationally very expensive due to the need to fit $N$ models.
-Furthermore, LOO-CV has also drawbacks especially for imbalanced binary classification tasks with a relatively small minority class, e.g., if the test set is a data point from the minority class, the trained model may rely more strongly on the majority class.
-Concepts such as stratification (see @sec-strat-group), which are available for many resampling strategies and can mitigate this problem, are not possible for LOO-CV.
-For linear or polynomial regression models, LOO-CV with mean squared error (MSE) as performance measure can be computed efficiently via a closed-form formula without the need to fit $N$ models, yet this does not apply in the general case (see @james2013introduction).
-<!-- Specific settings such as linear regression allow for a more efficient implementation, yet this does not apply in the general case. -->
 
-`r index("Subsampling")` and `r index("bootstrapping")` are two related strategies, the difference being that subsampling randomly selects a proportion of the data $k$ times _without replacement_, whereas bootstrapping performs a similar procedure _with replacement_.
-Therefore, bootstrapping can result in training sets of the same size as the original data, but at cost of repeating some observations.
-On average, in bootstrapping $1 - e^{-1} \approx 63.2\%$ of the data points will be contained in the training set, referred to as "in-bag" samples, conversely to the remaining 36.8% "out of bag" samples that are used as test set.
-For both procedures, it is generally recommended to choose more rather than fewer repetitions (e.g. $\geq 200$).
-Although increasing this value will lead to longer computation times, the benefit of performing more repetitions (e.g. $\geq 200$) to obtain a more reliable performance estimate usually outweighs the higher computation times.
-For subsampling, sampling ratios of 4/5 or 9/10 are common, resulting in training set proportions analogous to 5-fold or 10-fold cross-validation.
-Note that terminology regarding resampling strategies is not consistent across the literature: Subsampling for example is also referred to as "repeated holdout", or "Monte Carlo cross-validation", which is why it is advisable to verify formal definitions of resampling techniques applied in literature.
+A very common strategy is $k$-fold `r index("cross-validation", aside = TRUE)` (CV), which randomly partitions the data into $k$ non-overlapping subsets, called folds (@fig-cv-illustration).
+The $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as the test data, this process is then repeated until each fold has acted exactly once as the test data.
+The $k$ performance estimates resulting from each fold are aggregated to obtain a more reliable performance estimate (@hastie2001).
+Cross-validation guarantees that each observation will be used in one of the test sets throughout the procedure, making efficient use of the available data for performance estimation.
+Common values for $k$ are 5 and 10, meaning each training will consist of 4/5 or 9/10 of the original data respectively.
+Several variations of cross-validation exist, including repeated $k$-fold cross-validation [Repeated $k$-fold cross-validation]{.aside}\index{resampling!repeated \$k\$-fold cross-validation} where the $k$-fold process is repeated multiple times, and `r index('leave-one-out cross-validation', aside = TRUE)` (LOO-CV) where the number of folds is equal to the number of observations, leading to the test set in each fold consisting of exactly one observation.
+LOO-CV sounds reduces variance in the performance estimate but is computationally very expensive due to the need to fit $N$ models.
+For linear or polynomial regression models, LOO-CV with mean squared error (MSE) as the performance measure can be computed efficiently via a closed-form formula without the need to fit $N$ models, yet this does not apply in the general case (see @james2013introduction).
+Furthermore, LOO-CV is also problematic in imbalanced binary classification tasks as concepts such as stratification (see @sec-strat-group) cannot be applied to LOO-CV.
+
+`r define("Subsampling")` and `r define("bootstrapping")` are two related resampling strategies.
+Subsampling randomly selects a given ratio (4/5 and 9/10 are common) of the data for the training dataset where each observation in the dataset is drawn *without replacement* from the original dataset.
+The model is trained on this data and then tested on the remaining data, and this process is repeated $k$ times.
+This differs from $k$-fold CV as the subsets of training/test data between iterations are not related and each is drawn independently from one another, which means that, across iterations, observations could occur in more than one testing dataset (but only once per dataset).
+Bootstrapping follows the same process as subsampling but data is drawn *with replacement* from the original dataset, this means an observation could be selected multiple times (and thus duplicated) in the training data (but never more than once per test dataset).
+This means that bootstrapping can result in training sets of the same size as the original data, but at the cost of repeating some observations.
+On average, $1 - e^{-1} \approx 63.2\%$ of the data points will be contained in the training set during bootstrapping, referred to as "in-bag" samples (the other 36.8% are known as "out-of-bag" samples).
+For both procedures, it is recommended to choose a higher number of repetitions, e.g. $\geq 200$.
+Although increasing this value will lead to longer computation times, the benefit of performing more repetitions to obtain a more reliable performance estimate will usually outweigh higher computation times.
+Note that terminology regarding resampling strategies is not consistent across the literature, for example subsampling is sometimes referred to as "repeated holdout" \index{repeated holdout|see{subsampling}} or "Monte Carlo cross-validation" \index{Monte Carlo cross-validation|see{subsampling}}, which is why it is advisable to verify formal definitions of resampling techniques applied in literature.
 
 The choice of the resampling strategy usually depends on the specific task at hand and the goals of the performance assessment, but some rules of thumb are available.
 If the available data is fairly small ($N \leq 500$), repeated cross-validation with a large number of repetitions can be used to keep the variance of the performance estimates low.
 For the $500 \leq N \leq 50000$ range, 5- to 10-fold cross-validation is generally recommended.
 In general, the larger the dataset, the fewer splits are required, yet sample-size issues can still occur, e.g., due to imbalanced data.
 Additional recommendations are given by @hpo_practical, which focuses on the model optimization aspect covered in @sec-optimization.
-<!-- For more information on resampling strategies in general, @japkowicz2011evaluating give a comprehensive overview. -->
-Properties and pitfalls of different resampling techniques which we have summarized here have been widely studied and discussed in the literature, see e.g., @molinaro2005prediction, @kim2009estimating, and @bischl2012resampling.
- <!-- @bengio2003no,  -->
+Properties and pitfalls of different resampling techniques, some of which we have summarized here, have been widely studied and discussed in the literature, e.g., @molinaro2005prediction, @kim2009estimating, and @bischl2012resampling.
 
 <!-- Source: https://docs.google.com/presentation/d/1BJXJ365C9TWelojV93IeQJAtEiD3uZMFSfkhzgYH-n8/edit?usp=sharing -->
 ```{r performance-007, echo=FALSE}
@@ -187,98 +126,55 @@ Properties and pitfalls of different resampling techniques which we have summari
 knitr::include_graphics("Figures/cross-validation.svg")
 ```
 
-In `r mlr3`, many resampling strategies have already been implemented so that users do not have to implement them from scratch, which can be tedious and error-prone.
-In this section, we cover how to use `r mlr3` to
+In the rest of this section we will go through querying and constructing resampling strategies in `mlr3`, instantiating train-test splits, and then performing resampling on learners.
 
-* query (@sec-resampling-strategies) implemented resampling strategies,
-* construct (@sec-resampling-construct) resampling objects for a selected resampling strategy,
-* instantiate (@sec-resampling-inst) the train-test splits of a resampling object on a given task, and
-* perform (@sec-resampling-exec) the selected resampling strategy on a learning algorithm to obtain resampling results.
+### Constructing a resampling strategy {#sec-resampling-construct}
 
-### Query {#sec-resampling-strategies}
-
-All implemented resampling strategies can be queried by looking at the `r ref("mlr_resamplings")` dictionary (also listed in @sec-appendix-overview-tables).
-Passing the dictionary to the `as.data.table` function provides a more structured output with additional information:
+All implemented resampling strategies are stored in the `r ref("mlr_resamplings")` dictionary.
 
 ```{r performance-008}
 as.data.table(mlr_resamplings)
 ```
 
-For example, the column `params` shows the parameters of each resampling strategy (e.g., the train-test splitting `ratio` or the number of `repeats`) and the column `iters` displays to the number of performed resampling iterations.
-The number of iterations is a choosable parameter of many strategies such as subsampling, where the `repeats` parameter can be adjusted accordingly.
-For the holdout strategy however, `iters` will of course always show a value of 1.
+The `params` column shows the parameters of each resampling strategy (e.g., the train-test splitting `ratio` or the number of `repeats`) and `iters` displays the number of performed resampling iterations by default.
 
-### Construction {#sec-resampling-construct}
-
-Once we have decided on a resampling strategy, we have to construct a `r ref("Resampling")` object via the function `r ref("rsmp()")`, which will define the resampling strategy we want to employ.
-For example, to construct a `r ref("Resampling")` object for holdout, we use the value shown in the `key` column from the `r ref("mlr_resamplings")` dictionary and pass it to the `r ref("rsmp()")` convenience function.
-Here we select the `holdout` strategy, which allows us to use the same train-test-split which we previously applied using `r ref("partition()")`:
+`r ref("Resampling", index = TRUE, aside = TRUE)` objects can be constructed by passing the strategy 'key' to the sugar function `r ref("rsmp()", index = TRUE, aside = TRUE)`.
+For example, to construct the holdout strategy with a 4/5 split (2/3 is default):
 
 ```{r performance-009}
-resampling = rsmp("holdout")
-print(resampling)
+rsmp("holdout", ratio = 0.8)
 ```
 
-By default, the `rsmp("holdout")` will use 2/3 of the data as training set and 1/3 as test set.
-We can adjust this by specifying the `ratio` parameter for holdout either during construction or by updating the `ratio` parameter afterwards.
-For example, we construct a `r ref("Resampling")` object for holdout with a 80:20 split, then update it to 75:25:
-
-```{r performance-010}
-resampling = rsmp("holdout", ratio = 0.8)
-resampling$param_set$values = list(ratio = 0.75)
-resampling
-```
-
-Holdout only estimates the generalization performance using a single test set, so our performance estimate might vary greatly depending on random chance, and in particular when the dataset contains only few samples.
-To obtain a more reliable performance estimate that makes use of all available data, we have to use other resampling strategies.
-For example, we could also set up a 10-fold cross-validation:
+Parameters for objects inheriting from `Resampling` work in the exact same way as measures and learners and can be set, retrieved, and updated accordingly.
+In practice due to the flaws in this strategy, holdout is more likely to be used via the `partition()` function when performing simple experiments (such as those seen throughout the book).
+As an example of more sophisticated strategies:
 
 ```{r performance-011}
-rsmp("cv", folds = 10)
+# 3-fold CV
+cv3 = rsmp("cv", folds = 3)
+# Bootstrapping with 3 repeats and 9/10 ratio
+boot100 = rsmp("bootstrap", repeats = 3, ratio = 0.9)
+# 2-repeats 5-fold CV
+rcv25 = rsmp("repeated_cv", repeats = 2, folds = 5)
 ```
 
-Analogously, bootstrapping with 100 repetitions and a sampling ratio of 9/10 could be defined like this:
-
-```{r}
-rsmp("bootstrap", repeats = 100, ratio = 0.9)
-```
-
- <!-- The `$is_instantiated` field of a `r ref("Resampling")` object constructed as shown above is set to `FALSE`.
-This means that the resampling strategy is not yet applied to a task, i.e., the train-test splits are not contained in the `r ref("Resampling")` object. -->
-
-### Instantiation {#sec-resampling-inst}
-
-<!-- In this section, we show how to instantiate a resampling strategy (i.e., how to generate the train-test splits) by applying it to a task. -->
-<!-- To obtain the row indices for the training and the test splits, we need to call the `instantiate()` method on a `r ref("Task")` object. -->
-<!-- The resulting train-test indices are then stored in the `r ref("Resampling")` object: -->
-
-When a `r ref("Resampling")` object is constructed, it does not yet contain a concrete set of train-test splits.
-Instead, it merely defines how the data splitting process will be performed on the task when actually running the resampling strategy.
-To actually generate the train-test splits for a given task, we can manually instantiate a resampling strategy by calling the `$instantiate()` method of the previously constructed `r ref("Resampling")` object on the `r ref("mlr_tasks_penguins")` task.
-This will manifest a fixed partition and store the row indices for the training and test sets directly in the `r ref("Resampling")` object.
-We can access these row IDs via the `$train_set()` and `$test_set()` methods:
+When a `r ref("Resampling")` object is constructed, it is simply a definition for how the data splitting process will be performed on the task when running the resampling strategy.
+However, it is possible to manually instantiate a resampling strategy, i.e., generate all train-test splits, by calling the `$instantiate()`\index{\$instantiate()}[`$instantiate()`]{.aside} method on a given task.
+So carrying on our `penguins` example we can instantiate the 3-fold CV object and then view the row indices of the data selected for training and testing each fold using `$train_set()` and `$test_set()` respectively:
 
 ```{r performance-012}
-task = tsk("penguins")
-resampling = rsmp("holdout", ratio = 0.8)
-resampling$instantiate(task)
-train_ids = resampling$train_set(1)
-str(train_ids)
-test_ids = resampling$test_set(1)
-str(test_ids)
+cv3$instantiate(task)
+# first 5 observations in first training fold
+cv3$train_set(1)[1:5]
+# first 5 observations in third test fold
+cv3$test_set(3)[1:5]
 ```
 
-The fact that a `r ref("Resampling")` object is instantiated is indicated by the `$is_instantiated` field.
-When the aim is to fairly compare multiple learners, it is crucial to use the same train-test splits to obtain comparable results.
-That is, we need to ensure that all learners being compared use the same training data to build a model and that they use the same test data to evaluate the model performance.
-Note that in practice, you might rarely need to manually call `$instantiate()`, especially when using `resample()`, which we will discuss next.
+When the aim is to fairly compare multiple learners, we need to ensure that all learners being compared use the same training data to build a model and that they use the same test data to evaluate the model performance.
+In practice, manually instantiating resampling strategies is rarely required but might be useful for debugging or digging deeper into a model's performance.
+Resampling strategies are instantiated automatically for you when using the `resample()`  method, which we will discuss next.
 
-::: {.callout-tip}
-In @sec-benchmarking, you will learn about the `r ref("benchmark()")` function, which automatically instantiates `r ref("Resampling")` objects on all tasks.
-This will ensure a fair comparison by making use of the exact same training and test sets for learning and evaluating the fitted intermediate models.
-:::
-
-### Perform Resampling {#sec-resampling-exec}
+### Resampling experiments {#sec-resampling-exec}
 
 The `r ref("resample()")` function is used to run the resampling strategy defined by a `r ref("Resampling")` object on a task for a given learner.
 It repeatedly fits a model on training sets and stores the predictions made on the corresponding test sets.
