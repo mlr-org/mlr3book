@@ -2,15 +2,17 @@
 % Please edit documentation in R/links.R
 \name{index}
 \alias{index}
-\title{Add term to index}
+\title{Add term to index if non-NULL}
 \usage{
-index(main, index = toproper(main))
+index(main = NULL, index = NULL, aside = FALSE, code = FALSE)
 }
 \arguments{
 \item{main}{Text to show in book}
 
 \item{index}{Index entry if different from `main}
+
+\item{code}{If TRUE tells function to wrap in ``}
 }
 \description{
-Add term to index
+Add term to index if non-NULL
 }
