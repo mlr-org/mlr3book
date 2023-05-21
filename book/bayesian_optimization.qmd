@@ -40,18 +40,19 @@ Besides, evaluating the performance of a learner can take a substantial amount o
 Other examples for black-box optimization problems are real-life experiments, e.g., crash tests or chemical reactions, or expensive computer simulations of such processes.
 
 Many algorithm classes exists that can be used for black-box optimization that differ in how they tackle this problem.
-In @sec-optimization, we showed how to use a grid or random search to find the optimal hyperparameter configuration for a learner on a given task.
+In @sec-optimization, we showed how to use a grid or random search to find the optimal hyperparameter configuration of a learner for a given task.
 However, more sophisticated black-box optimizers such as evolutionary strategies or Bayesian optimization allow for finding much better performing configurations much more efficiently.
 This chapter is therefore of interest to users concerned with sample efficient black-box optimization and HPO.
 
-In general, most black-box optimizers work iteratively, i.e., they propose new points for evaluation by making use of the information collected during the evaluation of previous points.
+In general, most black-box optimizers work iteratively, i.e., they sequentially propose new points for evaluation by making use of the information collected during the evaluation of previous points.
 Evolutionary strategies for example maintain a so-called population and generate new points for evaluation by choosing parents from that population and performing recombination operators such as mutation and crossover to generate the offspring of the next generation.
 In general, evolutionary strategies are very suited for black-box optimization, however, if the cost of the evaluation of the black-box function becomes large (e.g., as in HPO), sample efficiency of an optimizer becomes highly relevant.
 
-Bayesian optimization (BO\index{BO}) -- sometimes also called Model Based Optimization (MBO\index{MBO}) refers to a class of sample-efficient global black-box optimization algorithms that rely on a surrogate model trained on observed data to model the black-box function.
+Bayesian optimization (BO\index{BO}) -- sometimes also called Model Based Optimization (MBO\index{MBO}) refers to a class of sample-efficient iterative global black-box optimization algorithms that rely on a surrogate model trained on observed data to model the black-box function.
 This surrogate model is typically a non-linear regression model that tries to capture the unknown function using limited observed data.
-To select the next candidate point for evaluation, BO algorithms use an acquisition function that quantifies the expected 'utility' of each point in the search space based on the surrogate model.
-The algorithm selects the candidate point with the best acquisition function value, and evaluates the black-box function at that point to then update the surrogate model.
+During each iteration, BO algorithms employ an acquisition function to determine the next candidate point for evaluation.
+This function measures the expected 'utility' of each point within the search space based on the predictions of the surrogate model.
+The algorithm then selects the candidate point with the best acquisition function value, and evaluates the black-box function at that point to then update the surrogate model.
 This iterative process continues until a termination criterion is met, such as reaching a pre-specified maximum number of evaluations or achieving a desired level of performance.
 Often, using BO results in very good optimization performance, especially if the cost of the black-box evaluation becomes expensive and optimization budget is tight.
 
@@ -65,14 +66,14 @@ Detailed introductions to black-box optimization and BO are given in @hpo_practi
 The `r bbotk` (black-box optimization toolkit) package is the workhorse package for general black-box optimization within the mlr3 ecosystem.
 At the heart of the package are the R6 classes:
 
-* `r ref("OptimInstanceSingleCrit")` and `r ref("OptimInstanceMultiCrit")`, which are used to construct an optimization instance\index{optimization instance}[Optimization Instance]{.aside} which describes the optimization problem and stores the results; and
+* `r ref("OptimInstanceSingleCrit")` and `r ref("OptimInstanceMultiCrit")`, which are used to construct an optimization instance\index{optimization instance}[Optimization Instance]{.aside} which describes the optimization problem and stores the results
 * `r ref("Optimizer")` which is used to get and set optimization algorithms.
 
 This should sound very familiar.
 Indeed, in @sec-optimization, the classes `r ref("TuningInstanceSingleCrit")`, `r ref("TuningInstanceMultiCrit")` and `r ref("Tuner")` were already introduced, which are special cases of the `r ref("OptimInstanceSingleCrit")`, `r ref("OptimInstanceMultiCrit")` and `r ref("Optimizer")` classes.
 The latter are suited for general black-box optimization and not only HPO.
 
-Our running example will be to optimize the following sinusoidal function (@fig-bayesian-optimization-sinusoidal), which is characterized by two local minima and one global minimum:
+Throughout this chapter, our running example will be to optimize the following sinusoidal function (@fig-bayesian-optimization-sinusoidal), which is characterized by two local minima and one global minimum:
 $f: [0, 1] \rightarrow \mathbb{R}, x \mapsto 2x + \sin(14x)$.
 
 At the core of an `r ref("OptimInstanceSingleCrit")` lies an `r ref("Objective")`\index{Objective}[Objective]{.aside} function wrapping the actual mapping from a domain to a codomain (see also @sec-defining-search-spaces).
@@ -135,7 +136,7 @@ ggplot(aes(x = x, y = y), data = xydt) +
 ```
 
 The global minimum is located at around `x = 0.792`.
-This value corresponds to the point with the lowest function value:
+This value corresponds to the point of the domain with the lowest function value:
 
 ```{r}
 xydt[y == min(y), ]
@@ -172,12 +173,14 @@ instance = bb_optimize(objective, method = "random_search",
 ```
 
 For a list of available optimizers that can be used for black-box optimization, one can inspect the following dictionary.
-It provides various options, including BO via the key `mbo`, which is introduced in this chapter.
+It provides various options, including Bayesian optimization via the key `mbo`, which is introduced in this chapter.
 It is worth noting that evolutionary strategies are also available within the mlr3 ecosystem via the `r ref_pkg("miesmuschel")` package, although they are not covered in this chapter.
 
 ```{r}
 as.data.table(mlr_optimizers)
 ```
+
+After having introduced the general black-box optimization setup, We will now move on to introduce the basic building blocks of any Bayesian optimization algorithm.
 
 ## Building Blocks of Bayesian Optimization {#sec-bayesian-optimization-blocks}
 
@@ -185,7 +188,7 @@ as.data.table(mlr_optimizers)
 library(mlr3mbo)
 ```
 
-Local optima (as in @fig-bayesian-optimization-sinusoidal) pose a significant challenge for many optimization algorithms as they can trap the algorithm, preventing it from escaping to potentially better solutions.
+Local optima (as in our running example visualized in @fig-bayesian-optimization-sinusoidal) pose a significant challenge for many optimization algorithms as they can trap the algorithm, preventing it from escaping to potentially better solutions.
 Bayesian optimization (BO) is an iterative global optimization algorithm that makes use of a so-called surrogate model to model the unknown black-box function.
 After having observed an initial design, the surrogate model is trained on all data points observed so far.
 Then a so-called acquisition function is used to determine which points of the search space are promising candidate(s) that should be evaluated next.
@@ -194,25 +197,25 @@ The acquisition function should balance exploration and exploitation of the BO a
 We want to exploit knowledge about regions where we observed that performance is good and the surrogate model has low uncertainty but also want to make sure that we do not miss crucial regions and therefore also want to explore into regions where have not yet evaluated points and as a result the uncertainty of the surrogate model is high.
 After having evaluated the next candidate(s), the process repeats itself until a given termination criteria is met.
 
-Most BO flavors therefore follow a simple loop:
+Most BO algorithms or flavors therefore follow a simple iteraive loop:
 
 1. Fit the surrogate model on all observations made so far.
-2. Optimize the acquisition function to find the next candidate(s) that should be evaluated.
+2. Update and optimize the acquisition function to find the next candidate(s) that should be evaluated.
 3. Evaluate the next candidate(s) and update the archive of all observations made so far.
 
 <!--
 #FIXME: Figure from Stefan
 -->
 
-Note that in the following we will often speak of BO flavors, as BO is highly modular, i.e., users can choose different types of surrogate models, acquisition functions and acquisition function optimizers to their liking.
+Note that in the following we will often speak of BO flavors, as BO is highly modular, e.g., users can choose different types of surrogate models, acquisition functions and acquisition function optimizers to their liking.
 
 `r mlr3mbo` makes BO available within the mlr3 ecosystem.
 The core design principle is high modularity based on straightforward to use building blocks allowing users to easily write custom BO algorithms.
 At the heart of the package are the two R6 classes `r ref("OptimizerMbo")` and `r ref("TunerMbo")`, which can be configured with respect to their general *loop* structure of the BO algorithm (`r ref("loop_function")`), *surrogate* model (`r ref("Surrogate")`),  *acquisition function* (`r ref("AcqFunction")`) and *acquisition function optimizer* (`r ref("AcqOptimizer")`).
 
-In the subsequent sections, we will provide a more detailed explanation of the individual building blocks that constitute a standard BO loop and explore their interplay: The initial design, the loop function, the acquisition function and the acquisition function optimizer.
+In the subsequent sections, we will provide a more detailed explanation of these building blocks that constitute a standard BO algoritm and explore their interplay and interaction during optimization: The initial design, the loop function, the acquisition function and the acquisition function optimizer.
 In essence, we will show what happens inside an `r ref("OptimizerMbo")` during optimization.
-Subsequently, we will progress to utilizing the `r ref("OptimizerMbo")` class directly for optimization, after having obtained a deeper understanding of the building blocks and their interplay and interaction involved during optimization.
+Subsequently, we will progress to utilizing the `r ref("OptimizerMbo")` class directly for optimization, after first having obtained a deeper understanding of the building blocks and how they work together.
 
 ### The Initial Design {#sec-bayesian-optimization-initial}
 
@@ -298,7 +301,7 @@ grid.arrange(g_random, g_grid, g_lhs, g_sobol, nrow = 2, ncol = 2)
 
 We observe that a random design does not necessarily cover the search well and in this example simply due to bad luck samples points close to each other leaving large areas unexplored.
 A grid design will result in points being equidistant from their nearest neighbour and does not cover the search space well (areas between points are unexplored).
-In contrast, an LHS design provides a good space-filling property, as it ensures that each interval of each input variable (spanned by the horizontal and vertical dotted lines in @fig-bayesian-optimization-designs) is represented by exactly one sample point.
+In contrast, an LHS design provides a good space-filling property, as it ensures that each interval of each input variable (spanned by the horizontal and vertical dotted lines) is represented by exactly one sample point.
 This usually results in a more even coverage of the search space and a better representation of the distribution of the input variables.
 A Sobol design has a similar goal in mind but does not guarantee this for a small number of samples.
 However, constructing a Sobol design can be done much more efficiently than an LHS design, especially if the number of samples and dimensions grows.
@@ -309,9 +312,9 @@ Moreover, a Sobol design has better coverage properties than an LHS design if th
 -->
 If a specific initial design is desired, it needs to be evaluated on the `r ref("OptimInstance")` before optimizing it.
 The loop function will then recognize the evaluations in the instance's archive and consider it as the initial design, omitting the need to construct and evaluate a new initial design (see also @sec-bayesian-optimization-loop).
-Note that the same mechanism also allows for specifying a custom initial design (i.e., points designed by the user) in the form of a `r ref("data.table")`.
+Note that the same mechanism also allows for specifying a custom initial design (i.e., points manually designed by the user) in the form of a `r ref("data.table")`.
 
-Coming back to our running example of minimizing the sinusoidal function, we will now use the following custom design and evaluate it:
+Coming back to our running example of minimizing the sinusoidal function, we will now use the following custom initial design and evaluate it:
 
 ```{r}
 instance = OptimInstanceSingleCrit$new(objective,
@@ -319,6 +322,13 @@ instance = OptimInstanceSingleCrit$new(objective,
 design = data.table(x = c(0.1, 0.34, 0.65, 1))
 instance$eval_batch(design)
 ```
+
+```{r}
+instance$archive$data
+```
+
+With this data in hand, we can proceed to start the actual iterative BO algorithm by fitting the surrogate model on that data.
+Before diving into that, let's take a moment to introduce the loop function, which plays a crucial role in defining the overall iterative structure of our BO algorithm.
 
 ### Loop Function {#sec-bayesian-optimization-loop}
 
@@ -334,7 +344,7 @@ Technically, all loop functions are instances of the `S3` class `r ref("loop_fun
 
 For sequential single-objective black-box optimization, the Efficient Global Optimization (EGO) algorithm [@jones_1998] can be considered the reference algorithm.
 In `r mlr3mbo`, the EGO algorithm is implemented via the `bayesopt_ego()` loop function (`r ref("mlr_loop_functions_ego")`).
-After having made some assertions and safety checks, and having evaluated the initial design, `bayesopt_ego()` essentially repeatedly performs the following steps:
+After having made some assertions and safety checks, and making sure that we evaluated an initial design, `bayesopt_ego()` essentially repeatedly performs the following steps:
 
 1. `acq_function$surrogate$update()`: update the surrogate model
 2. `acq_function$update()`: update the acquisition function
@@ -343,8 +353,8 @@ After having made some assertions and safety checks, and having evaluated the in
 
 For completeness, we also provide exemplary code (slightly modified and compressed to increase readability) of the `bayesopt_ego()` loop function (`r ref("mlr_loop_functions_ego")`) below.
 The function first sets up the necessary components, including the surrogate model, acquisition function, and acquisition function optimizer.
-If the archive of evaluated points is empty, it generates an initial design of points uniformly at random within the search space and evaluates them (either of size $4D$ where $D$ is the dimensionality of the search space or if specified based on the `init_design_size` argument).
-The function then enters a loop where it repeatedly performs the steps described above: Update the surrogate model $\rightarrow$ update the acquisition function $\rightarrow$ optimize the acquisition function to yield a new candidate$\rightarrow$ evaluate the candidate and add it to the archive.
+If the archive of evaluated points is empty, it generates an initial design of points uniformly at random within the search space and evaluates it (either of size $4D$ where $D$ is the dimensionality of the search space or if specified based on the `init_design_size` argument).
+The function then enters a *loop* where it repeatedly performs the steps described above: 1) update the surrogate model 2) update the acquisition function 3) optimize the acquisition function to yield a new candidate 4) evaluate the candidate and add it to the archive.
 Note that updating the surrogate model and acquisition function and optimizing the acquisition function are wrapped in a error catch mechanism with a fallback to propose the next candidate uniformly at random.
 This robustness mechanism ensures the optimization process continues even in the presence of potential issues.
 For more details on this mechanism, see @sec-robustness-bayesian-optimization.
@@ -391,15 +401,15 @@ bayesopt_ego = function(
 }
 ```
 
-In our running example we will now essentially perform a single iteration of this loop function.
+In our running example of optimizing the sinusoidal function we will now essentially perform a single iteration of this loop.
 The upcoming sections will provide more detailed explanations of the surrogate model update, acquisition function update, and acquisition function optimization steps.
 
 ### Surrogate Model {#sec-bayesian-optimization-surrogate}
 
 A surrogate model\index{surrogate model}[Surrogate Model]{.aside} wraps a regression learner that models the unknown black-box function based on observed data.
-In `r mlr3mbo`, the `r ref("SurrogateLearner")` is a higher-level R6 class inheriting from the base `r ref("Surrogate")`, designed to construct and manage the surrogate model.
+In `r mlr3mbo`, the `r ref("SurrogateLearner")` is a higher-level R6 class inheriting from the base `r ref("Surrogate")` class, designed to construct and manage the surrogate model.
 It leverages regression learners from `r mlr3` to facilitate the modelling process.
-Wrapping the learner in a `r ref("Surrogate")` is necessary to allow for automatic construction of the task the learner should be trained on at each iteration of the BO loop.
+Wrapping the learner in a `r ref("Surrogate")` is necessary to allow for automatic construction of the regression task (`r ref("mlr3::TaskRegr")`) the learner should be trained on at each iteration of the BO loop.
 
 As a learner, any regression learner (`r ref("LearnerRegr")`) from `r mlr3` can be used, however, most acquisition functions require both a mean and a standard deviation prediction (therefore not all learners are suitable for all scenarios).
 Moreover, learners differ in their native ability to handle different types of features or missing values which can be highly relevant in the context of BO depending on the concrete search space at hand.
@@ -436,7 +446,7 @@ Internally, the learner is fitted on a regression task (`r ref("mlr3::TaskRegr")
 Features are given by the variables of the domain, whereas the target is given by the variable of the codomain.
 
 ::: {.callout-note}
-Depending on the nature of the optimization problem and choice of the loop function, multiple optimization targets must be modelled by multiple surrogates, in which case a `r ref("SurrogateLearnerCollection")` should be used instead of a `r ref("SurrogateLearner")`, see @sec-multi-objective-bayesian-optimization.
+Depending on the nature of the optimization problem and choice of the loop function, multiple optimization targets must be modelled by multiple surrogates, in which case a `r ref("SurrogateLearnerCollection")` should be used instead of a `r ref("SurrogateLearner")`.
 :::
 
 In our running example, we so far only evaluated the initial design and the archive therefore contains the following data:
@@ -477,7 +487,7 @@ After having introduced the concept of a surrogate model, we can now move on to 
 
 ### Acquisition Function {#sec-bayesian-optimization-acquisition}
 
-Roughly speaking, an acquisition function\index{acquisition function}[Acquisition Function]{.aside} relies on the predictions of a surrogate model and quantifies the expected 'utility' of each point of the search space if it were to be evaluated in the next iteration.
+Roughly speaking, an acquisition function\index{acquisition function}[Acquisition Function]{.aside} relies on the prediction of a surrogate model and quantifies the expected 'utility' of each point of the search space if it were to be evaluated in the next iteration.
 
 A popular example is given by the Expected Improvement [@jones_1998].
 The Expected Improvement tells us how much we can expect a candidate point to improve over the current best function value observed so far given the performance prediction of the surrogate model:
@@ -591,7 +601,8 @@ The BO algorithm would then go on to evaluate the candidate and continue with th
 instance$eval_batch(candidate)
 ```
 
-In the next section we illustrate how the building blocks can be assembled within an `r ref("OptimizerMbo")` so that BO can be used straightforward for black-box optimization.
+In the following section, we demonstrate how the various building blocks can be combined and organized within an `r ref("OptimizerMbo")`.
+This allows for the straightforward utilization of BO for black-box optimization.
 
 ## Assembling the Building Blocks: Bayesian Optimization for Black-Box Optimization {#sec-bayesian-black-box-optimization}
 
@@ -599,11 +610,11 @@ Users usually do not want to perform all steps of the BO loop manually.
 Instead one can simply construct an `r ref("OptimizerMbo")` collecting and assembling the building blocks together and use the resulting optimizer to optimize the instance.
 The following arguments can be provided during construction: `loop_function`, `surrogate`, `acq_function`, `acq_optimizer`.
 <!--
-#FIXME: args, result assigner
+#FIXME: args, result assigner, maybe in a callout note?
 -->
 Again, note that the `r ref("loop_function")` specifies the overall behavior of the BO algorithm, dictating the structure of the subroutine executed at each iteration.
-Here we use `bayesopt_ego()` (`r ref("mlr_loop_functions_ego")`) loop function suitable for standard single-objective optimization.
-Moreover, note that passing arguments such as `archive` to the `surrogate` is no longer required because we now work with an `r ref("OptimizerMbo")` directly instead of the building blocks.
+Here we use the `bayesopt_ego()` (`r ref("mlr_loop_functions_ego")`) loop function as introduced before, which is suitable for standard single-objective optimization.
+Moreover, note during construction of the `r ref("OptimizerMbo")` passing arguments such as `archive` to the `surrogate` is no longer required because we now work with an `r ref("OptimizerMbo")` directly instead of the building blocks.
 
 ```{r}
 surrogate = srlrn(lrn("regr.km", covtype = "matern5_2",
@@ -622,7 +633,8 @@ optimizer = opt("mbo",
 ```
 
 Again, the initial design can either be evaluated manually prior to optimization or will be automatically constructed by the `r ref("loop_function")` if the instance contains no evaluations.
-Here, we use the same initial design as earlier, evaluate it and optimize the instance using our newly constructed BO algorithm:
+Here, we use the same initial design as earlier, evaluate it.
+We then proceed to optimize the instance using our newly constructed BO algorithm:
 
 ```{r, output=FALSE}
 instance = OptimInstanceSingleCrit$new(objective,
@@ -638,7 +650,7 @@ instance$archive$best()
 
 We see that BO comes close to the true global optimum using few function evaluations.
 
-Visualizing the sequential decision making process of the BO algorithm (i.e., the sampling trajectory of points) shows that focus is given more and more to regions around the global optimum (@fig-bayesian-optimization-sampling).
+Visualizing the sequential decision making process of the BO algorithm (i.e., the sampling trajectory of candidates) shows that focus is given more and more to regions around the global optimum (@fig-bayesian-optimization-sampling).
 Nevertheless, even in later optimization stages, exploration is performed, illustrating that the Expected Improvement (our acquisition function) indeed balances exploration and exploitation.
 
 ```{r}
@@ -659,7 +671,7 @@ ggplot() +
 ```
 
 If we replicate running our BO algorithm ten times (with random initial designs and varying random seeds) and compare this to a random search, we can see that BO indeed performs much better and on average reaches the global optimum after around 15 function evaluations (@fig-bayesian-sinusoidal_bo_rs).
-As expected, the performance for the size of the initial is close to the performance of the random search.
+As expected, the performance for the size of the initial design is close to the performance of the random search.
 
 ```{r, eval=FALSE, echo=FALSE}
 library(mlr3misc)
@@ -707,9 +719,9 @@ knitr::include_graphics("Figures/bo_1d_sinusoidal_bo_rs.png")
 
 ## Bayesian Optimization for Hyperparameter Optimization {#sec-bayesian-tuning}
 
-`r mlr3mbo` can be used out of the box for HPO (tuning) within the mlr3 ecosystem using `r ref("TunerMbo")`.
-Note that `r ref("TunerMbo")` is simply a light-weight wrapper around `r ref("OptimizerMbo")`.
-For illustrative purposes, we revisit the tuning example of @sec-tuning-instance and perform BO instead of a grid search.
+`r mlr3mbo` can be used out of the box for HPO (tuning) within the mlr3 ecosystem using a `r ref("TunerMbo")`.
+Note that `r ref("TunerMbo")` is simply a light-weight wrapper around `r ref("OptimizerMbo")` and therefore also works with the same building blocks.
+For illustrative purposes, we revisit the tuning example of @sec-tuning-instance and now perform BO instead of a grid search.
 
 First, we construct the tuning instance:
 
@@ -734,7 +746,7 @@ instance = ti(
 )
 ```
 
-We can then simply construct an `r ref("TunerMbo")` and use it to optimize the instance.
+We can then simply construct a `r ref("TunerMbo")` and use it to optimize the instance.
 
 ```{r}
 surrogate = srlrn(lrn("regr.km", covtype = "matern5_2",
@@ -754,7 +766,7 @@ tuner = tnr("mbo",
 tuner$optimize(instance)
 ```
 
-We see that BO finds a substantially better hyperparameter configuration than a grid search (using the same budget):
+We see that BO finds a substantially better hyperparameter configuration than the grid search (using the same budget of 25 evaluations):
 
 ```{r, message=FALSE}
 instance = ti(
@@ -773,7 +785,7 @@ tuner$optimize(instance)
 ## Multi-Objective Bayesian Optimization {#sec-multi-objective-bayesian-optimization}
 
 BO can be used to optimize not only single-objective black-box functions, but also multi-objective black-box functions (recall that we already introduced multi-objective optimization in @sec-multi-metrics-tuning).
-Multi-Objective BO algorithms can differ in many design choices, for example whether they use a scalarization approach of objectives and only rely on a single surrogate model, or fit a surrogate model for each objective.
+Multi-objective BO algorithms can differ in many design choices regarding their building blocks, for example whether they use a scalarization approach of objectives and only rely on a single surrogate model, or fit a surrogate model for each objective.
 More details on multi-objective BO can for example be found in @Horn2015 or @Morales2022.
 
 We will now illustrate how ParEGO [@knowles_2006] can be used for multi-objective HPO and revisit the example of @sec-multi-metrics-tuning:
@@ -902,7 +914,7 @@ An example for an acquisition function that properly respects noisiness of obser
 acqf("aei")
 ```
 
-Finally, `r mlr3mbo` allows for explicitly specifying how the final result after optimization is assigned to the instance (i.e., what will be written to `instance$result`) via a so-called result assigner\index{result assigner}[Result Assigner]{.aside}.
+Finally, `r mlr3mbo` allows for explicitly specifying how the final result after optimization is assigned to the instance (i.e., what will be written to `instance$result`) via a so-called result assigner\index{result assigner}[Result Assigner]{.aside} that can be specified during the construction of an `r ref("OptimizerMbo")`.
 
 ```{r}
 as.data.table(mlr_result_assigners)
@@ -912,7 +924,7 @@ as.data.table(mlr_result_assigners)
 #FIXME: Figure from Stefan referencing, reference result assigner where possible
 -->
 
-For example, `ResultAssignerSurrogate` (`r ref("mlr_result_assigners_surrogate")`) will not simply pick the best point according to the evaluations logged in the `archive` but instead will use a surrogate model to predict the mean of all evaluated points and proceed to choose the point with the best mean prediction as the final result.
+For example, `ResultAssignerSurrogate` (`r ref("mlr_result_assigners_surrogate")`) will not simply pick the best point according to the evaluations logged in the `archive` -- which is the behavior of the default `ResultAssignerArchive` (`r ref("mlr_result_assigners_archive")`) -- but instead will use a surrogate model to predict the mean of all evaluated points and proceed to choose the point with the best mean prediction as the final optimization result.
 
 ## Parallelizing Evaluations {#sec-parallel-bayesian-optimization}
 
@@ -932,8 +944,8 @@ We provide an example in the exercises section.
 
 Optimization is an automatic process that should ideally not rely on manual intervention.
 Robustness of an optimization algorithm is almost as important as good performance.
-In the context of BO, there is plenty of room for potential failure of building blocks which can result in potential failure of the whole algorithm.
-For example, if two points in the training data are too close to each other, fitting the Gaussian Process can fail.
+In the context of BO, there is plenty of room for potential failure of building blocks which can result in potential failure of the whole optimization algorithm.
+For example, if two points in the training data are too close to each other, fitting the Gaussian Process surrogate model can fail.
 
 `r mlr3mbo` has several built-in safety nets that ensure that all kinds of errors can be caught and handled appropriately within the BO algorithm.
 Most importantly, all `r ref("Surrogate")` have the `catch_errors` configuration parameter:
@@ -962,7 +974,7 @@ Still, this may be useful when debugging.
 
 In the worst-case (all iterations erroring out), the BO algorithm will therefore simply perform a random search.
 Ideally, the learner wrapped within the surrogate model makes use of encapsulation and can rely on a fallback learner (see @sec-encapsulation-fallback) that will jump into action before this final safety net of proposing the next candidate uniformly at random is triggered.
-Note that the value of the acquisition function is always also logged into the archive of the optimization instance.
+Note that the value of the acquisition function is also always logged into the archive of the optimization instance.
 To make sure that the BO algorithm behaved as expected, users should always inspect the log of the optimization process by looking at the archive and checking whether the acquisition function column is populated as expected.
 This can be done by simply inspecting the `data` logged in the `r ref("Archive")` of the `r ref("OptimInstance")` (`instance$archive$data`).
 
