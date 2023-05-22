@@ -2,17 +2,13 @@
 % Please edit documentation in R/links.R
 \name{define}
 \alias{define}
-\title{Add term to index and margin}
+\title{Define - tmp will be removed}
 \usage{
-define(main, margin = toproper(main), index = toproper(main))
+define(text)
 }
 \arguments{
-\item{main}{Text to show in book}
-
-\item{margin}{Text to show in margin}
-
-\item{index}{Text to show in index}
+\item{text}{text to define}
 }
 \description{
-Add term to index and margin
+Define - tmp will be removed
 }
