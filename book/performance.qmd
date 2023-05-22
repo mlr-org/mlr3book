@@ -236,6 +236,22 @@ While we are usually interested in this aggregated score, it can be useful to lo
 knitr::include_graphics("Figures/predict-score-aggregate-resampling.drawio.svg")
 ```
 
+To visualize the resampling results, you can use the `r ref("mlr3viz::autoplot.ResampleResult()")` function to plot scores across folds as boxplots or histograms (@fig-resamp-viz).
+Histograms can be useful to visually gauge the variance of the performance results across resampling iterations, whereas boxplots are often used when multiple learners are compared side-by-side (see @sec-benchmarking).
+
+```{r performance-035}
+#| layout-ncol: 2
+#| label: fig-resamp-viz
+#| fig-subcap:
+#|   - "Boxplot of accuracy scores."
+#|   - "Histogram of accuracy scores."
+#| message: false
+#| fig-alt: "Left: a boxplot ranging from 0.875 to 1.0 and the interquartile range between 0.925 and 0.7. Right: a histogram with five bars in a roughly normal distribution with mean 0.95, minimum 0.875 and maximum 1.0."
+rr = resample(task, learner, rsmp("cv", folds = 10))
+autoplot(rr, measure = msr("classif.acc"), type = "boxplot")
+autoplot(rr, measure = msr("classif.acc"), type = "histogram")
+```
+
 ### ResampleResult Objects {#sec-resampling-inspect}
 
 As well as being useful for estimating the generalization performance, the `r ref("ResampleResult")` object can also be used for model inspection.
@@ -278,6 +294,21 @@ In this example, we could then inspect the most important variables in each iter
 lapply(rr$learners, function(x) x$model$variable.importance)[2:3]
 ```
 
+Finally, by restricting a task to two features, we can visualize a 2-dimensional prediction surface of individual models in each resampling iteration (@fig-rsmp-viz-surface).
+Prediction surfaces like this are useful for model inspection as they can help identify the cause of unexpected performance result.
+They are also popular for educational purposes to illustrate the prediction behavior of different learning algorithms, such as the classification tree in this example with its characteristic orthogonal lines.
+
+```{r performance-036}
+#| warning: false
+#| label: fig-rsmp-viz-surface
+#| fig-cap: "Prediction boundaries from a decision tree learner across 4 cross-validation folds where prediction surface is in a solid color and ground truth are the squares."
+#| fig-alt: x-axis is 'bill_length', y-axis is 'flipped_length'. Within those are four boxes, each showing almost identical decision boundaries with light green in the top halves, dark purple in bottom left halves, and dark blue in bottom right halves.
+task_small = tsk("penguins")
+task_small$select(c("bill_length", "flipper_length"))
+rr = resample(task_small, learner, rsmp("cv", folds = 4), store_models = TRUE)
+autoplot(rr, type = "prediction")
+```
+
 ### Custom Resampling {#sec-resamp-custom}
 
 {{< include _optional.qmd >}}
@@ -317,338 +348,179 @@ resample(task_small, learner, custom_cv)$predictions()
 <!-- FIXME: REVIEWED TO HERE -->
 {{< include _optional.qmd >}}
 
-In `r mlr3`, we can assign a special role to a feature contained in the data by configuring the corresponding `$col_roles` field of a `r ref("Task")`, which we introduced in @sec-row-col-roles.
-Two of these column roles are of particular interest for resampling: `"group"` and `"stratum"`.
+Using column roles (@sec-row-col-roles), it is possible to group or stratify observations according to a particular feature.
+We will look at each of these in turn.
 
-In some cases, it is desirable to keep observations together when the data is split into corresponding training and test sets, especially when a set of observations naturally belong to a group, e.g., when the data contains repeated measurements of individuals (longitudinal studies) or when dealing with spatial or temporal data.
-When observations belong to groups, we want to ensure that all observations of the same group belong to either the training set or the test set to prevent any potential leakage of information between training and testing sets.
-For example, in a longitudinal study, measurements of a person are usually taken at multiple time points.
-Grouping ensures that the model is tested on data from each person that it has not seen during training, while maintaining the integrity of the person's measurements across different time points.
-In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave-one-object-out" cross-validation strategy, where not only a single observation is left out, but all observations associated with a certain group (see @fig-group for an illustration).
+#### Grouped Resampling {.unlisted .unnumbered}
 
-<!-- where it is not one measurement that is left out, but all measurements associated with one particular individual, institution, or broader object of measurement. -->
+Keeping observations together when the data is split can be useful, and sometimes essential, during resampling -- spatial analysis (@sec-spatiotemporal) is a prominent example of when this is essential, as observations belong to natural groups (e.g., countries).
+When observations belong to groups, we need to ensure all observations of the same group belong to *either* the training set *or* the test set to prevent potential leakage of information between training and testing.
+For example, in a longitudinal study, measurements are taken from the same individual at multiple time points.
+Grouping ensures that the model is tested on data from each *person*, and not each observations, thereby ensuring that data in the training set is not correlated with data in the test set.
+In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave-one-object-out" cross-validation strategy, where all observations associated with a certain group are left out (@fig-group).
 
 ```{r performance-026, echo=FALSE}
 #| label: fig-group
 #| fig-cap: "Illustration of the train-test splits of a leave-one-object-out cross-validation with 3 groups of observations (highlighted by different colors)."
 #| fig-align: "center"
-#| fig-alt: "Illustration of the train-test splits of a leave-one-object-out cross-validation with 3 groups of observations (highlighted by different colors)."
+#| fig-alt: "Three images with a vertical dashed line separating them, each image shows a blue box with text 'Train' and white space around it with text 'Test'. The left image shows a blue box with green and red dots inside it and yellow dots outside it, the caption says 'Iteration 1'. The middle image shows a blue box with green and yellow dots inside it and red dots outside it, the caption says 'Iteration 2'. The right image shows a blue box with yellow and red dots inside it and green dots outside it, the caption says 'Iteration 3'."
 knitr::include_graphics("Figures/loobject.svg")
 ```
 
-In `r mlr3`, the column role `"group"` allows to specify the column in the data that defines the group structure of the observations (see also the help page of `r ref("Resampling")` for more information on the column role `"group"`).
-The column role can be specified by assigning a feature to the `$col_roles$group` field which will then determine the group structure.
-The following code performs leave-one-object-out cross-validation using the feature `year` of the `r ref("mlr_tasks_penguins")` task to determine the grouping.
-Since the feature `year` contains only three distinct values (i.e., `2007`, `2008`, and `2009`), the corresponding test sets consist of observations from only one year:
-
-<!-- In `r mlr3`, we can assign a special column role to a feature contained in the data either during task construction or afterwards by specifying the feature that defines the group in the `$col_roles$group` field.  -->
-<!-- For example, the column role `"group"` specifies which column in the data should be used to define the group structure of the observations (see also the help section on `r ref("Resampling")` for more information on the column role `"group"`). -->
-
-<!-- A possible use case for the need of grouping (or blocking) of observations during resampling is spatiotemporal modeling, where observations inherit a natural grouping, either in space or time or in both space and time that need to be considered during resampling. -->
+The `"group"` column role allows us to specify the column in the data that defines the group structure of the observations.
+In the following code we construct a leave-one-out resampling strategy, assign the `"group"` role to the the 'year' column of the `penguins` dataset, instantiate the resampling strategy, and finally show how the years are nicely separated in the first fold.
 
 ```{r performance-027}
-task_grp = tsk("penguins")
-task_grp$col_roles$group = "year"
 r = rsmp("loo")
+task_grp = tsk("penguins")
+task_grp$set_col_roles("year", "group")
 r$instantiate(task_grp)
-
-table(task_grp$data(cols = "year"))
+table(task_grp$data(rows = r$train_set(1), cols = "year"))
 table(task_grp$data(rows = r$test_set(1), cols = "year"))
 ```
 
-:::{.callout-tip}
-If there are many groups, say 100, we can limit the number of resampling iterations using k-fold cross-validation (or any other resampling strategy with a previously definable number of resampling iterations) instead of performing leave-one-object-out cross-validation.
-In this case, each group is considered as a single observation, so that the division into training and test sets is done as determined by the resampling strategy
-:::
+Other cross-validation techniques work in a similar way, where folds are determined at a group-level (as opposed to an observation-level).
 
-Another column role available in `r mlr3` is `"stratum"`, which implements stratified sampling.
+#### Stratified Sampling {.unlisted .unnumbered}
+
 Stratified sampling ensures that one or more discrete features within the training and test sets will have a similar distribution as in the original task containing all observations.
-This is especially useful when a discrete feature is highly imbalanced and we want to make sure that the distribution of that feature is similar in each resampling iteration.
-Stratification is commonly used for imbalanced classification tasks where the classes of the target feature are imbalanced (see @fig-stratification for an illustration).
-Stratification by the target feature ensures that each intermediate model is fit on training data where the class distribution of the target is representative of the actual task.
-Otherwise it could happen that target classes are severely under- or over represented in individual resampling iterations, skewing the estimation of the generalization performance.
+This is especially useful when a discrete feature is highly imbalanced and we want to make sure that the distribution of that feature is similar in each resampling iteration (@fig-stratification).
+We can also stratify on the target feature to ensure that each intermediate model is fit on training data where the class distribution of the target is representative of the actual task, this is useful to ensure target classes are not under- or over represented in individual resampling iterations, which would skew the estimation of the generalization performance.
 
 ```{r performance-028, echo=FALSE}
 #| label: fig-stratification
 #| fig-cap: "Illustration of a 3-fold cross-validation with stratification for an imbalanced binary classification task with a majority class that is about twice as large as the minority class. In each resampling iteration, the class distribution from the available data is preserved (which is not necessarily the case for cross-validation without stratification)."
 #| fig-align: "center"
-#| fig-alt: "Illustration of a 3-fold cross-validation with stratification for an imbalanced binary classification task with a majority class that is about twice as large as the minority class. In each resampling iteration, the class distribution from the available data is preserved (which is not necessarily the case for cross-validation without stratification)."
+#| fig-alt: "The figure shows rectangles in yellow and green to represent the majority and minority class respectively. On the left side are rectangles corresponding to the task before it is split; the majority class is clearly larger than the minority class. In the next three boxes we see Iterations 1-3 where the visual size difference between the majority and minority classes is preserved."
 knitr::include_graphics("Figures/stratification.svg")
 ```
 
-<!-- Stratified sampling ensures that the training and test sets will have similar distribution regarding one or more discrete features as in the original task containing all observations. -->
-The `$col_roles$stratum` field of a `r ref("Task")` can be set to one or multiple features, including the target in case of classification tasks.
-In case of multiple features, each combination of the values of all stratification features will form a stratum.
-For example, the target column `species` of the `r ref("mlr_tasks_penguins")` task is imbalanced:
+Unlike grouping, it is possible to stratify by multiple discrete features using the `"stratum"` column role.
+In this case, stratum would be formed out of each combination of the stratified features, e.g., for two stratified features A and B with levels Aa, Ab, Ba, Bb respectively then the created stratum would be AaBa, AaBb, AbBa, AbBb.
+
+The `penguins` task displays imbalance in the `species` column, as can be seen in the output below:
 
 ```{r performance-029}
 prop.table(table(task$data(cols = "species")))
 ```
 
-Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the training and test sets of a 3-fold cross-validation strategy:
+Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the training and test sets of a k-fold cross-validation strategy, as can be seen in the example below.
 
 ```{r performance-030}
-r = rsmp("cv", folds = 3)
-r$instantiate(task)
-prop.table(table(task$data(rows = r$test_set(1), cols = "species")))
-prop.table(table(task$data(rows = r$test_set(2), cols = "species")))
-prop.table(table(task$data(rows = r$test_set(3), cols = "species")))
+cv10 = rsmp("cv", folds = 10)
+cv10$instantiate(task)
+rbind("Fold 1" = prop.table(table(task$data(rows = cv10$test_set(1), cols = "species"))),
+"Fold 2" = prop.table(table(task$data(rows = cv10$test_set(2), cols = "species"))))
 ```
 
-In the worst case, and especially for highly imbalanced classes, the minority class might be entirely left out of the training set in one or more resampling iterations.
-Consequently, the intermediate models within these resampling iterations will never predict the minority class, resulting in a misleading performance estimate for any resampling strategy without stratification.
-Relying on such a misleading performance estimate can have severe consequences for a deployed model, as it will perform poorly on the minority class in real-world scenarios.
-For example, misclassification of the minority class can have serious consequences in certain applications such as in medical diagnosis or fraud detection, where failing to identify the minority class may result in serious harm or financial losses.
-Therefore, it is important to be aware of the potential consequences of imbalanced class distributions in resampling and use stratification to mitigate highly unreliable performance estimates.
+We can see across folds how Chinstrap is represented quite differently (`r round(prop.table(table(task$data(rows = cv10$test_set(1), cols = "species")))[2],2)` vs. `r round(prop.table(table(task$data(rows = cv10$test_set(2), cols = "species")))[2],2)`)
+
+When imbalance is severe, minority classes could be left out of the training sets entirely.
+Consequently, the intermediate models within these resampling iterations will never predict the missing class, resulting in a misleading performance estimate for any resampling strategy without stratification, which could have severe consequences for a deployed model as it will perform poorly on the minority class in real-world scenarios (e.g., medical diagnosis of rare diseases).
+It is important to be aware of the potential consequences of imbalanced class distributions in resampling and use stratification to mitigate highly unreliable performance estimates.
 The code below uses `species` as `"stratum"` column role to illustrate that the distribution of `species` in each test set will closely match the original distribution:
 
 ```{r performance-031}
 task_str = tsk("penguins")
-task_str$col_roles$stratum = "species"
-r = rsmp("cv", folds = 3)
-r$instantiate(task_str)
+# set species to have both the 'target' and 'stratum' column role
+task_str$set_col_roles("species", c("target", "stratum"))
+cv10$instantiate(task_str)
 
-prop.table(table(task_str$data(rows = r$test_set(1), cols = "species")))
-prop.table(table(task_str$data(rows = r$test_set(2), cols = "species")))
-prop.table(table(task_str$data(rows = r$test_set(3), cols = "species")))
+rbind("Fold 1" = prop.table(table(task_str$data(rows = cv10$test_set(1), cols = "species"))),
+"Fold 2" = prop.table(table(task_str$data(rows = cv10$test_set(2), cols = "species"))))
 ```
 
-Rather than assigning the `$col_roles$stratum` directly, it is also possible to use the `$set_col_roles()` method to add or remove columns to specific roles incrementally:
-
-```{r performance-032}
-task_str$set_col_roles("species", remove_from = "stratum")
-task_str$col_roles$stratum
-
-task_str$set_col_roles("species", add_to = "stratum")
-task_str$col_roles$stratum
-```
-
-We can further inspect the current stratification via the `$strata` field, which returns a `data.table` of the number of observations (`N`) and row indices (`row_id`) of each stratum.
-Since we stratified by the `species` column, we expect to see the same class frequencies as when we tabulate the task by the `species` column:
-
-```{r performance-033}
-task_str$strata
-table(task$data(cols = "species"))
-```
-
-Should we add another stratification column, the `$strata` field will show the same values as when we cross-tabulate the two variables of the task:
+You can view the observations that fall into each stratum using the `$strata` field of a `Task` object, this can be particularly useful when we are interested in multiple strata:
 
 ```{r performance-034}
-task_str$set_col_roles("year", add_to = "stratum")
-
+task_str$set_col_roles("year", "stratum")
 task_str$strata
 table(task$data(cols = c("species", "year")))
 ```
 
-### Plotting Resample Results {#sec-autoplot-resampleresult}
-
-`r mlr3viz` provides an `r ref("autoplot()")` function to automatically visualize the resampling results either in a boxplot or histogram:
-
-<!-- Note: using `fig-subcap` here as `fig-cap` would duplicate the captions. Plots are simple enough to not warrant individual captions though :/ -->
-
-```{r performance-035}
-#| layout-ncol: 2
-#| fig-subcap:
-#|   - "Boxplot of accuracy scores."
-#|   - "Histogram of accuracy scores."
-#| message: false
-resampling = rsmp("bootstrap")
-rr = resample(task, learner, resampling)
-
-library(mlr3viz)
-autoplot(rr, measure = msr("classif.acc"), type = "boxplot")
-autoplot(rr, measure = msr("classif.acc"), type = "histogram")
-```
-The histogram is useful to visually gauge the variance of the performance results across resampling iterations, whereas the boxplot is often used when multiple learners are compared side-by-side.
-
-We can also visualize a 2-dimensional prediction surface of individual models in each resampling iteration if the task is restricted to two features:
-
-```{r performance-036}
-#| warning: false
-#| fig-cap: "Decision boundaries of a decision tree learner across 4 cross-validation folds"
-task$select(c("bill_length", "flipper_length"))
-resampling = rsmp("cv", folds = 4)
-rr = resample(task, learner, resampling, store_models = TRUE)
-autoplot(rr, type = "prediction")
-```
-
-Prediction surfaces like this are a useful tool for model inspection, as they can help to identify the cause of unexpected performance result.
-Naturally, they are also popular for educational purposes to illustrate the prediction behavior of different learning algorithms, such as the classification tree in the example above with its characteristic orthogonal lines.
-
 ## Benchmarking {#sec-benchmarking}
 
-<!-- introduction from chapter intro moved to section intro -->
-`r index("Benchmarking")` in supervised machine learning refers to the comparison of different learners on a single task or multiple tasks.
-When comparing learners on a single task or on a domain consisting of multiple similar tasks, the main aim is often to rank the learners according to a pre-defined performance measure and to identify the best-performing learner for the considered task or domain.
-In an applied setting, benchmarking may be used to evaluate whether a deployed model used for a given task or domain can be replaced by a better alternative solution.
-When comparing multiple learners on multiple tasks, the main aim is often more of a scientific nature, e.g., to gain insights into how different learners perform in different data situations or whether there are certain data properties that heavily affect the performance of certain learners (or certain hyperparameters of learners).
-For example, it is common practice for algorithm designers to analyze the generalization performance or runtime of a newly proposed learning algorithm in a benchmark study where it has been compared with existing learners.
-<!-- In an applied setting, benchmarking is used to compare a production model to e.g. a novel method or re-trained model based on the original learner to evaluate whether the model is still suitable. -->
+`r index("Benchmarking")` in supervised machine learning refers to the comparison of different learners on one or more tasks.
+When comparing *multiple learners on a single task* or on a domain consisting of multiple similar tasks, the main aim is often to rank the learners according to a pre-defined performance measure and to identify the best-performing learner for the considered task or domain.
+In an applied setting, benchmarking may be used to evaluate whether a deployed model used for a given task or domain (usually the 'state of the art' or 'SOTA' \index{state of the art}) can be replaced by a better alternative.
+When comparing *multiple learners on multiple tasks*, the main aim is often more of a scientific nature, e.g., to gain insights into how different learners perform in different data situations or whether there are certain data properties that heavily affect the performance of certain learners (or certain hyperparameters of learners).
+It is common (and good) practice for algorithm designers to analyze the generalization performance or runtime of a newly proposed learning algorithm in a benchmark study where it has been compared with existing learners.
 
-<!-- previous subsection intro
-`r index("Benchmarking")` is used to compare the performance of different learning algorithms applied on one or more tasks using (potentially different) resampling strategies.
-The purpose is to rank the learning algorithms regarding a performance measure of interest and to identify the best learning algorithms for a certain task or across various tasks.
--->
-The `r mlr3` package offers the convenience function `r ref("benchmark()")` to conduct a `r index("benchmark experiment")`.
-<!-- and repeatedly train and evaluate multiple learners under the same conditions. -->
-The function internally runs the `r ref("resample()")` function on each task separately and collects the results, so one can think of it as an extension of `r ref("resample()")`.
-The provided resampling strategy is automatically instantiated on each task to ensure a fair comparison by training and evaluating multiple learners under the same conditions.
-This means that all provided learners use the same train-test splits for each task, which we emphasized in the previous section.
-<!-- Example moved from quick start: -->
-For illustration, we show a minimal code example that compares the classification accuracy of the decision tree against a featureless learner which always predicts the majority class:
+### benchmark() {#sec-bm-design}
 
-```{r performance-006}
-learners = c(learner, lrn("classif.featureless"))
-d = benchmark_grid(tasks = task, learners = learners, resamplings = resampling)
-bmr = benchmark(design = d)
-acc = bmr$aggregate(msr("classif.acc"))
-acc[, .(task_id, learner_id, classif.acc)]
-```
+`r index('Benchmark experiments')` in `mlr3` are conducted with `r ref("benchmark()", aside = TRUE)`, which simply runs `r ref("resample()")` on each task and learner separately, then collects the results.
+The provided resampling strategy is automatically instantiated on each task to ensure that all learners are compared against the same training and test data.
 
-In this section, we cover how to
-
-* construct a benchmark design (@sec-bm-design) to define the benchmark experiments to be performed,
-* run the benchmark experiments (@sec-bm-exec) and aggregate their results, and
-* convert benchmark objects (@sec-bm-resamp) to other types of objects that can be used for different purposes.
-
-### Constructing Benchmarking Designs {#sec-bm-design}
-
-In `r mlr3`, we can define a design to perform benchmark experiments via the `r ref("benchmark_grid()")` convenience function.
-The design is essentially a table of scenarios to be evaluated and usually consists of unique combinations of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")` triplets.
-
-The `r ref("benchmark_grid()")` function constructs an exhaustive design to describe which combinations of learner, task and resampling should be used in a benchmark experiment.
-It properly instantiates the used resampling strategies so that all learners are evaluated on the same train-test splits for each task, ensuring a fair comparison.
-To construct a list of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")` objects, we can use the convenience functions `r ref("tsks()")`, `r ref("lrns()")`, and `r ref("rsmps()")`.
-
-<!-- To set up the learners, we deviate from the default behavior by setting them to predict probabilities rather than class labels (`predict_type = "prob"`) to allow scoring the results using the AUC measure. -->
-
-<!-- We also set them up to predict for the observations of both the training and test set by (`predict_sets = c("train", "test")`), rather than only making predictions on the test data. -->
-
-We design an example benchmark experiment and train a classification tree from the `r ref_pkg("rpart")` package, a random forest from the `r ref_pkg("ranger")` package and a featureless learner serving as a baseline on four different binary classification tasks.
-The constructed `r index("benchmark design")` is a `data.table` containing the task, learner, and resampling combinations in each row that should be performed:
+To use the `benchmark()` function we first call `r ref("benchmark_grid()")`, which constructs an exhaustive *design* to describe all combinations of the learners, tasks and resamplings to be used in a benchmark experiment, and instantiates the resampling strategies.
+By example, below we setup a design to see if a random forest, decision tree, or featureless baseline (@sec-basics-featureless), perform best across two classification tasks.
 
 ```{r performance-037}
-tasks = tsks(c("german_credit", "sonar", "breast_cancer"))
-learners = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"),
+tasks = tsks(c("german_credit", "sonar"))
+learners = lrns(c("classif.rpart", "classif.ranger", "classif.featureless"),
   predict_type = "prob")
 resampling = rsmps("cv", folds = 5)
 
 design = benchmark_grid(tasks, learners, resampling)
 head(design)
 ```
-<!-- Note: Raphael's chapter comments were against printing the design grid, whereas Bernd in a later meeting was explicitly for printing it. -->
 
-<!-- No longer needed as new printer makes this superfluous
-Since the `r ref("data.table")` contains R6 objects within list-columns, we unfortunately can not infer too much about the `task` column, but the `r ref("ids")` utility function can be used for quick inspection or subsetting:
-
-```{r performance-038}
-mlr3misc::ids(design$task)
-design[mlr3misc::ids(task) == "sonar", ]
-```
--->
-
-It is also possible to subset the design, e.g., to exclude a specific task-learner combination by manually removing a certain row from the design which is a `data.table`.
-Alternatively, we can construct a custom benchmark design by manually defining a `data.table` containing task, learner, and resampling objects (see also the examples section in the help page of `r ref("benchmark_grid()")`).
+The resulting design is essentially just a `data.table`, which can be modified if you want to remove particular combinations
 
 ::: {.callout-warning}
+## Reproducibility when using benchmark_grid
+
 By default, `benchmark_grid()` instantiates the resamplings on the tasks, which means that concrete train-test splits are generated.
 Since this process is random, it is necessary to set a seed **prior to** calling `benchmark_grid()` in order to ensure reproducibility of the data splits.
 :::
 
-<!-- :::{.callout-tip} -->
-<!-- Note that if you construct a custom design with `r ref("data.table()")`, the train/test splits will be different for each row of the design if you do not [**manually instantiate**](#resampling-inst) the resampling before constructing the design. -->
-<!-- ::: -->
-
-<!-- ```{r performance-021} -->
-<!-- #| echo: false -->
-<!-- # Creating a grid using a cross join -->
-<!-- design_manual = data.table::CJ( -->
-<!--   task = tsks(c("german_credit", "sonar")), -->
-<!--   learner = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"), -->
-<!--                  predict_type = "prob", predict_sets = c("train", "test")), -->
-<!--   resampling = rsmps("cv", folds = 3), -->
-<!--   sorted = FALSE -->
-<!-- ) -->
-
-<!-- # Manually remove e.g. the third combination from the grid -->
-<!-- design_manual = design_manual[-3] -->
-
-<!-- # Manually instantiate the resamplings -->
-<!-- Map(function(task, resampling) { -->
-<!--   resampling$instantiate(task) -->
-<!-- }, task = design_manual$task, resampling = design_manual$resampling) -->
-<!-- ``` -->
-
-
-### Perform Benchmark Experiments {#sec-bm-exec}
-
-To run the benchmark experiment, we can pass the constructed benchmark design to the `r ref("benchmark()")` function, which will internally call `r ref("resample()")` for all the combinations of task, learner, and resampling strategy in our benchmark design:
+The constructed benchmark design can then be passed to `r ref("benchmark()")` to run the experiment and the result is a `r ref("BenchmarkResult")` object:
 
 ```{r performance-039}
 bmr = benchmark(design)
 bmr
 ```
 
-Once the benchmarking is finished (this can take some time, depending on the size of your design), we can aggregate the performance results with the `$aggregate()` method of the returned `r ref("BenchmarkResult")`:
+As `benchmark()` is just an extension of `resample()`, we can once again use `$score()`, or `$aggregate()` depending on your use-case, though note that in this case `$score()` will return results over each fold of each learner/task/resampling combination.
 
 ```{r performance-040}
-acc = bmr$aggregate(msr("classif.acc"))
-acc[, .(task_id, learner_id, classif.acc)]
+head(bmr$score())
+bmr$aggregate()[, .(task_id, learner_id, classif.ce)]
 ```
 
-As the results are shown in a `r ref("data.table")`, we can easily aggregate or otherwise post-process the results.
-For example, if we are interested in the learner that performed best across all tasks, we could average the performance of each individual learner across all tasks.
-Please note that averaging performance scores across multiple tasks as in this example is not always appropriate for comparisons across different tasks.
-This is because different tasks may have different levels of difficulty, complexity, or variability in the data they involve.
-Therefore, averaging the performance across different tasks may not provide a fair comparison.
-A more common alternative to compare the overall algorithm performance across multiple tasks is to first compute the ranks of each learner on each task separately and then compute the average ranks.
-This may provide a more robust comparison of the performance by taking into account the relative ranking of the learner on each task, rather than their raw performance scores.
-However, when using ranks, we lose the information about the numerical differences of the calculated performance scores.
-<!-- TODO: link to the "statistical tests for benchmarks" section? -->
-For illustration purposes, we show how to average the performance of each individual learner across all tasks:
+This would conclude a basic benchmark experiment where you can draw tentative conclusions about model performance, in this case we would possibly conclude the decision tree is a better performing model.
+We draw conclusions cautiously here as we have not run any statistical tests or included standard errors of measures, so we cannot definitively say if one model outperforms the other.
 
-```{r performance-041}
-acc[, list(mean_accuracy = mean(classif.acc)), by = "learner_id"]
-```
+As the results of `$aggregate()` are returned in a `data.table`, you can post-process and analyze the results in any way you want.
+A common *mistake* is to average the learner performance over all tasks when the tasks vary significantly.
+This is a mistake as averaging the performance will miss out important insights into how learners compare on 'easier' or more 'difficult' predictive problems.
+A more robust alternative to compare the overall algorithm performance across multiple tasks is to compute the ranks of each learner on each task separately and then calculate the average ranks.
+This can provide a better comparison as task specific 'quirks' are taken into account by comparing learners within tasks before comparing them across tasks.
+However, using ranks will lose information about the numerical differences of the calculated performance scores.
 
-Ranking the performance scores can either be done via standard `r ref("data.table")` syntax, or more conveniently with the `r mlr3benchmark` package.
-We first use `r ref("as_benchmark_aggr")` to aggregate the `r ref("BenchmarkResult")` using our measure, after which we use the `$rank_data()` method to convert the performance scores to ranks.
-The `minimize` argument is used to indicate that the classification accuracy should not be minimized, i.e. a higher score is better.
+Ranking the performance scores can be performed most conveniently with the `r mlr3benchmark` package.
+We first use `r ref("as_benchmark_aggr")` to aggregate the `r ref("BenchmarkResult")` and then we use the `$rank_data()` method to convert the performance scores to ranks.
 
 ```{r performance-042}
-library("mlr3benchmark")
-
-bma = as_benchmark_aggr(bmr, measures = msr("classif.acc"))
-bma$rank_data(minimize = FALSE)
+library(mlr3benchmark)
+bma = as_benchmark_aggr(bmr, measures = msr("classif.ce"))
+bma$rank_data()
 ```
 
 This results in per-task rankings of the three learners.
-Unsurprisingly, the featureless learner ranks last, as it always predicts the majority class.
-However, it is common practice to include it as a baseline in benchmarking experiments to easily gauge the relative performance of other algorithms.
-In this simple benchmark experiment, the random forest ranked first, outperforming a single classification tree as one would expect.
+Unsurprisingly, the random forest ranked first and the baseline last.
+For more advanced statistical tests and `r mlr3benchmark` usage, see @sec-large-benchmarking.
 
-### Inspect BenchmarkResult Objects {#sec-bm-resamp}
+### BenchmarkResult Objects {#sec-bm-resamp}
 
 A `r ref("BenchmarkResult")` object is a collection of multiple `r ref("ResampleResult")` objects.
-We can analogously use `r ref("as.data.table")` to take a look at the contents and compare them to the `r ref("data.table")` of the `r ref("ResampleResult")` from the previous section:
 
 ```{r performance-043}
 bmrdt = as.data.table(bmr)
-
-bmrdt[1:2, -"uhash"]
-as.data.table(rr)[1:2, ]
+bmrdt[1:2, .(task, learner, resampling, iteration)]
 ```
 
-We see that the general contents of a `r ref("BenchmarkResult")` and `r ref("ResampleResult")` which we specified in @sec-resampling-inspect is very similar, with the additional unique identification column `"uhash"` in the former being the only difference.
-We did not show this column to save space, but it is used to uniquely identify individual `ResampleResult`s:
-
-```{r}
-bmrdt[c(1, 7, 12), ]
-```
-
-
-The stored `r ref("ResampleResult")`s can be extracted via the `$resample_result(i)` method, where `i` is the index of the performed benchmark experiment.
-This allows us to investigate the extracted `r ref("ResampleResult")` or individual resampling iterations as shown previously (see @sec-resampling).
+The contents of a `r ref("BenchmarkResult")` and `r ref("ResampleResult")` (@sec-resampling-inspect) are almost identical and the stored `r ref("ResampleResult")`s can be extracted via the `$resample_result(i)` method, where `i` is the index of the performed benchmark experiment.
+This allows us to investigate the extracted `r ref("ResampleResult")` or individual resampling iterations as shown in @sec-resampling.
 
 ```{r performance-044}
 rr1 = bmr$resample_result(1)
@@ -657,63 +529,27 @@ rr2 = bmr$resample_result(2)
 rr2
 ```
 
-Multiple `r ref("ResampleResult")` can be again converted to a `r ref("BenchmarkResult")` with the function `r ref("as_benchmark_result()")` and combined with `c()`:
+In addition, `BenchmarkResult`s also have the `r ref('as_benchmark_result()', aside = TRUE, index = TRUE)` method, which can be used to convert objects from `ResampleResult` to `BenchmarkResult`, and then optionally combined, which is useful when conducting experiments across multiple machines.
 
 ```{r performance-045}
 bmr1 = as_benchmark_result(rr1)
 bmr2 = as_benchmark_result(rr2)
 
-bmr_combined = c(bmr1, bmr2)
-bmr_combined$aggregate(msr("classif.acc"))
+c(bmr1, bmr2)
 ```
 
-Combining multiple `r ref("BenchmarkResult")`s into a larger result object can be useful if related benchmarks where computed on different machines.
-
-<!-- Note: Removing ROC stuff from this section made it too small to justify a heading I think.
-### Plotting Benchmark Results {#autoplot-benchmarkresult}
--->
-
-Similar to creating automated visualizations for tasks, [predictions](#autoplot-prediction), or [resample results](#autoplot-resampleresult), the `r mlr3viz` package also provides a `r ref("autoplot()")` method to visualize benchmark results, by default as a box plot:
+Boxplots are most commonly used to visualize benchmark experiments as they can intuitively summarize results across tasks and learners simultaneously.
+They can also be used to identify potentially unexpected behavior, such as a learner performing reasonably well for most tasks, but yielding noticeably worse scores in one task.
+In the case of @fig-benchmark-box, the three learners show consistent relative performance to each other and in an expected order.
 
 ```{r performance-046}
 #| fig-height: 5
 #| fig-width: 6
+#| label: fig-benchmark-box
 #| fig-cap: "Boxplots of accuracy scores for each learner across resampling iterations and the three tasks. Random forests (`classif.ranger`) consistently performs outperforms the other learners."
+#| fig-alt: Nine boxplots, one corresponding to each task/learner combination. In all cases the random forest performs best and the featureless baseline the worst.
 autoplot(bmr, measure = msr("classif.acc"))
 ```
-
-Such a plot summarizes the benchmark experiment across all tasks and learners.
-Visualizing performance scores across all learners and tasks in a benchmark helps identifying potentially unexpected behavior, such as a learner performing reasonably well for most tasks, but yielding noticeably worse scores in one task.
-In the case of our example above, the three learners show consistent relative performance to each other, in the order we would expect: Random forest performs best, then the single decision tree, and the featureless learner in last place.
-
-**TODO:** We will expand on benchmark experiments in more depth in chapter (insert ref to batchtools/benchmark chapter once finalized).
-
-<!-- We're moving this to a later chapter
-### Statistical Tests
-
-{{< include _optional.qmd >}}
-
-The `r mlr3benchmark` package we previously used for ranking also provides infrastructure for applying statistical significance tests on `r ref("BenchmarkResult")` objects.
-Currently, Friedman tests and pairwise Friedman-Nemenyi tests [@demsar2006] are supported to analyze benchmark experiments with at least two independent tasks and at least two learners.
-
-`$friedman_posthoc()` can be used for a pairwise comparison:
-
-```{r performance-047}
-bma = as_benchmark_aggr(bmr, measures = msr("classif.acc"))
-bma$friedman_posthoc()
-```
-
-These results would indicate a statistically significant difference between the `"featureless"` learner and `"ranger"`, assuming a 95% confidence level.
-
-The results can be summarized in a critical difference plot which typically shows the mean rank of a learning algorithm on the x-axis along with a thick horizontal line that connects learners which are not significantly different:
-
-```{r performance-048}
-autoplot(bma, type = "cd")
-```
-
-Similar to the test output before, this visualization leads to the conclusion that the `"featureless"` learner and `"ranger"` are significantly different, whereas the critical rank difference of 1.66 is not exceed for the comparison of the `"featureless"` learner, `"rpart"` and `"ranger"`, respectively.
-
--->
 
 ## Evaluation of Binary Classifiers {#sec-roc}
 
@@ -781,8 +617,6 @@ It is therefore useful to also consider other measures from the confusion matrix
 
 ### Confusion Matrix-based Measures
 
-<!-- Unfortunately, many of these derived measures have different names for historical reasons, originating from different fields. -->
-<!-- For a good overview of common confusion matrix-based measures, see the comprehensive table on `r link("https://en.wikipedia.org/wiki/Confusion_matrix#Table_of_confusion", "Wikipedia")` which also provides many common aliases for each measure. -->
 Many measures derived from the confusion matrix have different names for historical reasons, originating from different fields.
 A good overview of common confusion matrix-based measures can be obtained from the comprehensive table on `r link("https://en.wikipedia.org/wiki/Confusion_matrix#Table_of_confusion", "Wikipedia")` which also provides many common aliases for each measure.
 <!-- Some common performance measures that are based on the confusion matrix and  -->
