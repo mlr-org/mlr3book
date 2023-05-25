@@ -1,22 +1,8 @@
----
-author:
-  - name: Sebastian Fischer
-    orcid: 0000-0002-9609-3197
-    email: sebastian.fischer@stat.uni-muenchen.de
-    affiliations:
-      - name: Ludwig-Maximilians-Universität München
-abstract:
-  In the field of machine learning, benchmark experiments are used to evaluate and compare the performance of algorithms.
-  Conducting such experiments involves evaluating algorithms on a large suite of diverse datasets, which can, e.g., be acquired through collaborative machine learning platforms such as as [OpenML](http://www.openml.org/).
-  The first section of this chapter shows how to work with OpenML using the interface package [`mlr3oml`](https://github.com/mlr-org/mlr3oml).
-  However, running large-scale experiments requires not only datasets, but also significant computational resources, and it can be beneficial to leverage High-Performance Computing (HPC) clusters to speed up the experiment execution.
-  In the second section, we will show how the R package [`batchtools`](https://github.com/mllg/batchtools) and its mlr3 integration [`mlr3batchmark`](https://github.com/mlr-org/mlr3batchmark) can considerably simplify the process of working on HPC clusters.
-  Once the experiments are complete, statistical analysis is required to draw conclusions from the results using the [`mlr3benchmark`](https://github.com/mlr-org/mlr3benchmark) package for post-hoc analyses.
----
-
-# Large-Scale Benchmark Experiments {#sec-large-benchmarking}
+# Large-Scale Benchmarking {#sec-large-benchmarking}
 
 {{< include _setup.qmd >}}
+
+`r authors("Large-Scale Benchmarking")`
 
 ```{r large_benchmarking-001}
 #| include: false
@@ -31,64 +17,51 @@ if (!dir.exists(file.path("openml", "manual"))) {
 options(mlr3oml.cache = file.path("openml", "cache"))
 ```
 
-In the world of machine learning, there are many methods that are hard to evaluate using mathematical analysis alone.
-Even if formal analysis is successful, it is often an open question whether real-world datasets satisfy the necessary assumptions for the theorems to hold.
-Consequently, researchers resort to conducting benchmark experiments to answer fundamental scientific questions.
-Such studies evaluate different algorithms on a wide range of datasets, with the aim of identifying which method performs best.
+It is often very difficult (if not impossible) to evaluate models using simple mathematical formulae or metrics (like performance measures).
+Empirical `r index('benchmark experiments')` are used to evaluate the performance of different algorithms on a wide range of datasets, with the aim of identifying which method performs best.
 These empirical investigations are essential for understanding the capabilities and limitations of existing methods and for developing new and improved approaches.
-To carry them out effectively, researchers need access to datasets, spanning a wide range of domains and problem types.
-This is because one can only draw conclusions about the kind of datasets on which the benchmark study was conducted.
-Fortunately, there are several online resources available for acquiring such datasets, with `r link("https://www.openml.org/", "OpenML")` [@openml2013] being a popular choice.
-In the first part of this chapter, we will show how to use OpenML through the connector package `r ref_pkg("mlr3oml")`.
+Trustworthy benchmark experiments are often 'large-scale', which means they may make use of many datasets, measures, and models.
+Large-scale experiments allow one to make generalization statements about a model's real-world performance, whereas with smaller experiments there are no mathematical guarantees of model performance on datasets beyond those in the experiment.
 
-However, evaluating algorithms on such a large scale requires significant computational resources.
-For this reason, researchers often utilize High-Performance Computing (HPC) clusters which allow executing experiments massively parallel.
-The R package `r ref_pkg("batchtools")` [@batchtools] is a tool for managing and executing experiments on such clusters.
-In the second section we will show how to use batchtools and its mlr3 connector for benchmarking: `r ref_pkg("mlr3batchmark")`.
-Once the experiments are complete, visualizations and statistical tests are used to draw conclusions from the benchmark experiments using the `r ref_pkg("mlr3benchmark")` package.
+Large-scale benchmark experiments consist of three primary steps: sourcing the data for the experiment, executing the experiment, and analyzing the results; we will discuss each of these in turn.
+In @sec-openml we will begin by discussing `r ref_pkg("mlr3oml")`, which provides an interface between `mlr3` and OpenML [@openml2013], a popular tool for uploading and downloading datasets.
+Increasing the number of datasets leads to 'large-scale' experiments that may require significant computational resources.
+So in @sec-hpc-exec we will introduce `r ref_pkg("mlr3batchmark")`, which connects `mlr3` with `r ref_pkg("batchtools")` [@batchtools], which provides methods for managing and executing experiments on `r index('high-performance computing', aside = TRUE)` (HPC) clusters.
+Finally in @sec-benchmark-analysis we will demonstrate how to make use of `r ref_pkg("mlr3benchmark")` to formally analyze the results from large-scale benchmark experiments.
 
-A common design for benchmarking is to compare a set of Learners $L_1, \ldots, L_n$ by evaluating their performance on a set of tasks $T_1, \ldots, T_k$ which each have an associated resampling $R_1, \ldots, R_k$.
-We call such a task-resampling combination $C_j = (T_j, R_j)$ a `r index("resampled task")`.
-Furthermore, we define $M = (M_1, \ldots, M_m)$ to be the evaluation measures.
-We here focus on the most frequent case of a full experimental grid design, where each experiment is defined by a triple $E_{i, j} = (L_i, C_j, M)$, which evaluates a learner $L_i$ on a resampled task $C_j$ using performance measures $M$.
-Running the benchmark consists of evaluating all these triples.
-The execution of a single resample experiment can again be subdivided into computationally independent resampling iterations to achieve a finer granularity for parallelization (see @sec-parallel-resample).
+Throughout this chapter we will use the running example of benchmarking a random forest against logistic regression (this was chosen as this problem has been extensively studied, e.g. @couronne2018random).
+We will also assume that you have read @sec-pipelines and @sec-technical.
 
-As a guiding example throughout this chapter, we will compare the random forest implementation `r ref("mlr_learners_classif.ranger")` with the logistic regression learner `r ref("mlr_learners_classif.log_reg")`.
-This question holds significant practical importance and has already been studied by, e.g., @couronne2018random.
-
-The following example compares these two learners using a simple holdout resampling on three classification tasks that ship with `r ref_pkg("mlr3")`.
-@sec-performance already covered how to conduct such benchmark experiments, and we recommend revisiting this chapter if anything is unclear.
-The metric of choice is the classification accuracy.
-Note that we "robustify" both learners to work on a wide range of tasks using the respective preprocessing pipeline, c.f. @sec-pipelines.
-The `ppl("robustify")` creates a preprocessing pipeline, i.e. a predefined `r ref("Graph")` consisting of common operations such as missing value imputation or feature encoding.
-By specifying the learner during construction of the pipeline, some preprocessing operations can be omitted, e.g. when a learner can handle missing values itself.
-Moreover, we specify the fallback learner to be a featureless learner (compare @sec-fallback) and we use `"try"` as encapsulation which will be discussed later in this chapter.
-<!-- FIXME: reference to robustify specifically when preprocessing chapter is ready -->
+As a starting example, let us compare our learners across three classification tasks using classification accuracy and holdout resampling.
+When conducting large-scale benchmark experiments, the `ppl("robustify")` pipeline (@sec-pipelines) is handy as it performs automatic preprocessing steps including missing value imputation and feature encoding.
+As well as loading this pipeline, we also set a featureless baseline as a fallback learner (compare @sec-fallback) and set `"try"` as our encapsulation method, which does not log errors or warnings (we will see why we chose this is useful in @sec-batchtools-monitoring).
 
 ```{r large_benchmarking-002}
 #| warning: false
+# load featureless baseline
+lrn_baseline = lrn("classif.featureless", id = "featureless")
+
 # create logistic regression pipeline
-learner_logreg = lrn("classif.log_reg")
-learner_logreg = as_learner(
-  ppl("robustify", learner = learner_logreg) %>>% learner_logreg)
-learner_logreg$id = "logreg"
-learner_logreg$fallback = lrn("classif.featureless")
-learner_logreg$encapsulate = c(train = "try", predict = "try")
+lrn_lr = lrn("classif.log_reg")
+lrn_lr = as_learner(
+  ppl("robustify", learner = lrn_lr) %>>% lrn_lr)
+lrn_lr$id = "logreg"
+lrn_lr$fallback = lrn_baseline
+lrn_lr$encapsulate = c(train = "try", predict = "try")
 
 # create random forest pipeline
-learner_ranger = lrn("classif.ranger")
-learner_ranger = as_learner(
-  ppl("robustify", learner = learner_ranger) %>>% learner_ranger)
-learner_ranger$id = "ranger"
-learner_ranger$fallback = lrn("classif.featureless")
-learner_ranger$encapsulate = c(train = "try", predict = "try")
+lrn_rf = lrn("classif.ranger")
+lrn_rf = as_learner(
+  ppl("robustify", learner = lrn_rf) %>>% lrn_rf)
+lrn_rf$id = "ranger"
+lrn_rf$fallback = lrn_baseline
+lrn_rf$encapsulate = c(train = "try", predict = "try")
 
 # create full grid design with holdout resampling
 set.seed(123)
 design = benchmark_grid(
   tsks(c("german_credit", "sonar", "spam")),
-  list(learner_logreg, learner_ranger),
+  list(lrn_lr, lrn_rf),
   rsmp("holdout")
 )
 
@@ -100,24 +73,20 @@ acc = bmr$aggregate(msr("classif.acc"))
 acc[, .(task_id, learner_id, classif.acc)]
 ```
 
-Looking only at the aggregated performance measures, the random forest outperforms the logistic regression on all three datasets.
-However, this analysis is not conclusive because
-
-* only three tasks are considered,
-* only a single holdout resampling is used, and
-* the difference between performances might not be statistically significant.
-
-In the subsequent sections, we will show the steps required to scale up this analysis using the tools mentioned earlier.
+In this small experiment, the random forest appears to outperform the logistic regression on all three datasets.
+However, this analysis is not conclusive as we only considered three tasks, used a basic resampling strategy, and the performance differences might not be statistically significant.
+So now let us see how to use more advanced methods that will enable us to run a large-scale version of the above experiment to draw some meaningful results.
 
 ## Getting Data with OpenML {#sec-openml}
 
 In order to be able to draw meaningful conclusions from benchmark experiments, a good choice of datasets and tasks is essential.
+<!-- FIXME: REVIEWED TO HERE -->
 It is therefore helpful to
 
 1. have convenient access to a large collection of datasets and be able to filter them for specific properties, and
 1. be able to easily share datasets, tasks and collections with others, so that they can evaluate their methods on the same problems and thus allow cross-study comparisons.
 
-OpenML is a platform that facilitates the sharing and dissemination of machine learning research data and satisfies these two desiderata.
+`r index('OpenML', aside = TRUE)` is a platform that facilitates the sharing and dissemination of machine learning research data and satisfies these two desiderata.
 Like mlr3, it is free and open source.
 Unlike mlr3, it is not tied to a programming language and can for example also be used from its Python interface [@feurer2021openml] or from Java.
 Its goal is to make it easier for researchers to find the data they need to answer the questions they have.
@@ -390,8 +359,7 @@ otasks = lapply(ids, otsk)
 tasks = lapply(otasks, as_task)
 resamplings = lapply(otasks, as_resampling)
 
-learner_featureless = lrn("classif.featureless", id = "featureless")
-learners = list(learner_logreg, learner_ranger, learner_featureless)
+learners = list(lrn_lr, lrn_rf, lrn_baseline)
 ```
 
 To define the design table, we use `r ref("benchmark_grid()")` and set `paired` to `TRUE`.
