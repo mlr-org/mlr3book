@@ -35,7 +35,7 @@ We will also assume that you have read @sec-pipelines and @sec-technical.
 
 As a starting example, let us compare our learners across three classification tasks using classification accuracy and holdout resampling.
 When conducting large-scale benchmark experiments, the `ppl("robustify")` pipeline (@sec-pipelines) is handy as it performs automatic preprocessing steps including missing value imputation and feature encoding.
-As well as loading this pipeline, we also set a featureless baseline as a fallback learner (compare @sec-fallback) and set `"try"` as our encapsulation method, which does not log errors or warnings (we will see why we chose this is useful in @sec-batchtools-monitoring).
+As well as loading this pipeline, we also set a featureless baseline as a fallback learner (compare @sec-fallback) and set `"try"` as our encapsulation method, which logs errors/warnings to an external file that can be read by `r ref_pkg("batchtools")` (we will return to this in @sec-batchtools-monitoring).
 
 ```{r large_benchmarking-002}
 #| warning: false
@@ -93,7 +93,7 @@ In particular we will discuss OpenML datasets, tasks, and task collections, but 
 ### Datasets {#sec-openml-dataset}
 
 Finding data from OpenML is possible via the website or the REST API.
-The `r ref("list_oml_data()", aside = TRUE)` function can be used to filter datasets for specific properties, for example by number of features, rows, or number of classes in a classification problem:
+The `r ref("mlr3oml::list_oml_data()", aside = TRUE)` function can be used to filter datasets for specific properties, for example by number of features, rows, or number of classes in a classification problem:
 
 ```{r}
 #| include: false
@@ -101,6 +101,8 @@ path_odatasets = file.path("openml", "manual", "odatasets_filter.rds")
 ```
 
 ```{r large_benchmarking-014, eval = !file.exists(path_odatasets)}
+library(mlr3oml)
+
 odatasets = list_oml_data(
   number_features = c(10, 20), # 10-20 features
   number_instances = c(45000, 50000), # 40,000-50,000 rows
@@ -119,15 +121,14 @@ if (file.exists(path_odatasets)) {
 
 We can see that some datasets have duplicated names, which is why each dataset also has a unique ID.
 By example, let us consider the 'adult' dataset with ID 1590.
-Metadata for the dataset is loaded with the `r ref("mlr3oml::odt()", aside = TRUE)`, which returns an object of class `r ref("OMLData", aside = TRUE)`.
+Metadata for the dataset is loaded with the `r ref("mlr3oml::odt()", aside = TRUE)`, which returns an object of class `r ref("mlr3oml::OMLData", aside = TRUE)`.
 
 ```{r large_benchmarking-003}
-library(mlr3oml)
 odata = odt(id = 1590)
 odata
 ```
 
-The `r ref("OMLData")` object contains metadata about the dataset but importantly does not (yet) contain the data.
+The `r ref("mlr3oml::OMLData")` object contains metadata about the dataset but importantly does not (yet) contain the data.
 This means that information about the dataset can be queried without having to load the entire data into memory, for example the license and dimension of the data:
 
 ```{r large_benchmarking-004}
@@ -168,7 +169,7 @@ task
 
 OpenML tasks are built on top of OpenML datasets and additionally specify the target variable, the train-test splits to use for resampling, and more.
 Similarly to `mlr3`, OpenML has different types of tasks, such as regression and classification.
-Analogously to filtering datasets, tasks can be filtered with `r ref("list_oml_tasks()", aside = TRUE)`, so if we want to find a task that makes use of the data we have been looking at we would pass the data ID to the `data_id` argument:
+Analogously to filtering datasets, tasks can be filtered with `r ref("mlr3oml::list_oml_tasks()", aside = TRUE)`, so if we want to find a task that makes use of the data we have been looking at we would pass the data ID to the `data_id` argument:
 
 ```{r}
 # first 5 tasks making use of the adult data
@@ -176,14 +177,14 @@ adult_tasks = list_oml_tasks(data_id = 1590)
 ```
 
 There are `r nrow(adult_tasks)` that use our unique dataset so for now we will randomly choose task 359983.
-We can load the object using `r ref("mlr3oml::otsk()", aside = TRUE)`, which returns an `r ref("OMLTask", aside = TRUE)` object.
+We can load the object using `r ref("mlr3oml::otsk()", aside = TRUE)`, which returns an `r ref("mlr3oml::OMLTask", aside = TRUE)` object.
 
 ```{r large_benchmarking-009}
 otask = otsk(id = 359983)
 otask
 ```
 
-The `r ref("OMLData")` object associated with the underlying dataset can be accessed through the `$data` field.
+The `r ref("mlr3oml::OMLData")` object associated with the underlying dataset can be accessed through the `$data` field.
 
 ```{r large_benchmarking-010}
 otask$data
@@ -220,7 +221,7 @@ Curated task collections are therefore useful to reduce this workload.
 The OpenML task collection is a container object bundling existing tasks.
 This allows for the creation of `r index("benchmark suites")`, which are curated collections of tasks that satisfy certain quality criteria.
 Examples include the OpenML CC-18 benchmark suite [@bischl2021openml], the AutoML benchmark [@amlb2022] and the benchmark for tabular deep learning [@grinsztajn2022why].
-`r ref("OMLCollection", aside = TRUE)` objects are loaded with using `r ref("mlr3oml::ocl()", aside = TRUE)`, by example we will look at CC-18, which has ID 99:
+`r ref("mlr3oml::OMLCollection", aside = TRUE)` objects are loaded with using `r ref("mlr3oml::ocl()", aside = TRUE)`, by example we will look at CC-18, which has ID 99:
 
 ```{r}
 #| include: false
@@ -260,7 +261,7 @@ tasks = as_tasks(otask_collection)
 resamplings = as_resamplings(otask_collection)
 ```
 
-Alternatively, if we wanted to filter the collection further, say to a binary classification experiment with six tasks, we could run `r ref("list_oml_tasks()")` with the task IDs from the CC-18 collection as argument `task_id` and request the number of classes to be 2.
+Alternatively, if we wanted to filter the collection further, say to a binary classification experiment with six tasks, we could run `r ref("mlr3oml::list_oml_tasks()")` with the task IDs from the CC-18 collection as argument `task_id` and request the number of classes to be 2.
 
 ```{r}
 #| include: false
@@ -285,7 +286,7 @@ if (!file.exists(path_binary_cc18)) {
 ```
 
 We now define the learners, tasks, and resamplings for the experiment.
-In addition to the random forest and the logistic regression, we also include a featureless learner as a baseline.
+Note that all resamplings in this collection consist of exactly 10 iterations.
 
 ```{r large_benchmarking-024}
 # load tasks as  a list
@@ -301,12 +302,12 @@ To define the design table, we use `r ref("benchmark_grid()")` and set `paired` 
 large_design = benchmark_grid(
   tasks, learners, resamplings, paired = TRUE
 )
-large_design
+large_design[1:6] # first 6 rows
 ```
 
 Having setup our large experiment, we can now look at how to efficiently carry it out on a cluster.
 
-## Experiment Execution on HPC Clusters {#sec-hpc-exec}
+## Benchmarking on HPC Clusters {#sec-hpc-exec}
 
 As discussed in @sec-parallelization, parallelization of benchmark experiments is straightforward as they are `r index('embarrassingly parallel')`.
 However, for large experiments, parallelization on a local machine will, at best be slow, and at worst will stop you using your computer for any other task, as such `r index('high-performance computing (HPC)')` clusters are generally required.
@@ -316,7 +317,7 @@ It is highly flexible, making it suitable for a wide range of computational expe
 
 :::{.callout-tip}
 In @sec-parallel-resample we have touched upon different parallelization backends.
-The package `r ref_pkg("future")` includes a `"batchtools"` plan, however this does not allow the additional control that comes with working with `r ref_pkg("batchtool")` directly.
+The package `r ref_pkg("future")` includes a `"batchtools"` plan, however this does not allow the additional control that comes with working with `r ref_pkg("batchtools")` directly.
 :::
 
 An HPC cluster is a collection of interconnected computers or servers providing computational power beyond what a single computer can achieve.
@@ -342,7 +343,7 @@ For the rest of this section we will look at how to use `r ref_pkg("batchtools")
 knitr::include_graphics("Figures/hpc.drawio.png")
 ```
 
-### General Setup and Experiment Registry {#sec-registry}
+### Experiment Registry Setup {#sec-registry}
 
 `r ref_pkg("batchtools")` is built around experiments or '`r index("jobs")`'.
 One replication of a job is defined by applying a (parameterized) algorithm to a (parameterized) problem.
@@ -376,21 +377,8 @@ reg = makeExperimentRegistry(
 )
 ```
 
-When printing our newly created registry, we see that there are 0 problems, algorithms or jobs registered.
-Among other things, we are informed that the "Interactive" cluster function (see `r ref("batchtools::makeClusterFunctionsInteractive()")`) is used and the working directory for the experiments is printed.
-
-```{r large_benchmarking-028}
-reg
-```
-<!-- FIXME: REVIEWED TO HERE -- WILL LIKELY WANT TO COMBINE SOME OF THESE SECTIONS AS THEY GET SHORTER -->
-
-### Experiment Definition using mlr3batchmark {#sec-mlr3batchmark}
-
-The next step is to populate the registry with problems and algorithms, which we will then use to define the jobs, i.e., the resampling iterations.
-This is the first step where `r ref_pkg("mlr3batchmark")` comes into play.
-Doing this step with `r ref_pkg("batchtools")` is also possible and gives you more flexibility and is demonstrated in @sec-custom-experiment-definition.
-By calling `r ref("batchmark()")`, mlr3 tasks and mlr3 resamplings will be translated to batchtools problems, and mlr3 learners are mapped to batchtools algorithms.
-Then, jobs for all resampling iterations are created.
+Once the registry has been created, we need to populate it with problems and algorithms to form the jobs, this is most easily carried out with `r ref_pkg("mlr3batchmark")`, although finer control with `r ref_pkg("batchtools")` is possible and will be explored in @sec-custom-experiment-definition.
+`r ref("mlr3batchmark::batchmark()", aside = TRUE)` converts `mlr3` tasks and resamplings to batchtools problems, and converts `mlr3` learners to batchtools algorithms; jobs are then created for all resampling iterations.
 
 ```{r large_benchmarking-029}
 #| cache: true
@@ -399,32 +387,18 @@ library(mlr3batchmark)
 batchmark(large_design, reg = reg)
 ```
 
-::: {.callout-tip}
-All batchtools functions that interoperate with a registry take a registry as an argument.
-By default, this argument is set to the last created registry, which is currently the `reg` object defined earlier.
-We nonetheless pass it explicitly in this section for clarity, but would not have to do so.
-:::
-
-When printing the registry, we confirm that six problems (one for each resampled task) but only a single algorithm is registered.
-While a 1-on-1 mapping of the 3 algorithms in the design would have also been possible, the approach in `r ref_pkg("mlr3batchmark")` uses a single algorithm parametrized with the learner identifiers instead for efficiency.
-Furthermore, $180 = 3 \times 6 \times 10$ jobs, i.e. one for each resampling iteration, are registered.
+Now the registry includes six problems, one for each resampled task, and 180 jobs from from 3 learners $\times$ 6 tasks $\times$ 10 resampling iterations.
+The single algorithm in the registry is due to the fact that `r ref_pkg("mlr3batchmark")` specifies a single algorithm that is parametrized with the learner IDs.
+Note that by default the "Interactive" cluster function (see `r ref("batchtools::makeClusterFunctionsInteractive()")`) is used.
 
 ```{r large_benchmarking-030}
 reg
 ```
 
-We can summarize the defined experiments using `r ref("batchtools::summarizeExperiments()")`.
-There are 10 jobs for each combination of a learner and resampled task, as 10-fold cross-valdation is used as the resampling procedure.
-
-```{r large_benchmarking-031}
-summarizeExperiments(
-  by = c("task_id", "learner_id"), reg = reg)
-```
+Defined experiments can be summarized with `r ref("batchtools::summarizeExperiments()")`, which we do not show here as the output is very similar to our design grid generated above.
 
 The function `r ref("batchtools::getJobTable()")` can be used to get more detailed information about the jobs.
 Here, we only show a few selected columns for readability and unpack the list columns `algo.pars` and `prob.pars` using `r ref("batchtools::unwrap()")`.
-Among other things, we see that each job has a unique `job.id`.
-Each row in this job table represents one iteration (column `repl`) of a resample experiment.
 
 ```{r large_benchmarking-032}
 job_table = getJobTable(reg = reg)
@@ -436,14 +410,14 @@ job_table = job_table[,
 job_table
 ```
 
+In this output we can see how each job is now assigned a unique `job.id` and that each row corresponds to a single iteration (column `repl`) of a resample experiment.
 
 ### Job Submission {#sec-batchtools-submission}
 
-Once the experiments are defined, the next step is to submit them.
-Before doing so, it is recommended to test each algorithm individually using `r ref("batchtools::testJob()")`.
-We test the job with `job.id = 1` exemplary and specify `external = TRUE` to run the test in an external R session.
-The return of the `testJob()` function (which is the return value of the `"run_learner"` algorithm) is a bit technical, because here not the complete objects but only the essential parts are returned to reduce the communication overhead (a named list `learner_state` and a named list `prediction`) - we do not give a detailed description of the list elements here.
-We can for example access the training time through the `learner_state` as shown below.
+With the experiments defined we can now submit them to the cluster.
+However, it is best practice to first test each algorithm individually using `r ref("batchtools::testJob()", aside = TRUE)`.
+By example we will only test the first job (`id=1`) and will use an external R session(`external = TRUE`).
+The output of this function includes metadata including the time taken to run the algorithm, which is very useful for estimating the total experiment runtime.
 
 ```{r large_benchmarking-033}
 #| output: true
@@ -451,46 +425,24 @@ result = testJob(1, external = TRUE, reg = reg)
 result$learner_state$train_time
 ```
 
-In case something goes wrong, `r ref_pkg("batchtools")` comes with a bunch of useful debugging utilities covered in @sec-batchtools-monitoring.
-Once we are confident that the jobs are defined correctly, we can proceed with their submission, which requires
+Once we are confident that the jobs are defined correctly (see @sec-batchtools-monitoring for jobs with errors), we can proceed with their submission, by specifying the resource requirements for each computational job and then optionally grouping jobs into one computational job.
 
-1. specifying resource requirements for each computational job, and
-1. (optionally) grouping multiple jobs into one computational job
+Configuration of resources is dependent on the cluster function set in the registry.
+We will assume we are working with a Slurm cluster and accordingly initialize the cluster function with `r ref("batchtools::makeClusterFunctionsSlurm()")` and will make use of the `slurm-simple.tml` template file that can be found in the `batchtools` GitHub repository.
+A template file is a shell script with placeholders filled in by `batchtools` and contains the command to start the computation via `Rscript` or `R CMD batch`, as well as comments which serve as annotations for the scheduler, for example to communicate resources or paths on the file system.
 
-Which resources can be configured depends on the cluster function that is set in the registry.
-We earlier left it at its default value, which is the "Interactive" cluster function.
-In the following we assume that we are working on a Slurm cluster.
-Accordingly, we initialize the cluster function with `r ref("batchtools::makeClusterFunctionsSlurm()")` and a predefined `r link("https://github.com/mllg/batchtools/blob/master/inst/templates/slurm-simple.tmpl", "slurm-simple template")`.
-A template file is a shell script with placeholders filled in by `batchtools` and contains
-
-1. the command to start the computation via `Rscript` or `R CMD batch`, usually in the last line, and
-1. comments which serve as annotations for the scheduler, e.g. to communicate resources or paths on the file system.
-
-The exemplary template should work on many Slurm installations out-of-the-box, but can also easily be customized to also work with more advanced configurations.
+The exemplary template should work on many Slurm installations out-of-the-box, but can also be customized to work with more advanced configurations.
 
 ```{r large_benchmarking-034}
 cf = makeClusterFunctionsSlurm(template = "slurm-simple")
 ```
-
-To proceed with the examples on a local machine, set the cluster functions to a Socket backend.
-
-```{r large_benchmarking-035}
-cf = makeClusterFunctionsSocket()
-```
-
 ```{r}
 #| include: false
 cf = makeClusterFunctionsInteractive()
 ```
 
-:::{.callout-tip}
-It is possible to customize the cluster function.
-More information is available in the documentation of the `r ref_pkg("batchtools")` package.
-:::
-
-We update the value of the `$cluster.functions` and save the registry.
-This only has to be done manually when modifying the fields explicitly.
-Functions like `r ref("batchmark()")` internally save the registry when required.
+To proceed with the examples on a local machine, we recommend setting the cluster function to a Socket backend with `r ref("batchtools::makeClusterFunctionsSocket()")`.
+The chosen cluster function can be saved to the registry by passing it to the `$cluster.functions` field.
 
 ```{r large_benchmarking-036}
 #| eval: true
@@ -499,78 +451,62 @@ reg$cluster.functions = cf
 saveRegistry(reg = reg)
 ```
 
-The jobs are submitted to the scheduler via `r ref("batchtools::submitJobs()")`.
-The most important arguments of this function besides the registry are:
+With the registry setup, we can now decide if we want to run the experiments in chunks (@sec-parallelization) and then specify the resource requirements for the submitted jobs.
 
-* `ids`, which are either a vector of job IDs to submit, or a data frame with columns `job.id` and `chunk`, which allows grouping multiple jobs into one larger computational job and thereby controlling the granularity.
-  This often makes sense on HPCs, as submitting and running computational jobs comes with a considerable overhead and there are often hard limits for the maximum runtime (walltime).
-* `resources`, which is a named list specifying the resource requirements for the submitted jobs.
-
-We will `r ref("batchtools::chunk()")` the IDs in such a way that 5 iterations of one resample experiment are run sequentially in one computational job.
-The optimal grouping depends on the concrete experiment and scheduling system.
+For this example, we will use `r ref("batchtools::chunk()", aside = TRUE)` to `r index('chunk')` the jobs such that 5 iterations of one resample experiment are run sequentially in one computational job -- in practice the optimal grouping will be highly dependent on your experiment (@sec-parallelization).
 
 ```{r large_benchmarking-037}
 ids = job_table$job.id
 chunks = data.table(
   job.id = ids, chunk = chunk(ids, chunk.size = 5, shuffle = FALSE)
 )
-chunks
+chunks[1:6] # first 6 jobs
 ```
 
-Furthermore, we specify the number of CPUs per computational job to 1, the walltime to 1 hour (3600 seconds), and the RAM limit to 8 GB.
+The final step is to decide the resource requirements for each job.
 The set of resources depends on your cluster and the corresponding template file.
-For a list of resource names that are standardised across most implementations, see `r ref("batchtools::submitJobs()")`.
 If you are unsure about the resource requirements, you can start a subset of jobs with conservative resource constraints, e.g. the maximum runtime allowed for your computing site.
-Measured runtimes and memory usage can be queried with `r ref("batchtools::getJobTable()")` and finally used to better estimate the required resources for the remaining jobs.
+Measured runtimes and memory usage can be queried with `r ref("batchtools::getJobTable()")` and used to better estimate the required resources for the remaining jobs.
+In this example we will set the number of CPUs per job to 1, the walltime (time limit before jobs stopped by scheduler) to 1 hour (3600 seconds), and the RAM limit (memory limit before jobs stopped by scheduler) to 8 GB (8000 megabytes).
+
+```{r}
+resources = list(ncpus = 1, walltime = 3600, memory = 8000)
+```
+
+With all the elements in place we can now submit our jobs.
 
 <!-- output to false otherwise we see the interactive cluster function -->
 ```{r large_benchmarking-038}
 #| cache: true
 #| output: false
-submitJobs(
-  ids = chunks,
-  resources = list(ncpus = 1, walltime = 3600, memory = 8000),
-  reg = reg
-)
+submitJobs(ids = chunks, resources = resources, reg = reg)
 
 # wait for all jobs to terminate
 waitForJobs(reg = reg)
 ```
 
-
 :::{.callout-tip}
-A good approach to submit computational jobs is to do this from an R session that is running persistently.
-One option is to use `r link("https://github.com/tmux/tmux/wiki", "TMUX (Terminal Multiplexer)")` on the head node to continue job submission (or computation, depending on the cluster functions) in the background.
+A good approach to submit computational jobs is by using a persistent R session (e.g., with Terminal Multiplexer (TMUX)) on the head node to continue job submission (or computation, depending on the cluster functions) in the background.
 :::
-
 
 ###  Job Monitoring, Error Handling, and Result Collection {#sec-batchtools-monitoring}
 
-
-
-After submitting the jobs, the next phase is to wait for them to finish.
-In case you terminated your running R session after job submission, you can load the experiment registry using `r ref("loadRegistry()")` to continue where you left off.
-
-In any large scale experiment many things can and will go wrong, even if we test our jobs beforehand using `r ref("batchtools::testJob()")` as recommended earlier.
-The cluster might have an outage, jobs may run into resource limits or crash, subtle bugs in your code could be triggered or any other error condition might arise.
-In these situations it is important to quickly determine what went wrong and to recompute only the minimal number of required jobs.
-
-The current status of the computation can be queried with `r ref("getStatus()")`, which lists the number of jobs categorized in multiple status groups:
+Once jobs have been submitted, they can then be queried with `r ref("batchtools::getStatus()", aside = TRUE)` to find their current status and the results (or errors) can be investigated.
+If you terminated your R sessions after job submission, you can load the experiment registry with `r ref("batchtools::loadRegistry()", aside = TRUE)`.
 
 ```{r large_benchmarking-041}
 getStatus(reg = reg)
 ```
 
-To query the ids of jobs in the respective categories, see `r ref("findJobs()")` and, e.g., `findNotSubmitted()` or `findDone()`.
+To query the ids of jobs in the respective categories, see `r ref("batchtools::findJobs()")` and, e.g., `r ref("batchtools::findNotSubmitted()")` or `r ref("batchtools::findDone()")`.
+In our case, we can see all experiments finished and none expired (`Expired : 0`) or crashed (`Error : 0`).
+It can still be sensible to use `r ref("batchtools::grepLogs()")` to check the logs for suspicious messages and warnings before proceeding with the analysis of the results.
 
-In our case, all experiments finished and none expired or crashed - albeit we took some countermeasures by extending our base learners with fallback learners and integrating them in the pipeline "robustify".
-Nonetheless, it makes sense to check the logs for suspicious messages and warnings with `r ref("grepLogs()")` before proceeding with the analysis of the results.
-For this purpose, we have set the encapsulation before to `"try"`: in contrast to `"evaluate"` or `"callr"` encapsulation, `"try"` does not capture the output from messages, warnings or errors and store them in the learner's log.
-All output is printed to the console and redirected to a log file so that `batchtools` can operate on it with functions like `r ref("getLog()")` or `r ref("grepLogs()")`.
+In any large scale experiment many things can and will go wrong, for example the cluster might have an outage, jobs may run into resource limits or crash, or there could be bugs in your code.
+In these situations it is important to quickly determine what went wrong and to recompute only the minimal number of required jobs.
 
-In the following, we extend the design with the debug learner (see @sec-error-handling) erring with a 50% probability.
-By just calling `r ref("batchmark()")` with the new design again, the new experiments will be added to the registry on top of the existing jobs.
-The `tasks` and `resamplings` below are once again those from the `large_design` from earlier.
+To see debugging in practice we will use the debug learner (see @sec-error-handling) with a 50% probability of erroring in training.
+By passing our existing registry to `r ref("mlr3batchmark::batchmark()")`, the new experiments will be added to the registry on top of the existing jobs.
 
 ```{r}
 #| cache: true
@@ -585,20 +521,16 @@ extra_design = benchmark_grid(
 batchmark(extra_design, reg = reg)
 ```
 
-We can check the new state and submit the jobs which have not been submitted yet (i.e., the newly created jobs):
-
-```{r}
-#| cache: true
-getStatus(reg = reg)
-ids = findNotSubmitted(reg = reg)
-```
-
-We queue these jobs as usual by passing their IDs to `submitJobs()`:
+Now we can get the IDs of the new jobs (which have not been submitted yet) and submit them by passing their IDs.
 
 ```{r}
 #| cache: true
 #| output: false
+ids = findNotSubmitted(reg = reg)
 submitJobs(ids, reg = reg)
+```
+
+```{r, include=FALSE}
 waitForJobs(reg = reg)
 ```
 
@@ -610,31 +542,24 @@ summarizeExperiments(
   error_ids, by = c("task_id", "learner_id"), reg = reg)
 ```
 
-Unsurprisingly, all failed jobs have one thing in common: the debug learner.
+In a real experiment we would now investigate the debug learner further to understand why it errored, try to fix those bugs, and then rerun those experiments only.
 
-Finally, it is time to collect the experiment output.
-The results for benchmark experiments defined with `r ref("batchmark()")` can be collected with `r ref("reduceResultsBatchmark()")`, which constructs a regular `r ref("BenchmarkResult")`.
-It is also possible to retrieve single results with `r ref("loadResult()")`, but the returned values are hard to work with, as they are not optimized for usability, but efficiency.
-Here, we only collect results which were not produced by the debug learner.
+Assuming learners have been debugged (or we are happy to ignore them), we can then collect the results of our experiment with `r ref("mlr3batchmark::reduceResultsBatchmark()")`, which constructs a `r ref("BenchmarkResult")` from the results.
+Below we filter out results from the debug learner.
 
 ```{r}
 ids = findExperiments(
   algo.pars = learner_id != "classif.debug", reg = reg)
 bmr = reduceResultsBatchmark(ids, reg = reg)
-bmr$aggregate()
+bmr$aggregate()[1:5]
 ```
-
-
 
 ### Custom Experiment Definition {#sec-custom-experiment-definition}
 
 {{< include _optional.qmd >}}
 
-While `r ref_pkg("mlr3batchmark")` excels for conducting benchmarks on HPCs, there can be situations in which more fine-grained control over the experiment definition is beneficial or even required.
-Here, we will show how to define batchtools jobs that execute an mlr3 benchmark experiment without the help of `r ref_pkg("mlr3batchmark")`.
-There is not one single way how to achieve this, and we here show a solution that sacrifices efficiency for simplicity.
-Unless you have a specific reason to customize your experiment definition, we recommend using `r ref_pkg("mlr3batchmark")`.
-Like before, the first step is to create an experiment registry.
+In general we recommend using `r ref_pkg("mlr3batchmark")` for scheduling `mlr3` jobs on an HPC however we will also briefly show you how to use `r ref_pkg("batchtools")` without `mlr3batchmark` for finer control over your experiment.
+Again we start by creating an experiment registry.
 
 ```{r include = FALSE}
 #| cache: true
@@ -643,7 +568,7 @@ if (dir.exists("experiments-custom")) {
 }
 ```
 
-```{r large_benchmarking-046}
+```{r large_benchmarking-046, message = FALSE}
 #| cache: true
 reg = makeExperimentRegistry(
   file.dir = "./experiments-custom",
@@ -652,16 +577,10 @@ reg = makeExperimentRegistry(
 )
 ```
 
-We can register a problem by calling `r ref("batchtools::addProblem()")`, whose main arguments beside the registry are:
-
-* `name` to uniquely identify the problem,
-* `data` to represent the static data part of a problem, and
-* `fun`, which takes in the problem `data`, the problem parameters, and the `job` definition, see `r ref("batchtools::makeJob()")` and returns a problem `instance`.
-
-We register all task-resampling combinations of the `large_design` using the task ID as the name.^[The mlr3 task ID is not the same as the OpenML task ID.]
-The problem `fun` takes in the static problem `data` and returns it as the problem `instance` as is.
-If we were using problem parameters, we could modify the problem instance depending on their values.
-In the code below, recall that the `tasks` and `resamplings` were originally used to define the `large_design`.
+Problems are then manually registered with `r ref("batchtools::addProblem()")`.
+In this example we will register all task-resampling combinations of the `large_design` above using the task ID as the unique task `name`.
+We specify that the `data` for the problem (i.e., the static data that is trained/tested by the learner) is the task/resampling pair.
+Finally, we pass a function (`fun`) that takes in the static problem `data` and returns it as the problem `instance` without making changes (@fig-batchtools-illustration); however this function could be more complex and take further parameters to modify the problem instance.
 
 ```{r large_benchmarking-047}
 #| output: false
@@ -677,21 +596,22 @@ for (i in seq_along(tasks)) {
 
 ```
 
-When calling `r ref("batchtools::addProblem()")`, not only is the problem added to the registry object from the active R session, but this information is also synced with the registry folder.
+```{r large_benchmarking-051}
+#| label: fig-batchtools-illustration
+#| fig-cap: "Illustration of a batchtools problem, algorithm, and experiment. "
+#| fig-align: "center"
+#| fig-alt: "The diagram shows a rectangle that says 'static problem part, data', with an arrow pointing to 'dynamic problem function, fun(data, ...)' and 'algorithm function, fun(data, instance, ...)'. A box that says 'problem design, (addExperiments)' also has an arrow to the 'dynamic...' box. The 'dynamic...' box then has an arrow with text 'instance' that points to the 'algorithm function' box. A box that says 'algorithm design, (addExperiments)' also points to the 'algorithm function' box. Finally the 'algorithm function' box points to 'result'."
+#| echo: false
+knitr::include_graphics("Figures/tikz_prob_algo_simple.png")
+```
 
-The next step is to register the algorithm we want to run, which we achieve by calling `r ref("batchtools::addAlgorithm()")`.
-Besides the registry, it takes in the arguments:
+Next we need to specify the algorithm to run with `r ref("batchtools::addAlgorithm()")`.
+Algorithms are again specified with a unique `name`, as well as a function to define the computational steps of the experiment and to return its result.
 
-* `name` to uniquely identify the algorithm and
-* `fun`, which takes in the problem instance, the algorithm parameters, and the `job` definition.
-  It defines the computational steps of an experiment and its return value is the experiment result, i.e. what can later be retrieved using `r ref("loadResult()")`.
+As we are making use of `mlr3` objects, the `resample` function can be efficiently used to take in the defined problem instance.
+Note that this differs from the `r ref_pkg("mlr3batchmark")` method, where one job represents *one resampling iteration*; here one job represents a *complete resample* experiment.
 
-The algorithm function receives a list containing the task and resampling as the problem `instance`, the `learner` as the algorithm parameter, and the `job` object.
-It then executes the resample experiment defined by these three objects using `r ref("resample()")` and returns a `r ref("ResampleResult")`.
-This differs from the `r ref_pkg("mlr3batchmark")`, where one resampling iteration corresponds to one job in `r ref_pkg("batchtools")`.
-Here, one `r ref_pkg("batchtools")` job represents a complete resample experiment.
-
-```{r large_benchmarking-048}
+```{r large_benchmarking-048, message=FALSE}
 #| cache: true
 addAlgorithm(
   "run_learner",
@@ -700,89 +620,63 @@ addAlgorithm(
   },
   reg = reg
 )
-
-reg$algorithms
 ```
 
-As we have now defined the problems and the algorithm, we can define concrete experiments using `r ref("batchtools::addExperiments()")`.
-This function has arguments
-
-* `prob.designs`, a named list of data frames. The name must match the problem name while the column names correspond to parameters of the problem.
-
-* `algo.designs`, a named list of data frames. The name must match the algorithm name while the column names correspond to parameters of the algorithm.
+Finally we will define concrete experiments with `r ref("batchtools::addExperiments()")` by passing problem designs (`prob.designs`)algorithm designs (`algo.designs`) that assign parameters to problems and algorithms respectively (@fig-batchtools-illustration).
 
 In the code below, we add all resampling iterations for the six tasks as experiments.
 By leaving `prob.designs` unspecified, experiments for all existing problems are created per default.
-We set the algorithm parameters to all possible `learners`, i.e. the logistic regression, random forest, and featureless learner from `large_design`.
+We set the `learner` parameter of our algorithm (`"run_learner"`) to be the three learners from our `large_design` object.
 Note that whenever an experiment is added, the current seed is assigned to the experiment and then incremented.
 
-```{r large_benchmarking-049}
-#| cache: true
-#| output: false
-library(data.table)
-
-algorithm_design = list(run_learner = data.table(learner = learners))
-print(algorithm_design$run_learner)
-
-addExperiments(algo.designs = algorithm_design, reg = reg)
+```{r large_benchmarking-049, eval = FALSE}
+alg_des = list(run_learner = data.table(learner = learners))
+addExperiments(algo.designs = alg_des, reg = reg)
+summarizeExperiments()
 ```
-
-We confirm that the algorithm, problems, and experiments (jobs) were added successfully.
-
-```{r large_benchmarking-050}
+```{r, include = FALSE, output = FALSE}
+#| cache: true
+alg_des = list(run_learner = data.table(learner = learners))
+addExperiments(algo.designs = alg_des, reg = reg)
+```
+```{r, include = FALSE, output = TRUE}
+#| cache: true
 summarizeExperiments()
 ```
 
-@fig-batchtools-illustration summarizes the interplay between the batchtools problems, algorithms, and experiments.
-
-```{r large_benchmarking-051}
-#| label: fig-batchtools-illustration
-#| fig-cap: "Illustration the batchtools problem, algorithm, and experiment. "
-#| fig-align: "center"
-#| fig-alt: "A problem consists of a static data part and applies the problem function to this data part (and potentially problem parameters) to return a problem instance. The algorithm function takes in a problem instance (and potentially algorithm parameters), executes one job and returns its result."
-#| echo: false
-knitr::include_graphics("Figures/tikz_prob_algo_simple.png")
-```
-
-
-We are now ready to submit the jobs to the cluster.
-By specifying no job IDs, all experiments are submitted as independent jobs, i.e. one computational job executes one resample experiment.
+Our jobs can now be submitted to the cluster; by not specific job IDs all experiments are submitted as independent jobs, i.e. one computational job executes one resample experiment.
 
 ```{r}
 #| output: false
 #| cache: true
 submitJobs(reg = reg)
+```
+
+```{r, include = FALSE}
+#| cache: true
 waitForJobs(reg = reg)
 ```
 
-When a cluster jobs finishes, it stores its return value in the registry folder.
-We can retrieve the job results using `r ref("batchtools::loadResult()")`.
-It outputs the objects returned by the algorithm function, which in our case is a `r ref("ResampleResult")`.
+We can retrieve the job results using `r ref("batchtools::loadResult()")`, which outputs the objects returned by the algorithm function, which in our case is a `r ref("ResampleResult")`.
+To retrieve all results at once, we can use `r ref("batchtools::reduceResults()")` to create a single `r ref("BenchmarkResult")`.
 
 ```{r large_benchmarking-054}
 rr = loadResult(1, reg = reg)
-rr
-```
+as.data.table(rr)[1:5]
 
-In order to use mlr3's post-processing tools, we need to convert all results into a `r ref("BenchmarkResult")`.
-We can do this, by combining all resample results using `r ref("batchtools::reduceResults()")`.
-
-```{r large_benchmarking-055}
 bmr = reduceResults(c, reg = reg)
-bmr$aggregate()
+bmr$aggregate()[1:5]
 ```
-
-While we took a different route than in @sec-mlr3batchmark to define the experiments and ran them at a different granularity, we arrived at the same result.
-
 
 ## Statistical Analysis {#sec-benchmark-analysis}
 
-Once we successfully executed the benchmark experiment, we can proceed with its analysis.
+In the final step of a benchmarking experiment, we can finally determine which of our learners performed the best.
 The package `r ref("mlr3benchmark")` provides infrastructure for applying statistical significance tests on `r ref("BenchmarkResult")` objects.
 Currently, Friedman tests and pairwise Friedman-Nemenyi tests [@demsar2006] are supported to analyze benchmark experiments with at least two independent tasks and at least two learners.
-Before we can use these methods, we have to convert the benchmark result to a `r ref("mlr3benchmark::BenchmarkAggr")` using `r ref("as_benchmark_aggr()")`.
-We can then perform a pairwise comparison using `$friedman_posthoc()`.
-This method will first perform a global friedman test and only conduct the post-hoc tests if the former is significant.
+To use these methods we first convert the benchmark result to a `r ref("mlr3benchmark::BenchmarkAggr", aside = TRUE)` object using `r ref("mlr3benchmark::as_benchmark_aggr()", aside = TRUE)`.
+
+As a first step, we recommend performing a pairwise comparison of learners using pairwise Friedman-Nemenyi tests with `$friedman_posthoc()`.
+This method first performs a global to see if any learner is statistically better than another (otherwise there is no benefit to the pairwise test).
 
 ```{r large_benchmarking-056}
 library(mlr3benchmark)
@@ -790,83 +684,51 @@ bma = as_benchmark_aggr(bmr, measures = msr("classif.ce"))
 bma$friedman_posthoc()
 ```
 
-These results would indicate a statistically significant difference between the `"featureless"` learner and `"ranger"`, assuming a 95% confidence level.
-This table can be summarized in a critical difference plot, which typically shows the mean rank of a learning algorithm on the x-axis along with a thick horizontal line that connects learners which are pairwise not significantly different (while correcting for multiple tests):
+These results indicate a statistically significant difference between the `"featureless"` learner and `"ranger"`, assuming a 95% confidence level.
+This table can be visualized in a critical difference plot, which typically shows the mean rank of a learning algorithm on the x-axis along with a thick horizontal line that connects learners that are pairwise not significantly different (while correcting for multiple tests):
 
 ```{r large_benchmarking-057}
-autoplot(bma, type = "cd")
+#| label: fig-lsb-cd
+#| fig-cap: "Critical difference diagram comparing the random forest, logistic regression, and featureless baseline. The critical difference of 1.35 in the title refers to the different in mean rank required to conclude that one learner performs statistically different to another."
+#| fig-align: "center"
+#| fig-alt: "Figure shows a one-axis diagram ranging from 0 to 4, above the diagram is a thick black line with text 'Critical Difference = 1.35'. Diagram shows 'ranger' on the far left just to the right of '1', then 'logreg' just to the left of '2', then 'featureless' just under '3'. There is a thick black line connecting 'ranger' and 'logreg', as well as a line connecting 'logreg' and 'featureless'."
+autoplot(bma, type = "cd", ratio = 1/8)
 ```
 
-While our experiment did now show a significant difference between the random forest and the logistic regression (they are connected in the plot), the former has a lower rank on average.
+Using @fig-lsb-cd we can conclude that on average the random forest had the highest rank, followed by the logistic regression, and then the featureless baseline.
+Whilst the random forest was statistically better performing than the baseline (no connecting line in @fig-lsb-cd), it was not statistically superior to the logistic regression (connecting line in @fig-lsb-cd).
 This is in line with the large benchmark study conducted by @couronne2018random, where the random forest outperformed the logistic regression in 69% of 243 real world datasets.
 
-As a final note, it is important to be careful when interpreting such test results.
-Because our datasets are not an iid sample from a population of datasets, we can only make inference about the data generating processes at hand, i.e. those that generated the datasets we used in the benchmark.
+As a final note, it is important to be careful when interpreting such test results as they require strict assumptions about the independence of datasets.
+As our datasets are not an independent and identically distributed sample from a population of datasets, we can only make inferences about the data generating processes that generated the datasets we used in the benchmark.
 
 ## Conclusion
 
-In this chapter, we have explored how to conduct large scale machine learning experiments using mlr3.
-We have shown how to acquire diverse datasets from OpenML through the `r ref_pkg("mlr3oml")` interface package.
-Furthermore, we have learned how to execute large-scale experiments using the `r ref_pkg("batchtools")` package and its `r ref_pkg("mlr3batchmark")` integration.
-Finally, we have demonstrated how to analyze the results using the `r ref_pkg("mlr3benchmark")` package, thereby extracting meaningful insights from the experiments.
+In this chapter, we have explored how to conduct large scale machine learning experiments using `mlr3`.
+We have shown how to acquire diverse datasets from OpenML through the `r ref_pkg("mlr3oml")` interface package, how to execute large-scale experiments with `r ref_pkg("batchtools")` and `r ref_pkg("mlr3batchmark")` integration, and finally how to analyze the results of these experiments with `r ref_pkg("mlr3benchmark")`.
+For further reading about batchtools we recommend @batchtools and @JSSv064i11.
 
-The most important functions and classes we learned about are in @tbl-api-large-benchmarking alongside their R6 classes (if applicable).
+@tbl-api-large-benchmarking summarizes the most important functions and methods seen in this chapter.
 
-| S3 function                         | R6 Class                   | Summary                                                             |
-| ------------------------------------| ---------------------------| --------------------------------------------------------------------|
-| `r ref("odt()")`                    | `r ref("OMLData")`         | Retrieve an OpenML Dataset                                          |
-| `r ref("otsk()")`                   | `r ref("OMLTask")`         | Retrieve an OpenML Task                                             |
-| `r ref("ocl()")`                    | `r ref("OMLCollection")`   | Retrieve an OpenML Collection                                       |
-| `r ref("list_oml_data()")`          |-                           | Filter OpenML Datasets                                              |
-| `r ref("list_oml_tasks()")`         |-                           | Filter OpenML Tasks                                                 |
-| `r ref("makeExperimentRegistry()")` |-                           | Create a new registry                                               |
-| `r ref("loadRegistry()")`           |-                           | Load an existing registry                                           |
-| `r ref("saveRegistry()")`           |-                           | Save an existing registry                                           |
-| `r ref("batchmark()")`              |-                           | Register problems, algorithms, and experiments from a design        |
-| `r ref("addProblem()")`             |-                           | Register a new Problem                                              |
-| `r ref("addAlgorithm()")`           |-                           | Register a  new algorithm                                           |
-| `r ref("addExperiments()")`         |-                           | Register experiments using existing algorithms and problems         |
-| `r ref("submitJobs()")`             |-                           | Submit jobs to the scheduler                                        |
-| `r ref("getJobTable()")`            |-                           | Get an overview of all job definitions                              |
-| `r ref("unwrap()")`                 |-                           | Get an overview of all job definitions                              |
-| `r ref("getStatus()")`              |-                           | Get the status of the computation                                   |
-| `r ref("reduceResultsBatchmark()")` |-                           | Load finished jobs as a benchmark result                            |
-| `r ref("reduceResults()")`          |-                           | Combine experiment results                                          |
-| `r ref("findExperiments()")`        |-                           | Find specific experiments                                           |
-| `r ref("grepLogs()")`               |-                           | Search the log files                                                |
-| `r ref("summarizeExperiments()")`   |-                           | Summarize defined experiments                                       |
-| `r ref("getLog()")`                 |-                           | Get a specific log file                                             |
-| `r ref("findErrors()")`             |-                           | Find ids of failed jobs                                             |
+| Underlying Class | Constructor | Important methods/functions |
+| --------------------------- | --------------------- | -------------------------------------------- |
+| `r ref("OMLData")` | `r ref("odt()")` | |
+| `r ref("OMLTask")` | `r ref("otsk()")` | |
+| `r ref("OMLCollection")` | `r ref("ocl()")` | |
+| `Registry` | `r ref("makeExperimentRegistry()")` | `r ref("submitJobs()")`/`r ref("getStatus()")`/`r ref("reduceResultsBatchmark")` |
+| | `r ref("batchmark()")` | |
+| `r ref("BenchmarkAggr()")` | `r ref("as_benchmark_aggr()")` | `$friedman_posthoc()` |
 
-:Core functions for Open in mlr3 with the underlying R6 class that are constructed when these functions are called (if applicable) and a summary of the purpose of the functions. {#tbl-api-large-benchmarking}
-
-### Resources{.unnumbered .unlisted}
-
-- Look at the short `r link("https://doi.org/10.21105/joss.00135", "batchtools paper")`, and please cite this if you use the package.
-- Read the `r link("https://www.jstatsoft.org/v64/i11", "Paper on BatchJobs / BatchExperiments")` which are the batchtools predecessors, but the concepts still hold, and most examples work analogously.
-- Learn more in the `r link("https://mllg.github.io/batchtools/articles/batchtools.html", "batchtools vignette")`.
-- Explore the `r link("https://docs.openml.org/", "OpenML documentation")`.
+: Important classes and functions covered in this chapter with underlying class (if applicable), constructor to create an object of the class (if applicable), and important class methods. {#tbl-api-large-benchmarking}
 
 ## Exercises
 
-In this exercise we will conduct an empirical study that compares two machine learning algorithms.
-Our null hypothesis is that a single regression tree performs equally well than a random forest.
+In the following exercises you will will conduct an empirical study that compares two machine learning algorithms with the null hypothesis that a single regression tree performs equally well as a random forest.
 
-### Getting Data from OpenML {.unnumbered .unlisted}
-
-1. Load the OpenML collection with ID `r link("269", "https://www.openml.org/search?type=study&study_type=task&id=269")`. It contains regression tasks from the AutoML benchmark [@amlb2022].
+1. Load the OpenML collection with ID 269, which contains regression tasks from the AutoML benchmark [@amlb2022].
 2. Find all tasks with less than 4000 observations and convert them to mlr3 tasks.
-3. Create an experimental design that compares the random forest in `r ref_pkg("ranger")` with the regression tree from `r ref_pkg("rpart")` on those tasks.
-   You can use 3-fold cross-validation instead of the OpenML resamplings to save time.
-
-### Executing the Experiments using batchtools {.unnumbered .unlisted}
-
-1. Create a registry and populate it with the experiments.
-1. (Optional) Change the cluster function to either "Socket" or "Multicore" (the latter does not work on Windows).
-1. Submit the jobs and once they are finished, collect the results.
-
-### Analyzing the Results {.unnumbered .unlisted}
-
-1. Conduct a global Friedman test and interpret the results.
-   As an evaluation measure, use the mean-square error.
-1. Inspect the ranks of the results.
+3. Create an experimental design that compares `regr.ranger` to `regr.rpart`, use the robustify pipeline for both learners and a featureless fallback learner. Use 3-fold cross-validation instead of the OpenML resamplings.
+4. Create a registry and populate it with the experiments. Optionally: change the cluster function to either "Socket" or "Multicore" (the latter does not work on Windows).
+5. Submit the jobs and once they are finished, collect the results.
+6. Conduct a global Friedman test and interpret the results using `regr.mse`. Why do we not need to use the post-hoc test? Can we reject our null hypothesis?
+7. Inspect the ranks of the results.
