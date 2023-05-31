@@ -14,10 +14,12 @@ update_db = function() {
 #' @param topic Name of the topic to link against.
 #' @param text Text to use for the link. Defaults to the topic name.
 #' @param format Either markdown or HTML.
+#' @param index If `TRUE` calls `index`
+#' @param aside Passed to `index`
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = NULL, format = "markdown") {
+ref = function(topic, text = NULL, format = "markdown", index = FALSE, aside = FALSE) {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
@@ -63,7 +65,13 @@ ref = function(topic, text = NULL, format = "markdown") {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  sprintf("[`%s`](%s){.refcode}", text, url)
+  out = sprintf("[`%s`](%s){.refcode}", text, url)
+
+  if (index || aside) {
+    out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
+  }
+
+  out
 }
 
 #' @title Hyperlink to Package
@@ -155,21 +163,46 @@ toproper = function(str) {
   paste0(toupper(substr(str, 1, 1)), tolower(substr(str, 2, 100)), collapse = " ")
 }
 
-#' @title Add term to index and margin
-#' @param main Text to show in book
-#' @param index Text to show in index
-#' @param margin Text to show in margin
-#' @export
-define = function(main, margin = toproper(main), index = toproper(main)) {
-  sprintf("\\index{%s}%s[%s]{.aside}", index, main, margin)
-}
-
-#' @title Add term to index
+#' @title Add term to index if non-NULL
 #' @param main Text to show in book
 #' @param index Index entry if different from `main
+#' @param code If TRUE tells function to wrap in ``
 #' @export
-index = function(main, index = toproper(main)) {
-  sprintf("\\index{%s}%s", index, main)
+index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
+
+  stopifnot(!(is.null(main) && is.null(index)))
+
+  if (is.null(main)) {
+    out = ""
+  } else if (code) {
+    out = sprintf("`%s`", main)
+  } else {
+    out = main
+  }
+
+  if (is.null(index)) {
+    index = if (code) main else toproper(main)
+  }
+
+  asidetxt = index
+
+  if (code) {
+    index = gsub("([\\$\\_])", "\\\\\\1", index)
+  }
+
+  out = sprintf("%s\\index{%s}", out, index)
+
+  if (aside)
+    out = sprintf("%s[%s]{.aside}", out, asidetxt)
+
+  out
+}
+
+#' @title Define - tmp will be removed
+#' @param text text to define
+#' @export
+define = function(text) {
+  index(text, aside = TRUE)
 }
 
 #' @title Create markdown and print-friendly link
