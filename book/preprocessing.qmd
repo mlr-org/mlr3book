@@ -4,9 +4,14 @@
 
 `r authors("Preprocessing")`
 
-The last chapter (@sec-pipelines) gave an technical introduction to `r mlr3pipelines`, this chapter will show important concepts and typical problems when preprocessing data for machine learning.
+The last chapter (@sec-pipelines) gave an technical introduction to `r mlr3pipelines`, this chapter will show important concepts and typical problems when preprocessing data for machine learning, namely factor encoding, imputation of missing values, feature and target transformations as well as feature extraction.
+Feature selection is an important important aspect of preprocessing as well, but was already introduced in @sec-feature-selection.
+In this chapter we will use `r mlr3pipelines` on a data set introduced below that possess most of the mentioned difficulties.
+We will not be able to cover every concept and we refer the reader to relevant further resources.
 
-In the realm of machine learning, there exist various definitions for preprocessing, data cleaning and feature engineering.
+
+But first we will briefly define data preprocessing in machine learning.
+There exist various definitions for preprocessing, data cleaning and feature engineering.
 To clarify, preprocessing refers here to everything that happens with the data before it is used to fit the model, while postprocessing encompasses everything that occurs with predictions after the model is fitted.
 Data cleaning is an important aspect of preprocessing as it involves the removal of errors, noise, and redundancy in the data.
 There is usually little ambiguity in what needs to be done here, and it is generally straightforward.
@@ -20,10 +25,6 @@ Furthermore, different problems require different features to be extracted, and 
 The goal of feature engineering is to prepare the data so that a model can be trained on it, and/or to further improve predictive performance.
 It is important to note that feature engineering helps mostly for simpler algorithms, while highly complex models usually gain little from it and require little data preparation to be trained.
 Common difficulties in data include features with (high) skew distributions, high cardinality categorical features, missing observations, high dimensional dimensionality and imbalanced classes in classification tasks.
-
-In this chapter we will use `r mlr3pipelines` on a data set introduced below that possess most of the mentioned difficulties.
-We will not be able to cover every concept and we refer the reader to relevant further resources.
-Since feature selection is such an important aspect of preprocessing it was already introduced in @sec-feature-selection.
 
 
 ## Ames Housing Data
@@ -48,12 +49,17 @@ We read in the data from the web and quickly peek at the target distribution
 library(data.table)
 library(ggplot2)
 
-url = "https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
+repo = "ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
 
-ames = fread(url,
+ames = fread(paste0("https://raw.githubusercontent.com/", repo),
     stringsAsFactors = TRUE
 )
+```
 
+```{r preproc-0015, message=FALSE}
+#| label: fig-sale
+#| fig-cap: Distribution of house sales prices (in USD).
+#| fig-alt: House price histogram.
 ggplot(ames, aes(x = Sale_Price)) +
     geom_histogram()
 ```
@@ -63,21 +69,7 @@ As expected we see a skewed distribution of prices with a few outliers of very e
 ## Data Cleaning and Exploratory Data Analysis
 
 In a first step we explore the data and look for simple problems such as constant or duplicated features.
-This can be done quite efficiently with a package like `DataExplorer` or `skimr`.
-
-```{r preproc-0002, echo = TRUE, eval = TRUE, message=FALSE}
-library(DataExplorer)
-library(skimr)
-
-skim(ames)
-plot_intro(ames)
-plot_bar(ames)
-plot_density(ames)
-plot_missing(ames)
-plot_correlation(ames, type="continuous")
-
-
-```
+This can be done quite efficiently with a package like `DataExplorer` or `skimr` which create a large number of plots.
 
 Here we just summarize the important findings:
 
@@ -166,7 +158,14 @@ as.data.table(mlr_learners)[task_type == "regr" &
     sapply(feature_types, function(x) "factor" %in% x)]
 ```
 
-For other learners we need to convert categorical features into numerical ones through encoding.
+For other learners we need to convert categorical features into numerical ones through encoding, otherwise the training process will fail.
+The popular eXtreme Gradient Boosting learner [@chen2016xgboost] for example does not handle categoricals:
+
+```{r preproc-00755, echo = TRUE, eval = TRUE, message=FALSE, error=TRUE}
+xgboost = lrn("regr.xgboost", nrounds = 100)
+xgboost$train(ames_task)
+
+```
 
 Categorical features can be distinguished by their cardinality, which refers to the number of levels they contain.
 There are three types of categorical features: binary, low-cardinality, and high-cardinality.
@@ -216,7 +215,12 @@ factor_pipeline =
         id = "low_card_enc") %>>%
     po("encode", method = "treatment", affect_columns = selector_type("factor"),
         id = "binary_enc")
+```
 
+```{r preproc-0095}
+#| label: fig-factor
+#| fig-cap: Pipeline to encode categorical features with more than 10 levels with impact encoding and the remaining with one-hot.
+#| fig-alt: Factor encoding pipeline.
 factor_pipeline$plot()
 ```
 
@@ -225,14 +229,12 @@ While many implementations of tree based algorithms, such as `rpart` or `ranger`
 ```{r preproc-010, echo = TRUE, eval = TRUE, message=FALSE}
 
 xgboost_impact = GraphLearner$new(
-    factor_pipeline %>>%
-        lrn("regr.xgboost", nrounds = 100),
+    factor_pipeline %>>% xgboost,
     id = "regr.xgboost_impact"
 )
 
 xgboost_one_hot = GraphLearner$new(
-    po("encode") %>>%
-        lrn("regr.xgboost", nrounds = 100),
+    po("encode") %>>% xgboost,
     id = "regr.xgboost_one_hot"
 )
 
@@ -261,6 +263,8 @@ In the EDA section we can see that most features contain no missing values, whil
 While both `rpart` and `xgboost` from the previous section could handle missing values automatically, both `ranger` and `lm` that we would like to consider do not.
 
 For simple imputation techniques, missing values can be replaced with the mean, median, mode, or a sample from the empirical distribution of the feature.
+The `po("imputhist")` operator computes the histogram of a feature and samples a from it to impute a missing value.
+Constant imputation with the mean of a feature can be done by `po("imputemean")`, with the median by `po("imputemedian")` and mode by `po("imputemode")`.
 For categorical features, missing values can easily be replaced by a new separate level, e.g. called `.MISSING`.
 The original information if an observation contained a missing value for each feature might be meaningful for the model.
 So we need keep track of the imputation by adding binary indicator features that are `1` if the feature was missing for an observation and `0` if it was present.
@@ -285,7 +289,12 @@ impute_histogram = list(
     po("imputeoor",
         affect_columns = selector_type("factor")
     )
+```
 
+```{r preproc-0115}
+#| label: fig-impute
+#| fig-cap: Pipeline to impute missing values of numeric features by histogram with binary indicators and missings in categoricals out-of-range with a new level.
+#| fig-alt: Imputation pipeline.
 impute_histogram$plot()
 ```
 
@@ -330,6 +339,14 @@ These more advanced techniques very rarely improve the model substantially and t
 ```{r preproc-0135, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
 robustify = mlr3pipelines::pipeline_robustify()
+```
+
+Generally, this is a very sensible default that should be used most of the time instead of doing it manually like in the previous two sections.
+
+```{r preproc-01355, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+#| label: fig-robustify
+#| fig-cap: Pipeline that can be used to robustify any subsequent learner.
+#| fig-alt: Robustify pipeline.
 robustify$plot()
 ```
 
@@ -382,9 +399,16 @@ Luckily, most based models internally scale the data if required by the algorith
 log_lm_preproc = ppl("targettrafo", graph = lm_preproc)
 log_lm_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
 log_lm_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
+```
 
+```{r preproc-0145}
+#| label: fig-target
+#| fig-cap: Pipeline that transforms a target during training and inverts the transformation during prediction.
+#| fig-alt: Target transformation pipeline.
 log_lm_preproc$plot()
+```
 
+```{r preproc-01455, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 log_lm_preproc = GraphLearner$new(
     log_lm_preproc,
     id = "regr.log_lm_preproc"
@@ -400,23 +424,36 @@ bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
 
 We see that with the target transformation a simple linear regression is the best model we have seen so far.
-While it is quite possible that proper hyperparameter tuning of the gradient boosting algorithm results in a better predictive performance, this requires much more computational resources.
 
 ## Feature Extraction
 
-Unfortunately, we do not have any information about the quality or number of kitchen appliances, which can have a significant impact on the sale price.
-However, we do have some data on the power consumption in the kitchen over an average day in 2-minute intervals.
+The quality of the kitchen appliances might give us additional information about the sale price.
+Unfortunately there is no feature in the data that represents this information.
+Luckily we have second dataset of the power consumption in the kitchen.
+Each row of the dataset represents one house and each feature is the power consumption at a given time.
+The consumption is measured in 2-minute intervals which results in 720 features.
+The curves are the sum of power consumption of multiple small and large kitchen appliances taken from [@bagnall2017great].
 
 ```{r preproc-015, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 
-energy_data = fread("https://raw.githubusercontent.com/ja-thomas/extend_ames_housing/main/data/energy_usage.csv",
-    stringsAsFactors = FALSE
-)
+repo = "ja-thomas/extend_ames_housing/main/data/energy_usage.csv"
 
-plot(as.numeric(energy_data[1, ]), type = "l")
+energy_data = fread(paste0("https://raw.githubusercontent.com/", repo),
+    stringsAsFactors = TRUE
+)
 ```
 
-Although we should not directly add these 720 features to our data, we can use some information about the curves to gain insights into the kitchen's overall energy usage.
+```{r preproc-0155, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+#| label: fig-energy
+#| fig-cap: Energy consumption of one example house in a day, recorded in 2-minute intervals.
+#| fig-alt: Energy data example.
+plot(as.numeric(energy_data[1, ]), type = "l",
+    ylab = "Power Consumption",
+    xlab="2-Minute Interval")
+```
+
+Just adding these 720 features to our data is probably not a good idea, as each feature by itself does not provide any meaningful information.
+Instead we can can extract information about the curves to gain insights into the kitchen's overall energy usage.
 For example, we can look at the maximum used wattage, overall used wattage, number of peaks, and other similar features.
 This is what is typically called feature extraction.
 
@@ -424,7 +461,6 @@ To extract some features we write our own simple `PipeOp` that inherits from `Pi
 The operator is quite simple, as we hardcode all operations.
 First we extract the functional features save them in a new `data.table` called `ffeats`, apply our extractors `mean`, `min`, `max` and `variance` which are appended to the data.
 Finally the original functional features are removed as we do not need them anymore.
-
 
 ```{r preproc-0155, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 library(R6)
@@ -468,6 +504,16 @@ func_extractor = PipeOpFuncExtract$new("energy_extract")
 
 ames_task_ext = func_extractor$train(list(ames_task_ext))[[1]]
 
+ames_task_ext$head()[, .(energy_means,
+                         energy_mins,
+                         energy_maxs,
+                         energy_vars)]
+```
+
+Since this is a deterministic transformation of each observation sperately we do not need to add the pipeop to each learner.
+Instead we can simply train it on the whole dataset to create the new features.
+
+```{r preproc-0165, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
 learners = list(
     baseline = baseline_lrn,
     tree = lrn("regr.rpart"),
