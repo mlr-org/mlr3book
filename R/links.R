@@ -67,7 +67,7 @@ ref = function(topic, text = NULL, format = "markdown", index = FALSE, aside = F
 
   out = sprintf("[`%s`](%s){.refcode}", text, url)
 
-  if (index) {
+  if (index || aside) {
     out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
   }
 
