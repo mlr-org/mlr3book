@@ -528,105 +528,82 @@ extract_inner_tuning_archives(rr)[1:3,
   .(iteration, cost, gamma, classif.ce)]
 ```
 
-These methods are particularly useful for identifying if the optimized hyperparameters are (meta)overfitting the data, as we will demonstrate now.
-
 ### Overfitting in tuning {#sec-resample-overfitting}
 
 {{< include _optional.qmd >}}
 
-In this short section we will briefly demonstrate the right and wrong way to report model performance when running nested resampling experiments.
-By example we will tune the complexity parameter of a regression tree with 4-fold cross-validation, grid search, and use mean absolute error to optimize hyperparameters.
-We optimize the model on the `kc_housing` task, which has 21,613 rows and can therefore provide a good approximation to the model's generalization performance.
-First we remove the date column which cannot be handled by our learner, and then split the task into a training dataset with 100 rows and a test set with all remaining observations.
+In this short section we will demonstrate with a brief example that only nested resampling with the `$aggregate()` method provides a reliable estimate of the model's generalization performance.
+
+We will do this by tuning and (un-nested) resampling a learner on training data and evaluating the in-sample performance, which is the performance of the best performing hyperparameter.
+Then we will compute the out-of-sample, generalization, performance, which is the performance of the tuned learner trained on the full dataset and evaluated on a test dataset.
+Finally, we will show how using nested resampling returns a good estimate of the generalization performance, even when only the training data is used.
+
+To best illustrate overfitting we will run the experiment by tuning a few parameters from `classif.xgboost` and make use of the `"moons"` `r ref("TaskGenerator", index = TRUE, aside = FALSE)`.
+The `TaskGenerator` class is used when you want to simulate data for use in experiments, these are very useful in cases such as this experiment when you need access to an infinite number of datapoints to estimate quantities such as the generalization error.
+
+We begin by loading our learner, task generator, and generating 1,000 training data points and 1,000,000 testing data points.
 
 ```{r}
-at_RF = auto_tuner(
-  tuner = grid_search,
-  learner = lrn("classif.rpart", cp = 0, minsplit = to_tune(1, 100)),
-  resampling = rsmp("cv", folds = 5),
-  measure = msr_ce,
+XGB = lrn("classif.xgboost",
+  eta               = to_tune(1e-4, 1, logscale = TRUE),
+  colsample_bytree  = to_tune(1e-1, 1),
+  colsample_bylevel = to_tune(1e-1, 1),
+  lambda            = to_tune(1e-3, 1e3, logscale = TRUE),
+  alpha             = to_tune(1e-3, 1e3, logscale = TRUE),
+  subsample         = to_tune(1e-1, 1)
 )
-
-task = tgen("moons", sigma = 20)
-train_task = task$generate(1e4)
-test_task = task$generate(1e7)
-# task = tsk("kc_housing")
-# task = task$select(setdiff(task$feature_names, "date"))
-# train_data = sample(task$nrow, 50)
-# test_data = setdiff(seq(task$nrow), train_data)
-# train_task = task$clone()$filter(train_data)
-# test_task = task$clone()$filter(test_data)
+task = tgen("moons")
+train_task = task$generate(1000)
+test_task = task$generate(1000000)
 ```
 
-In this experiment we want to demonstrate that only `$aggregate()` provides a reliable estimate of the model's generalization performance.
-So in the first instance we will compute the generalization performance in the usual way by training our learner (in this case an `AutoTuner`) on a training dataset and estimating the performance on a separate, test dataset, we then run our resampling experiment by passing the `AutoTuner` to `resample`, below we use 4-fold CV for the inner resampling and then calculate the results using `$aggregate()`.
+Now we will tune the learner with respect to the classification error and use holdout resampling and random search with 500 evaluations.
 
 ```{r}
-pred = at_RF$train(train_task)$predict(test_task)
-rr_overfit = resample(train_task, at_RF, rsmp("holdout"), store_models = TRUE)
+tnr_rdm = tnr("random_search")
+holdout = rsmp("holdout")
+trm_500 = trm("evals", n_evals = 500)
 
-c(generalization = pred$score(),
-  inner_resamp = extract_inner_tuning_results(rr_overfit)[, .(classif.ce)],
-  outer_resamp = rr_overfit$aggregate(msr_ce))
-```
-
-The first table shows that in most iterations the optimal configurations in the inner resampling have a lower MAE than the tuned model in the outer resampling, this demonstrates that the optimized hyperparameters are overfitting the data as the optimal hyperparameters perform best on their training data.
-Hence by taking the mean over the scores (i.e., by using `$aggregate()`) we obtain a performance estimate that better reflects the hyperparameter performance on external test data.
-<!-- FIXME: NEED TO FIX OR DELETE ABOVE -->
-
-#### Reporting of performance estimates {.unnumbered .unlisted}
-
-In this example we will demonstrate that nested resampling better estimates the generalization performance of a tuned model than the internal resampling results.
-We start by tuning a decision tree on a training dataset and then estimating the generalization performance by making predictions on new, unseen data.
-Note that we make use of a `r ref("TaskGenerator")` in this example, which are used to create simulated data for experiments that are typically 'easy' to solve, we will not discuss them in detail in this book but refer the reader to the `r ref("mlr_task_generators")` dictionary to see implemented generators, and the help page for each of these to see how the data is simulated.
-<!-- FIXME: PROBABLY DELETE THIS EXAMPLE -->
-
-```{r optimization-032}
-lrn_rpart = lrn("classif.rpart", cp = to_tune(0, 1))
-generator = tgen("moons")
-train_task = generator$generate(100)
-test_task = generator$generate(1e6)
-
-# tune
 instance = tune(
-  tuner = grid_search,
+  tuner = tnr_rdm,
   task = train_task,
-  learner = lrn_rpart,
-  resampling = rsmp("holdout"),
+  learner = XGB,
+  resampling = holdout,
   measures = msr_ce,
-  terminator = trm("none")
+  terminator = trm_500
 )
 
-# fit optimized model
-tuned_learner = lrn("classif.rpart")
-tuned_learner$param_set$values = instance$result_learner_param_vals
-tuned_learner$train(train_task)
-pred = tuned_learner$predict(test_task)
-
-pred$score()
+# same setup as above
+at = auto_tuner(
+  tuner = tnr_rdm,
+  learner = XGB,
+  resampling = holdout,
+  measure = msr_ce,
+  terminator = trm_500
+)
 ```
 
-Now we can compare the true generalization error to the performance of the optimal hyperparameter configuration:
+Finally we will compute the in-sample performance, which is the performance of the optimal hyperparameter from `tune`, the out-of-sample performance, which is the aggregate of scores over the outer resampling method (below we use 5-fold CV), and then estimate the generalization error by training the tuned learner on the full training data again and predicting on the test data.
 
 ```{r}
-instance$result_y
+insample = instance$result_y
+
+outsample = resample(train_task, at, rsmp("cv", folds = 5))$aggregate()
+
+xgb_tuned = lrn("classif.xgboost")
+xgb_tuned$param_set$set_values(
+  .values = instance$result_learner_param_vals)
+generalization = xgb_tuned$train(train_task)$predict(test_task)$score()
 ```
 
-And to the estimate from nested resampling:
+Comparing these results we can see that the insample performance overestimates the model performance, which indicates some overfitting to the optimal hyperparameters.
+On the other hand, the out-of-sample performance from nested resampling provides a much better estimate of the generalization performance, despite the nested resampling only accessing 1,000 data points and not all 1,000,000.
 
-```{r optimization-034}
-at = auto_tuner(
-  tuner = grid_search,
-  learner = lrn_rpart,
-  resampling = rsmp("holdout"),
-  measure = msr_ce,
-  terminator = trm("none")
-)
-rr = resample(train_task, at, rsmp3)
-rr$aggregate()
+```{r}
+c(generalization = as.numeric(generalization),
+  insample = as.numeric(insample),
+  outsample = as.numeric(outsample))
 ```
-
-We can see that the nested resampling is a much closer estimate of the true generalization error, and in fact in the case the internal performance measure was actually worse than the true generalization error.
 
 ## More Advanced Search Spaces {#sec-defining-search-spaces}
 
