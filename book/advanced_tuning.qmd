@@ -15,130 +15,131 @@ This is a more theory-heavy chapter to motivate the design of the classes and me
 
 {{< include _optional.qmd >}}
 
-## Error handling and memory management Tuning {#sec-tuning-errors}
+## Error handling and memory management {#sec-tuning-errors}
 
 In this section we will look at how to use `mlr3` to ensure that tuning workflows are efficient and robust.
-In particular, we will consider how to enable features that prevent fatal errors leading to irrecoverable data loss in the middle of an experiment.
+In particular, we will consider how to enable features that prevent fatal errors leading to irrecoverable data loss in the middle of an experiment, and then how to manage tuning experiments that may use up a lot of computer memory.
 
 ### Encapsulation and Fallback Learner {#sec-encapsulation-fallback}
 
-Until now, the book has focused on non-breaking examples, but to demonstrate encapsulation we will now consider 'broken' examples, e.g., where learners do not converge, run out of memory, or terminate with an error.
-To get an error in the following examples, we filter the `sonar` task to only one class.
+Error handling is discussed in detail in @sec-error-handling, however it is very important in the context of tuning so here we will just practically demonstrate how to make use of encapsulation and fallback learners and explain why they are essential during HPO.
 
-```{r}
-task = tsk("sonar")
-task$filter(seq(10))
+Even in simple ML problems, there is a lot of potential for things to go wrong.
+For example when learners do not converge, run out of memory, or terminate with an error due to issues in the underlying data or bugs in the code.
+As a common example, learners can fail if there are factor levels present in the test data that were not in the training data, models fail in this case as there have been no weights/coefficients trained for these new factor levels:
+
+```{r, error=TRUE,warning=FALSE}
+task_bh = tsk("boston_housing")
+cv10 = rsmp("cv", folds = 10)
+msr_rmse = msr("regr.rmse")
+rnd_srch = tnr("random_search")
+learner = lrn("regr.lm", df = to_tune(1, 2))
+instance = tune(
+  tuner = rnd_srch,
+  task = task_bh,
+  learner = learner,
+  resampling = cv10,
+  measures = msr_rmse,
+  term_evals = 10
+)
 ```
 
-Since tuning is an automated process, there is no opportunity for manual intervention, we therefore, mitigate errors by making use of `r index("encapsulation", aside = TRUE)`.
-Encapsulation allows errors in training to be isolated and handled, without disrupting the tuning process.
-In `r mlr3`, encapsulation is controlled by passing arguments to the `encapsulate` field in any learner, as in the example below.
-The possible options are `evaluate` and `callr` named after the packages of the same name.
+In the above example, we can see the tuning process breaks and we lose all information about the HPO process as the `instance` cannot be saved.
+This is even worse in nested resampling or benchmarking, when errors could cause us to lose all progress across multiple configurations or even learners and tasks.
+
+`r index('Encapsulation')` (@sec-encapsulation) allows errors to be isolated and handled, without disrupting the tuning process.
+We can tell a learner to encapsulate an error by setting the `$encapsulate` field as follows:
 
 ```{r optimization-035}
-learner = lrn("classif.svm",
-  cost  = to_tune(1e-5, 1e5),
-  gamma = to_tune(1e-5, 1e5),
-  kernel = "radial",
-  type = "C-classification"
-)
-
 learner$encapsulate = c(train = "evaluate", predict = "evaluate")
 ```
 
-Note that encapsulation is set individually for training and predicting.
-This separation could be useful if, for example, we are happy to ignore errors in training but want to manually debug any errors in prediction.
-There are currently two options for encapsulating a learner, via the packages `r ref_pkg("evaluate")` and `r ref_pkg("callr")`.
-`r ref_pkg("evaluate")` catches any errors that occur and allows the process to continue, whereas `r ref_pkg("callr")` encapsulation spawns a separate R process (thus comes with more computational overhead) (see @sec-encapsulation).
-This way `r ref_pkg("callr")` also guards against segmentation faults which would tear down the complete R session.
-Both packages allow setting a timeout, which is useful when a learner does not converge.
-You can do this by setting the `timeout` field.
-Again this can be set for training and predicting individually:
+Note by passing `"evaluate"` to both `train` and `predict`, we are telling the learner to setup encapsulation in both the training and predicting stages, however we could have only set it for one stage.
+
+Another common issue that cannot be easily solved during HPO is learners not converging and the process running indefinitely.
+We can prevent this happening by setting the `timeout` field in a learner, which signals the learner to stop if it has been running for that much time, again this can be set for training and predicting individually:
 
 ```{r optimization-036}
 learner$timeout = c(train = 30, predict = 30)
 ```
 
-With encapsulation, exceptions and timeouts do not stop the tuning.
-Instead, the error message is recorded and a fallback learner is fitted.
-
-Fallback learners allow scoring a result when no model was fitted during training.
-A common approach is to predict a weak baseline e.g. predicting the mean of the target (`lrn("regr.featureless")`), or the majority class (`lrn("classif.featureless")`).
-See @sec-fallback for more detailed information.
-
-Below we set `r ref("mlr_learners_classif.featureless")` as the featureless learner which always predicts the most frequent label.
+Now if either an error occurs, or the model timeout threshold is reached, then instead of breaking, the learner will simply not make predictions when errors are found.
+Unfortunately, if predictions are not made, then our HPO experimement will still fail as for any resampling iteration with errors, the result will be `NA`, and so are unable to aggregate results across resampling iterations.
+Therefore it is essential to also select a fallback learner (@sec-fallback), which is essentiall a learner that will be fitted if the learner of interest fails.
+A common approach is to use a featureless baseline, `classif/regr.featureless`.
+Below we set `regr.featureless`, which always predicts the mean `response`, by passing this learner to the `$fallback` field.
 
 ```{r optimization-037}
-learner$fallback = lrn("classif.featureless")
+learner$fallback = lrn("regr.featureless")
 ```
 
-Errors and warnings that occurred during tuning are stored in the archive.
+We can now run our experiment and see errors that occurred during tuning in the archive.
 
 ```{r optimization-038}
 instance = tune(
-  tuner = tnr("random_search", batch_size = 5),
-  task = task,
+  tuner = rnd_srch,
+  task = task_bh,
   learner = learner,
-  resampling = rsmp("holdout"),
-  measures = msr("classif.ce"),
+  resampling = cv10,
+  measures = msr_rmse,
   term_evals = 10
 )
 
-as.data.table(instance$archive)[, .(cost, gamma, classif.ce, errors, warnings)]
+as.data.table(instance$archive)[, .(df, regr.rmse, errors)]
+
+# Reading the error in the first resample result
+instance$archive$resample_result(1)$errors
 ```
 
+The learner was tuned without breaking because the errors were encapsulated and logged before the fallback learners were used for fitting and predicting:
 
-::: {.callout-note}
-When tuning, encapsulation should always be combined with a fallback learner, because the archive must contain a performance value for each configuration.
-:::
+```{r}
+instance$result
+```
 
 ### Memory Management {#sec-memory-management}
 
 Running a large tuning experiment requires a lot of working memory, especially when using nested resampling.
 Most of the memory is consumed by the models since each resampling iteration creates one new model.
 The option `store_models` in the functions `r ref("ti()")` and `r ref("auto_tuner()")` allows us to enable the storage of the models.
-Storing the models is disabled by default and in most cases, it is not necessary to save the models.
+Storing the models is disabled by default and in most cases is not required.
 
 The archive stores a `r ref("ResampleResult")` for each evaluated hyperparameter configuration.
-The contained `r ref("Prediction")` objects can take up a lot of memory, especially with large data sets and many resampling iterations.
+The contained `r ref("Prediction")` objects can take up a lot of memory, especially with large datasets and many resampling iterations.
 We can disable the storage of the resample results by setting `store_benchmark_result = FALSE` in the functions `r ref("ti()")` and `r ref("auto_tuner()")`.
 Note that without the resample results, it is no longer possible to score the configurations on another measure.
 
 When we run nested resampling with many outer resampling iterations, additional memory can be saved if we set `store_tuning_instance = FALSE` in the `r ref("auto_tuner()")` function.
-The functions `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` will then no longer work.
+However, the functions `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` would then no longer work.
 
 The option `store_models = TRUE` sets `store_benchmark_result` and `store_tuning_instance` to `TRUE` because the models are stored in the benchmark results which in turn is part of the instance.
 This also means that `store_benchmark_result = TRUE` sets  `store_tuning_instance` to `TRUE`.
 
 Finally, we can set `store_models = FALSE` in the `r ref("resample()")` or `r ref("benchmark()")` functions to disable the storage of the auto tuners when running nested resampling.
-This way we can still access the aggregated performance (`rr$aggregate()`) but do not have any information about the inner resampling anymore.
-
+This way we can still access the aggregated performance (`rr$aggregate()`) but lose information about the inner resampling.
 
 
 ## Multi-Objective Tuning {#sec-multi-metrics-tuning}
 
-So far we have considered optimizing a model with respect to one metric, but multi-metric, or `r index("multi-objective", aside = TRUE)` optimization, is also possible.
-A simple example of multi-objective optimization might be optimizing a classifier to minimize false positive and false negative predictions.
-As a more complex example, consider the problem of deploying a classifier in a healthcare setting.
-One the one hand, we are usually interested in using a model that makes the best possible predictions.
-On the other hand, strong performing models such as deep neural networks or gradient boosted trees with many boosting iterations often can be very hard to interpret (e.g., understanding how a model arrives at a certain prediction can be difficult).
-Especially in healthcare applications interpretability or model complexity can be highly relevant (often a model is more likely to be trusted and adapted in practice if it can provide insight into its reasoning) and in this case, we may be interested in minimizing *both* the classification error and the complexity of the model.
+So far we have considered optimizing a model with respect to one metric, but multi-criteria, or `r index("multi-objective", aside = TRUE)` optimization, is also possible.
+A simple example of multi-objective optimization might be optimizing a classifier to minimize false positive *and* false negative predictions.
+In another example, consider the single-objective problem of tuning a deep neural network to minimize classification error.
+The best performing model is likely to be quite complex, possibly with many layers that will take a long time to train, which would not be appropriate when you have limited resources.
+In this case we might want to simultaneously minimize the classification error and model complexity.
 
-In general, when optimizing multiple metrics, these will be in competition (if they were not we would only need to optimize with respect to one of them) and so no single configuration exists that optimizes all metrics.
-Focus is therefore given to the concept of `r index("Pareto optimality")`.
-One hyperparameter configuration is said to `r index("Pareto-dominate")` another one if the resulting model is equal or better in all metrics and strictly better in at least one metric.
-All configurations that are not Pareto-dominated by any other configuration are called Pareto efficient and the set of all these configurations is the `r index("Pareto set", aside = TRUE)`.
-In contrast, the metric values coresponding to these non-dominated confgurations are referred to as the `r index("Pareto front", aside = TRUE)`.
+By definition, optimization of multiple metrics means these will be in competition (otherwise we would only optimize one of them) and therefore in general no *single* configuration exists that optimizes all metrics.
+We therefore instead focus on the concept of `r index("Pareto optimality")`.
+One hyperparameter configuration is said to `r index("Pareto-dominate")` another if the resulting model is equal or better in all metrics and strictly better in at least one metric.
+For example say we are minimizing classification error, CE, and complexity, CP, for configurations A and B with CE of $CE_A$ and $CE_B$ respectively and CP of $CP_A$ and $CP_B$ respectively.
+Then, A pareto-dominates B if: 1) $CE_A \geq CE_B$ and $CP_A > CP_B$ or; 2) $CE_A > CE_B$ and $CP_A \geq CP_B$.
+All configurations that are not Pareto-dominated by any other configuration are called `r index('Pareto-efficient')` and the set of all these configurations is the `r index("Pareto set", aside = TRUE)`.
+The metric values corresponding to these Pareto set are referred to as the `r index("Pareto front", aside = TRUE)`.
 
-The goal of multi-objective HPO is to approximate the true, unknown Pareto front.
-More methodological details on multi-objective HPO can be found in @hpo_multi.
-
+The goal of multi-objective HPO is to approximate the Pareto front.
 We will now demonstrate multi-objective HPO by tuning a decision tree on the `r ref("mlr_tasks_sonar", "sonar")` dataset with respect to the classification error, as a measure of model performance, and the number of selected features, as a measure of model complexity (in a decision tree the number of selected features is straightforward to obtain by simply counting the number of unique splitting variables).
-We will tune
+Methodological details on multi-objective HPO can be found in @hpo_multi.
 
-* the complexity hyperparameter `cp` that controls when the learner considers introducing another branch.
-* the `minsplit` hyperparameter that controls how many observations must be present in a leaf for another split to be attempted.
-* the `maxdepth` hyperparameter that limits the depth of the tree.
+We will tune `cp`, `minsplit`, and `maxdepth`:
 
 ```{r optimization-082}
 learner = lrn("classif.rpart",
@@ -151,11 +152,11 @@ measures = msrs(c("classif.ce", "selected_features"))
 ```
 
 Note that as we tune with respect to multiple measures, the function `ti` creates a `r ref("TuningInstanceMultiCrit")` instead of a `r ref("TuningInstanceSingleCrit")`.
-We also have to set `store_models = TRUE` because this is required by the selected features measure.
+We also have to set `store_models = TRUE` as this is required by the selected features measure.
 
 ```{r optimization-083}
 instance = ti(
-  task = tsk("sonar"),
+  task = task_sonar,
   learner = learner,
   resampling = rsmp("cv", folds = 5),
   measures = measures,
@@ -165,8 +166,7 @@ instance = ti(
 instance
 ```
 
-As before we will then select and run a tuning algorithm.
-Here we use a random search:
+As before we will select and run a tuning algorithm, in this example we will use random search:
 
 ```{r optimization-084,output=FALSE}
 tuner = tnr("random_search", batch_size = 30)
@@ -174,13 +174,12 @@ tuner$optimize(instance)
 ```
 
 Finally, we inspect the best-performing configurations, i.e., the Pareto set, and visualize the corresponding estimated Pareto front (@fig-pareto).
-Note that the number of selected features can be fractional, as in this example, it is determined through resampling and calculated as an average across the number of selected features per cross-validation fold.
 
 ```{r optimization-085}
 instance$archive$best()[, .(cp, minsplit, maxdepth, classif.ce, selected_features)]
 ```
 
-```{r optimization-086}
+```{r optimization-086,message=FALSE}
 #| label: fig-pareto
 #| fig-cap: Pareto front of selected features and classification error. Purple dots represent tested configurations, each blue dot individually represents a Pareto-optimal configuration and all blue dots together represent the Pareto front.
 #| fig-alt: Scatter plot with selected_features on x-axis and classif.ce on y-axis. Purple dots represent simulated tested configurations of selected_features vs. classif.ce and blue dots and a blue line along the bottom-left of the plot shows the Pareto front.
@@ -211,15 +210,29 @@ ggplot(as.data.table(instance$archive), aes(x = selected_features, y = classif.c
   theme_minimal()
 ```
 
-## Multi-Fidelity Tuning via Hyperband {#sec-hyperband}
+Determining which configuration to use from the Pareto front is up to you.
+By definition there is no optimal configuration so this may depend on your use-case, for example if you would prefer lower complexity at the cost of higher error than you might prefer a configuration where `selected_features = 1`.
+You can select one configuration and pass it to a learner for training using `$result_learner_param_vals`, so if we want to select the first configuration we would run:
 
-Increasingly large data sets and search spaces and costly to train models make hyperparameter optimization a time-consuming task.
+```{r}
+learner = lrn("classif.rpart")
+learner$param_set$values = instance$result_learner_param_vals[[1]]
+learner$param_set
+```
+
+As multi-objective tuning requires manual intervention to select a configuration, it is currently not possible to use `auto_tuner`.
+Furthermore, it can also be quite difficult to compare multiple models over multiple measures.
+
+## Multi-Fidelity Tuning via Hyperband {#sec-hyperband}
+<!-- TODO: RS NOT REVIEWED YET -->
+
+Increasingly large datasets and search spaces and costly to train models make hyperparameter optimization a time-consuming task.
 Recent HPO methods often also make use of evaluating a configuration at multiple fidelity levels.
 For example, a neural network can be trained for an increasing number of epochs, gradient boosting can be performed for an increasing number of boosting iterations and training data can always be subsampled to a smaller fraction of all available data.
 The general idea of *multi-fidelity* HPO is that the performance of a model obtained by using computationally cheap lower fidelity evaluation (few numbers of epochs or boosting iterations, only using a small sample of all available data for training) is predictive of the performance of the model obtained using computationally expensive full model evaluation and this concept can be leveraged to make HPO more efficient (e.g., only continuing to evaluate those configurations on higher fidelities that appear to be promising with respect to their performance).
 The fidelity parameter is part of the search space and controls the trade-off between the runtime and preciseness of the performance approximation.
 
-A popular multi-fidelity HPO algorithm is given by *Hyperband* [@li_2018].
+A popular multi-fidelity HPO algorithm is *Hyperband* [@li_2018].
 After having evaluated randomly sampled configurations on low fidelities, Hyperband iteratively allocates more resources to promising configurations and terminates low-performing ones.
 In the following example, we will optimize XGBoost and use the number of boosting iterations as the fidelity parameter.
 This means Hyperband will allocate increasingly more boosting iterations to well-performing hyperparameter configurations.
@@ -287,7 +300,7 @@ We specify a range from 16 to 128 boosting iterations.
 This is used as $r{_{min}}$ and $r{_{max}}$ within Hyperband.
 We need to tag the parameter with `"budget"`to identify it as a fidelity parameter.
 For the other hyperparameters, we take the search space for XGBoost from @hpo_practical.
-This search space usually work well for a wide range of data sets.
+This search space usually work well for a wide range of datasets.
 
 ```{r optimization-063}
 learner$param_set$set_values(
@@ -389,7 +402,7 @@ We have to prefix the hyperparameters with the id of the pipeline operators, bec
 The `subsample.frac` is the fidelity parameter that must be tagged with `"budget"` in the search space.
 In the following, the dataset size is increased from 3.7% to 100%.
 For the other hyperparameters, we take the search space for support vector machines from @binder2020.
-This search space usually work well for a wide range of data sets.
+This search space usually work well for a wide range of datasets.
 
 ```{r optimization-074}
 graph_learner$param_set$set_values(
@@ -416,7 +429,7 @@ Again, we use `trm("none")` because Hyperband controls the termination itself.
 
 ```{r optimization-076}
 instance = ti(
-  task = tsk("sonar"),
+  task = task_sonar,
   learner = graph_learner,
   resampling = rsmp("cv", folds = 3),
   measures = msr("classif.ce"),
