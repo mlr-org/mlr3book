@@ -21,5 +21,5 @@ lgr = NULL
 
 update_db()
 for (pkg in db$hosted) {
-  assign(pkg, mlr_pkg(pkg))
+  assign(pkg, mlr_pkg(pkg, index = TRUE))
 }
