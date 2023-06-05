@@ -1036,26 +1036,22 @@ Other common model's that have fidelity parameters include neural networks (numb
 A popular multi-fidelity HPO algorithm is *Hyperband* [@li_2018].
 After having evaluated randomly sampled configurations on low fidelities, Hyperband iteratively allocates more resources to promising configurations and terminates low-performing ones.
 Hyperband builds upon the Successive Halving algorithm by @jamieson_2016.
-Successive Halving is initialized with the number of starting configurations $n$, the proportion of configurations discarded in each stage $\eta$, and the minimum $r{_{min}}$ and maximum $r{_{max}}$ budget of a single evaluation.
+Successive Halving is initialized with the number of starting configurations $n$, the proportion of configurations discarded in each stage $\eta$, and the minimum, $r{_{min}}$, and maximum, $r{_{max}}$, budget (fidelity) of a single evaluation.
 The algorithm starts by sampling $n$ random configurations and allocating the minimum budget $r{_{min}}$ to them.
 The configurations are evaluated and $\frac{1}{\eta}$ of the worst-performing configurations are discarded.
-The remaining configurations are promoted to the next stage and evaluated on a larger budget.
+The remaining configurations are promoted to the next stage, or 'bracket', and evaluated on a larger budget.
 This continues until one or more configurations are evaluated on the maximum budget $r{_{max}}$ and the best-performing configuration is selected.
 The total number of stages is calculated so that each stage consumes approximately the same overall budget.
-Successive Halving has the disadvantage that is not clear whether we should choose a large $n$ and try many configurations on a small budget or choose a small $n$ and train more configurations on the full budget.
-<!-- REREVIEW BELOW -->
-Hyperband solves this problem by running Successive Halving with different numbers of stating configurations starting on different budget levels.
-The algorithm is initialized with the same parameters as Successive Halving except for $n$.
-Each run of the algorithm is called a bracket and starts with a different budget $r{_{0}}$.
-A smaller starting budget means that more configurations can be evaluated.
-The most exploratory bracket is allocated the minimum budget $r{_{min}}$.
-The next bracket increases the starting budget by a factor of $\eta$.
-In each bracket, the starting budget increases further until the last bracket $s = 0$ essentially performs a random search with the full budget $r{_{max}}$.
-The number of brackets $s{_{max}} + 1$ is calculated with $s{_{max}} = {\log_\eta \frac{r{_{max}} }{r{_{min}}}}$.
-Under the condition that $r{_{0}}$ increases by $\eta$ with each bracket, $r{_{min}}$ sometimes has to be adjusted slightly in order not to use more than $r{_{max}}$ resources in the last bracket.
-The number of configurations in the base stages is calculated so that each bracket uses approximately the same amount of budget.
-@tbl-hyperband shows a full run of the Hyperband algorithm.
-The bracket $s = 3$ is the most exploratory bracket and $s = 0$ essentially performs a random search using the full budget.
+A big disadvantage of this method is that it is unclear if it is better to start with many configurations (large $n$) and a small budget or less configurations (small $n$) but a larger budget.
+
+Hyperband solves this problem by running Successive Halving with different numbers of starting configurations, each at different budget levels.
+The algorithm is initialized with the same $\eta$, $r{_{min}}$, and $r{_{max}}$ parameters (but not $n$).
+Each bracket starts with a different budget, $r{_{0}}$, where smaller values mean that more configurations can be evaluated and so the most exploratory bracket (i.e., most number of stages) is allocated the minimum budget $r{_{min}}$.
+In each bracket, the starting budget increases by a factor of $\eta$ until the last bracket ($s = 0$) essentially performs a random search with the full budget $r{_{max}}$ -- the minimum budget, $r{_{min}}$, may have to be adjusted so the last bracket does not exceed $r{_{max}}$.
+The total number of brackets, $s{_{max}} + 1$, is calculated as $s{_{max}} = {\log_\eta \frac{r{_{max}} }{r{_{min}}}}$.
+The number of configurations are calculated so that each bracket uses approximately the same amount of budget.
+An example Hyperband schedule is given in @tbl-hyperband where $s = 3$ is the most exploratory bracket and $s = 0$ essentially performs a random search using the full budget.
+@tbl-hyperband-eg demonstrates how this schedule may look for a resulting hyperparameter configuration in each stage and bracket where the best configurations from each stage are promoted to the next assuming we are tuning the `max_depth` parameter of `classif.xgboost` between $1,...,20$.
 
 +-----+-------------------+-------------------+-------------------+-------------------+
 |     | $s = 3$           | $s = 2$           | $s = 1$           | $s = 0$           |
@@ -1071,7 +1067,18 @@ The bracket $s = 3$ is the most exploratory bracket and $s = 0$ essentially perf
 | 3   | 1       | 8       |         |         |         |         |         |         |
 +-----+---------+---------+---------+---------+---------+---------+---------+---------+
 
-: Hyperband schedule with the number of configurations $n_{i}$ and resources $r_{i}$ for each bracket $s$ and stage $i$, when $\eta = 2$ , $r{_{min}} = 1$ and $r{_{max}} = 8$ {#tbl-hyperband}
+: Hyperband schedule with the number of configurations, $n_{i}$, and resources, $r_{i}$, for each bracket, $s$, and stage, $i$, when $\eta = 2$, $r{_{min}} = 1$ and $r{_{max}} = 8$. {#tbl-hyperband}
+
+|     | $s = 3$ | $s = 2$ | $s = 1$ | $s = 0$ |
+|---- | ---------------- | ---------------- | ---------------- | ---------------- |
+| $i = 0$   | $\{2, 6, 7, 10, 13, 15, 18, 19\}$ | $\{9, 11, 14, 15, 18, 20\}$ |  $\{2, 4, 16, 19\}$ | $\{11, 12, 14, 15\}$ |
+| $i = 1$   | $\{7, 13, 18, 19\}$ | $\{9, 14, 15\}$ | $\{16, 19\}$ |  |
+| $i = 2$   | $\{13, 18\}$ | ${14}$ | |  |
+| $i = 3$   | $\{13\}$ |  |  |  |
+| $HPC^*_s$   | $\{13\}$ | $\{14\}$ | $\{16\}$ | $\{14\}$ |
+| $HPC^*$   | `max_depth = 14` |
+
+: Hyperparmeter configurations in each stage and bracket from schedule in @tbl-hyperband. $HPC^*_s$ is the optimal hyperparameter configuration in bracket $s$ and $HPC^*$ is the optimal hyperparameter configuration across all brackets. {#tbl-hyperband-eg}
 
 ### mlr3hyperband
 
@@ -1105,7 +1112,7 @@ We now construct the tuning instance and tuner.
 We use `trm("none")` because Hyperband terminates itself after all brackets have been evaluated.
 We also set `eta = 2` and control the number of repetitions of with `repetitions = 1`.
 Note that setting `repetition = Inf` can be useful if you want a terminator to stop the optimization, for example based on runtime.
-The `r ref("mlr3hyperband::hyperband_schedule()") function can be used to display the schedule across the given fidelity levels and budget increase factor.
+The `r ref("mlr3hyperband::hyperband_schedule()")` function can be used to display the schedule across the given fidelity levels and budget increase factor.
 
 ```{r optimization-064}
 instance = ti(
@@ -1135,6 +1142,7 @@ as.data.table(instance$archive)[,
 
 ### Example Support Vector Machine {#sec-hyperband-example-svm}
 
+<!-- FIXME: REDO BELOW ONCE MOVED AFTER RESTRUCTURE -->
 In this example, we will optimize the hyperparameters of a support vector machine on the `sonar` dataset.
 We begin by constructing the learner and setting `type` to `"C-classification"`.
 
