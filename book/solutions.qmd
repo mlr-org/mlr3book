@@ -427,6 +427,151 @@ tsk("penguins")$data(rows = 4)
 imputed$data(rows = 4)
 ```
 
+---
+title: "Untitled"
+output: html_document
+date: "2023-06-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Solutions for @sec-preprocessing
+
+We will consider a similar prediction problem as throughout this section, using the King County Housing data instead (available with `tsk("kc_housing")`).
+To evaluate the models, we again use 10-fold cv and the mean absolute error.
+The learner we want to use is a elastic-net regression by `lrn("regr.glmnet")`.
+For now we will ignore the `date` column and simply remove it:
+
+```{r}
+kc_housing = tsk("kc_housing")
+kc_housing$select(setdiff(kc_housing$feature_names, "date"))
+```
+
+1. Have a look at the features, are there any features which might be problematic? If so, change or remove them.
+
+```{r}
+summary(kc_housing)
+```
+
+
+`zipcode` should not really be interpreted as a numeric value, so we cast it to a factor.
+We could argue to remove `lat` and `long` as handling them as linear effects is not necessarily a suitable, but we will keep them since `glmnet` performs internal feature selection anyways.
+
+```{r}
+zipencode = po("mutate", mutation = list(zipcode = ~ as.factor(zipcode)), id = "zipencode")
+```
+
+2. Check the dataset and learner properties to understand which preprocessing steps you need to do.
+
+```{r}
+print(kc_housing)
+kc_housing$missings()
+```
+
+The data has missings and a categorical feature (since we are encoding the zipcode as a factor).
+
+```{r}
+glmnet = lrn("regr.glmnet")
+glmnet$properties
+glmnet$feature_types
+```
+
+`glmnet` does not support factors or missing values. So our pipeline needs to handle both.
+
+3. Build a suitable pipeline that allows glmnet to be trained on the dataset.
+
+```{r}
+glmnet_preproc = GraphLearner$new(
+  zipencode %>>%
+  po("fixfactors") %>>%
+    po("encodeimpact") %>>%
+    list(
+    po("missind",
+        type = "integer",
+        affect_columns = selector_type("integer")
+    ),
+    po("imputehist",
+        affect_columns = selector_type("integer")
+    )) %>>%
+    po("featureunion") %>>%
+    po("imputeoor",
+        affect_columns = selector_type("factor")
+    ) %>>%
+    glmnet,
+  id = "regr.glmnet_preproc")
+
+log_glmnet_preproc = ppl("targettrafo", graph = glmnet_preproc)
+log_glmnet_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
+log_glmnet_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
+log_glmnet_preproc = GraphLearner$new(log_glmnet_preproc, id = "regr.log_glmnet_preproc")
+```
+
+First we fix the factor levels to ensure that all 70 zipcodes are fixed.
+We can consider 70 levels high cardinality, so we use impact encoding.
+We use the same imputation strategy as in @sec-preprocessing.
+Since the target is highly skewed, we also apply a log-transformation of the target.
+
+
+4. As a comparison, apply `pipeline_robustify` to glmnet and compare the results with your pipeline.
+
+```{r}
+glmnet_robustify = GraphLearner$new(
+    zipencode %>>%
+    mlr3pipelines::pipeline_robustify() %>>%
+      glmnet,
+    id = "regr.glmnet_robustify"
+)
+
+log_glmnet_robustify = ppl("targettrafo", graph = glmnet_robustify)
+log_glmnet_robustify$param_set$values$targetmutate.trafo = function(x) log(x)
+log_glmnet_robustify$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
+log_glmnet_robustify = GraphLearner$new(log_glmnet_robustify, id = "regr.log_glmnet_robustify")
+
+learners = list(
+  lrn("regr.featureless", robust = TRUE),
+  glmnet_preproc,
+  log_glmnet_preproc,
+  glmnet_robustify,
+  log_glmnet_robustify
+)
+
+set.seed(123L)
+cv10 = rsmp("cv")
+cv10$instantiate(kc_housing)
+
+design = benchmark_grid(kc_housing, learners = learners, cv10)
+bmr = benchmark(design)
+bmr$aggregate(measure = msr("regr.mae"))[, .(learner_id, regr.mae)]
+```
+
+The log-transformed `glmnet` with impact encoding results in the best model, although only by a very small margin.
+
+
+5. Consider the `date` feature: How can you extract information from this feature that `glmnet` can use? Check how much this improves your pipeline.
+Also consider the spatial nature of the dataset: Can you extract an additional feature from the lat/long coordinates? (Hint: Downtown Seattle has lat/long coordinates `47.605`/`-122.334`).
+
+```{r}
+extractors = po("mutate", mutation = list(
+  date = ~ as.numeric(date),
+  distance_downtown = ~ sqrt((lat - 47.605)^2 + (long  + 122.334)^2)))
+
+kc_housing_full = extractors$train(list(tsk("kc_housing")))[[1]]
+kc_housing_full$id = "kc_housing_feat_extr"
+
+
+design_ext = benchmark_grid(kc_housing_full, learners = learners, cv10)
+bmr_ext = benchmark(design_ext)
+bmr$combine(bmr_ext)
+bmr$aggregate(measure = msr("regr.mae"))[, .(learner_id, task_id, regr.mae)]
+```
+
+We simply convert the `date` feature into a numeric timestamp so that `glmnet` can handle the feature.
+We create one additional feature as the distance to downtown Seattle.
+This improves the average error of our model by a further 1600$.
+
+
 ## Solutions to @sec-special
 
 1. Run a benchmark experiment on the `german_credit` task with algorithms: `featureless`, `log_reg`, `ranger`. Tune the `featureless` model using `tunetreshold` and `learner_cv`. Use 2-fold CV and evaluate with `msr("classif.costs", costs = costs)` where you should make the parameter `costs` so that the cost of a true positive is -10, the cost of a true negative is -1, the cost of a false positive is 2, and the cost of a false negative is 3. Use `set.seed(11)` to make sure you get the same results as us. Are your results surprising?
@@ -1089,7 +1234,7 @@ instance_parallel$archive$data[, c("x", "timestamp", "batch_nr")]
 
 ## Solutions to @sec-fairness
 
-1. Load the `"adult_train"` task and try to build a first model. 
+1. Load the `"adult_train"` task and try to build a first model.
   Train a simple model and evaluate it on the `"adult_test"` task that is also available with `mlr3fairness`.
 
 For now we simply load the data and look at the data.
@@ -1114,11 +1259,11 @@ prd$score()
 ```
 
 
-2. Assume our goal is to achieve parity in *false omission rates*. 
+2. Assume our goal is to achieve parity in *false omission rates*.
   Construct a fairness metric that encodes this and againg evaluate your model.
   In order to get a deeper understanding, look at the `groupwise_metrics` function to obtain performance in each group.
 
-The metric is available via the key `"fairness.fomr"`. 
+The metric is available via the key `"fairness.fomr"`.
 Note, that evaluating our prediction now requires that we also provide the task.
 
 ```{r}
@@ -1136,14 +1281,14 @@ tst$col_roles$pta
 m2 = groupwise_metrics(base_measure = msr("classif.fomr"), task = tst)
 ```
 
-We can then use this metric to evaluate our model again. 
+We can then use this metric to evaluate our model again.
 This gives us the false omission rates for male and female individuals separately.
 
 ```{r}
 prd$score(m2, tst)
 ```
 
-3. Now try to improve your model, e.g. by employing pipelines that use pre- or post-processing methods for fairness. 
+3. Now try to improve your model, e.g. by employing pipelines that use pre- or post-processing methods for fairness.
   Evaluate your model along the two metrics and visualize the results.
   Compare the different models using an appropriate visualization.
 
@@ -1173,10 +1318,10 @@ scale_color_viridis_d("Learner") +
 theme_minimal()
 ```
 
-4. Now we want to add a second sensitive attribute to your dataset, in this case `"race"`. 
-  Add the information to your task and evaluate for the initial model again. What changes? 
+4. Now we want to add a second sensitive attribute to your dataset, in this case `"race"`.
+  Add the information to your task and evaluate for the initial model again. What changes?
   Again study the `groupwise_metrics`.
-  
+
 This can be achieved by adding "race" to the `"pta"` col_role.
 
 ```{r}
