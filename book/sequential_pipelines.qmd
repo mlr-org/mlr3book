@@ -88,7 +88,8 @@ pca$state
 Once trained the `$predict()` function can then access the saved state to operate on the test data, here just a single row passed again as a `list`.
 
 ```{r 05-pipelines-in-depth-004, eval = TRUE}
-poin = list(task_small$clone()$filter(42))
+task_onepenguin = task_small$clone()$filter(42)
+poin = list(task_onepenguin)
 poout = pca$predict(poin)
 poout[[1]]$data()
 ```
@@ -102,268 +103,235 @@ If you want to extend `r mlr3pipelines` which a `PipeOp` that has not been imple
 These pipelines themselves are defined by `r ref("Graph", index = TRUE)` objects.
 A `Graph` is a collection of `PipeOp`s with "edges" that guide the flow of data.
 
-<!-- FIXME: CHECK INDEX OF %>>% WORKS AS EXPECTED -->
 The most convenient way of building a Graph is to connect a sequence of `PipeOp`s using the `%>>%` [`%>>%`]{.aside} \index{\%>>\%} (read "double-arrow") operator.
 When given two `PipeOp`s, this operator creates a `Graph` that first executes the left-hand `PipeOp`, followed by the right-hand one.
 It can also be used to connect a `Graph` with a `PipeOp`, or with another `Graph`.
-The following example uses the `"mutate"` `PipeOp` to add a new feature to the task, and the `"scale"` `PipeOp` to then scale and center all numeric features, the `r index("$plot()", aside = TRUE, code = TRUE)` method is used to visualize the graph.
-```{r 05-sequential-01, eval = TRUE, fig.height = 5}
-#| label: fig-pipelines-basic-plot
-#| fig-cap: Simple sequential pipeline plot.
-#| fig-alt: 'Four boxes in a straight line connected by arrows: "<INPUT> -> mutate -> scale -> <OUTPUT>".'
-po_area = po("mutate",
-  mutation = list(flipper_width = ~flipper_length / 2)
+The following example uses the `"mutate"` `PipeOp` to add a new feature to the task, and the `"scale"` `PipeOp` to then scale and center all numeric features.
+
+```{r 05-sequential-01}
+po_mutate = po("mutate",
+  mutation = list(bill_ratio = ~bill_length / bill_depth)
 )
 po_scale = po("scale")
-gr = po_area %>>% po_scale
+gr = po_mutate %>>% po_scale
 gr
-
-gr$plot(horizontal = TRUE)
 ```
 
 The output provides information about the layout of the Graph.
 For each `PipOp` (`ID`), we can see information about the state (`State`), as well as a list of its successors (`sccssors`), which are `PipeOp`s that come directly after the given `PipeOp`, and its predecessors (`prdcssors`), the `PipeOp`s that are connected to its input.
 In this simple `Graph`, the output of the `"mutate"` `PipeOp` is passed directly to the `"scale"` `PipeOp` and neither take any other inputs or outputs from other `PipeOp`s.
-While the printer of a Graph gives some information about its layout, the most intuitive way of visualizing it is using the `$plot()` function.
+The `r index("$plot()", aside = TRUE, code = TRUE)` method can be used to visualize the graph.
 
-### `Graph`s are Nodes with Edges
+```{r 05-sequential-01-evalF, eval = FALSE}
+gr$plot(horizontal = TRUE)
+```
+```{r 05-sequential-01-evalT, eval = TRUE, echo = FALSE}
+#| label: fig-pipelines-basic-plot
+#| fig-cap: Simple sequential pipeline plot.
+#| fig-alt: 'Four boxes in a straight line connected by arrows: "<INPUT> -> mutate -> scale -> <OUTPUT>".'
+fig <- magick::image_graph(width = 1500, height = 1000, res = 100, pointsize = 24)
+gr$plot(horizontal = TRUE)
+invisible(dev.off())
+magick::image_trim(fig)
+```
 
-Internally, Graphs are collections of PipeOps with edges connecting them.
-The collection of PipeOps inside a Graph can be accessed through the `$pipeops` field.
-The set of edges in the Graph can be examined through the `$edges` field.
-It is a `data.table` listing the "source" (`src_id`, `src_channel`) and "destination" (`dst_id`, `dst_channel`) of data flowing along each edge.
+The plot demonstrates how a `Graph` is simply a collection of `PipeOp`s that are connected by 'edges'.
+The collection of `PipeOp`s inside a `Graph` can be accessed through the `$pipeops` \index{\$pipeops} field.
+The `$edges` \index{\$edges} field can be used to access edges, which returns a `data.table` listing the "source" (`src_id`, `src_channel`) and "destination" (`dst_id`, `dst_channel`) of data flowing along each edge [`$edges`/`$pipeops`]{.aside}.
 
 ```{r 05-pipelines-in-depth-018-2, eval = TRUE}
 gr$pipeops
 gr$edges
 ```
 
-Besides using the `%>>%`-operator to create Graphs, it is also possible to create them explicitly.
-A Graph is empty when first created, and PipeOps can be added using the `$add_pipeop()` method.
-The `$add_edge()` method is used to create connections between them.
-The above Graph can therefore also be created in the following way:
+Instead of using `%>>%`, you can also create a `Graph` explicitly using the `$add_pipeop()` and `$add_edge()` methods to create `PipeOp`s and the edges connecting them:
 
-```{r 05-pipelines-in-depth-016, eval = TRUE}
-gr = Graph$new()
-gr$add_pipeop(po_area)
-gr$add_pipeop(po_scale)
-gr$add_edge("mutate", "scale")  # address by PipeOp-ID
+```{r 05-pipelines-in-depth-016}
+gr = Graph$new()$
+  add_pipeop(po_mutate)$ # mutate
+  add_pipeop(po_scale)$ # scale
+  add_edge("mutate", "scale") # connect mutate->scale
 ```
 
 :::{.callout-tip}
-The `r ref("Graph")` class represents an object similar to a directed acyclic graph (DAG), since the input of a PipeOp can not depend on its output and hence cycles are not allowed.
+The `r ref("Graph")` class represents an object similar to a directed acyclic graph (DAG), since the input of a `PipeOp` can not depend on its output and hence cycles are not allowed.
 However, the resemblance to a DAG is not perfect, since the `r ref("Graph")` class allows for multiple edges between nodes.
 A term such as "directed acyclic multigraph" would be more accurate, but we will stick to the term "Graph" for simplicity.
 :::
 
-### Using a `Graph`
-
-A Graph itself has a `$train()` and a `$predict()` method that accept some data and propagate this data through the network of PipeOps, by calling their respective `$train()` and `$predict()` methods.
-The return value is the output of the PipeOp(s) without outgoing edges.
-Just like for PipeOps, the output is a list.
+Once built a `Graph` can simply be used by calling `$train()` and `$predict()` as if it were a `Learner`, however just like `PipeOp`s, the output of both training and predicting is a `list`:
 
 ```{r 05-pipelines-in-depth-019, eval = TRUE}
-result = gr$train(tsk("iris"))
+result = gr$train(task_small)
 result
-result[[1]]$head()
-result = gr$predict(single_line_iris)
+result[[1]]$data()[1:3]
+result = gr$predict(task_onepenguin)
 result[[1]]$head()
 ```
 
-### Debugging a `Graph` with Intermediate Results
+::: {.callout-tip}
 
-When Graphs are evaluated, they do not keep intermediate results for memory efficiency, unless the `$keep_results` flag is set first.
-Inspecting these results may help understanding the inner workings of Graphs, in particular when they produce unexpected results.
+## Debugging graphs
+
+To save memory, intermediate results in a `Graph` are not saved by default.
+See the `$keep_results` field of a `Graph` object to `TRUE` to enable inspection of a `Graph`, which will be most useful when debugging.
 
 ```{r 05-pipelines-in-depth-021-x, eval = TRUE}
 gr$keep_results = TRUE
-result = gr$predict(single_line_iris)
+result = gr$predict(task_onepenguin)
 intermediate = gr$pipeops$mutate$.result
 intermediate
 intermediate[[1]]$data()
 ```
+:::
+
 
 ## Sequential `Learner`-Pipelines {#sec-pipelines-sequential}
 
-Possibly the most common application for `r mlr3pipelines` is to use it to perform basic preprocessing tasks, such as missing value imputation or factor encoding, and to then feed the resulting data into a `r ref("Learner")`.
+Possibly the most common application for `r mlr3pipelines` is to use it to perform preprocessing tasks, such as missing value imputation or factor encoding, and to then feed the resulting data into a `r ref("Learner")`.
 A Graph representing this workflow manipulates data and fits a `r ref("Learner")`-model during training, and uses the fitted model with data that has been similarly preprocessed during prediction.
 Conceptually, the process may look as shown in @fig-pipelines-pipeline.
 
-```{r 05-pipelines-modeling-002, eval = TRUE}
+```{r 05-pipelines-modeling-002, eval = TRUE, echo = FALSE}
 #| label: fig-pipelines-pipeline
 #| fig-cap: "Conceptualization of training and prediction process inside a sequential learner-pipeline. During training (top row), the data is passed along the preprocessing operators, each of which modifies the data and creates a `$state`. Finally, the learner receives the data and a model is created. During prediction (bottom row), data is likewise transformed by preprocessing operators, using their respective `$state` information in the process. The learner then receives data that has the same format as the data seen during training, and makes a prediction."
-#| fig-alt: "Traning data is transformed by a sequential pipeline during training, being passed along a scaling, factor encoding, and median imputation PipeOp and finally given to a learner. Prediction data is passed along the same pipeline, this time containing state and model objects, to create a prediction."
-#| echo: false
-
+#| fig-alt: "Top: Pipeline Dtrain -> Scaling -> Factor Encoding -> Median Imputation -> Decision Tree. Bottom is same as Top except starts with Dtest and at the end has an arrow to Prediction. Each PipeOp in the top row has an arrow to the same PipeOp in the bottom row pointing to a trained state."
 knitr::include_graphics("Figures/pipe_action.svg")
 ```
 
-While a `r ref("Learner")` is not a `r ref("PipeOp")` by itself, it can be readily converted into one using `r ref("as_pipeop", "as_pipeop()")`, or alternatively `r ref("PipeOpLearner", "po(\"learner\")")`, which creates a `r ref("PipeOpLearner")`-wrapper-class.
-```{r 05-pipelines-modeling-0, eval = TRUE}
-learner_rpart = lrn("classif.rpart")
-po_rpart = as_pipeop(learner_rpart)
-po_rpart = po("learner", learner_rpart)  # yields the same result
-```
+### `Learner`s as `PipeOp`s and `Graph`s as `Learner`s
 
-However, this conversion is rarely necessary, as the `%>>%`-operator automatically converts learners to PipeOps.
-The following code creates a Graph that adds a `Petal.Area` feature, followed by fitting a `"classif.rpart"` decision tree model.
+In @fig-pipelines-pipeline the final `PipeOp` is a `Learner`.
+`Learner` objects can be converted to `PipeOp`s with `as_pipeop`, however this is only necessary if you choose to manually created a graph instead of using `%>>%`, internally `Learner`s are wrapped in the `"learner"` `PipeOp`.
+The following code creates a `Graph` that uses the `"imputesample"` `PipeOp` to impute missing values by sampling from observed values  (@sec-preprocessing-missing) then fits a logistic regression on the transformed task.
 
-```{r 05-pipelines-modeling-1, eval = TRUE}
-po_area = po("mutate",
-  mutation = list(Petal.Area = ~Petal.Width * Petal.Length)
-)
-gr = po_area %>>% learner_rpart  # could just as well use po_rpart
+```{r 05-pipelines-modeling-1-evalF, eval = FALSE}
+learner_logreg = lrn("classif.log_reg")
+gr = po("imputesample") %>>% learner_logreg
 gr$plot(horizontal = TRUE)
 ```
+```{r 05-pipelines-modeling-1-evalT, eval = TRUE, echo = FALSE}
+#| label: fig-pipelines-learnerpipeop
+#| fig-cap: '`"mutate"` and `"learner"` PipeOps in a sequential pipeline.'
+#| fig-alt: 'Four boxes in a straight line connected by arrows: "<INPUT> -> imputesample -> classif.rpart -> <OUTPUT>".'
+learner_logreg = lrn("classif.log_reg")
+gr = po("imputesample") %>>% learner_logreg
 
-To use a Graph as a learner within `r mlr3`, it is necessary to wrap it in a `r ref("GraphLearner")` object.
-This is because there are various differences between the classes, most notably the return values of the `$train()` and `$predict()` methods.
-A Graph can be converted to a `r ref("GraphLearner")` using `r ref("as_learner", "as_learner()")`.
-```{r 05-pipelines-modeling-2, eval = TRUE}
-graph_learner = as_learner(gr)
+fig <- magick::image_graph(width = 1500, height = 1000, res = 100, pointsize = 24)
+gr$plot(horizontal = TRUE)
+invisible(dev.off())
+magick::image_trim(fig)
 ```
 
-This learner can be used like any other `r ref("Learner")`.
-In particular it can be used with `resample()` and `benchmark()`.
-Let us compare our sequential pipeline with the `"classif.rpart"`-`Learner` by itself:
+We have seen how training and predicting `Graph`s is possible but has a slightly different design to `Learner` objects, i.e., inputs and outputs during both training and predicting are `list()` objects.
+To use a `Graph` as a `Learner` with an identical interface, it can be wrapped in a `r ref("GraphLearner", index = TRUE)` object with `r ref("as_learner", index = TRUE)`[`GraphLearner`/`as_learner`]{.aside}.
+The `Graph` can then be used like any other `Learner`, so now we can benchmark our pipeline to decide if we should impute by sampling or with the mode of observed values (`po("imputemode")`):
+
 ```{r 05-pipelines-modeling-3}
+graph_lrn_sample = as_learner(gr)
+graph_lrn_mode = as_learner(po("imputemode") %>>% learner_logreg)
+
 grid = benchmark_grid(
-  tsks("iris"),
-  list(graph_learner, learner_rpart),
-  rsmps("repeated_cv")
+  tsk("pima"),
+  list(graph_lrn_sample, graph_lrn_mode),
+  rsmp("cv", folds = 3)
 )
 bmr = benchmark(grid)
-bmr$aggregate()
+res = bmr$aggregate()[, .(learner_id, classif.ce)]
+res
 ```
 
-### Accessing Pipeline Objects
+In this example we can see that the `r c("sampling", "mode")[which.min(unlist(res[,2]))]` imputation method worked slightly better.
 
-The `graph_learner` variable containing the `GraphLearner` object can be used as an ordinary learner.
-However, it is in fact a wrapper around a Graph, which in turn contains PipeOps, which themselves encompass different components.
-The following steps demonstrate how to analyze the flow of data in a `GraphLearner`.
-First, the `$keep_results` flag needs to be set, so intermediate results are retained.
+### Inspecting `Graph`s and their hyperparameters {#sec-pipelines-inspect}
+
+As with `PipeOp`s, you may want to inspect pipelines and the flow of data to learn more about your pipeline or to debug any processes.
+We first need to set the `$keep_results` flag to be `TRUE` so that intermediate results are retained.
+
 ```{r 05-pipelines-modeling-debugging, eval = TRUE}
-graph_learner$graph_model$keep_results = TRUE
-graph_learner$train(tsk("iris"))
+graph_lrn_sample$graph_model$keep_results = TRUE
+graph_lrn_sample$train(tsk("pima"))
 ```
 
-The Graph can be accessed through the `$graph_model` field.
-Using this field, one can now investigate the data fed to the `"classif.rpart"` learner by examining the output of the `"mutate"`-PipeOp.
-As expected, it includes the additional feature `Petal.Area`.
+The `Graph` can be accessed through the `$graph_model` field and then `PipeOp`s can be accessed with `$pipeops` as before.
+In this example we can see that our `Task` no longer has missing data after training the `"imputesample"` `PipeOp`:
+
 ```{r 05-pipelines-modeling-debugging-1, eval = TRUE}
-mutate_result = graph_learner$graph_model$pipeops$mutate$.result
-mutate_result
-mutate_result[[1]]$head()
+imputesample_output = graph_lrn_sample$graph_model$pipeops$imputesample$.result
+imputesample_output[[1]]$missings()
 ```
 
-One can also look at the `$state` of the various PipeOps to investigate the trained model.
-Here the trained `r ref("LearnerClassifRpart", "lrn(\"classif.rpart\")")` classification tree is interesting.
-However, it is wrapped inside a `r ref("PipeOpLearner")`: The trained `r ref("Learner")` object has to be extracted before inspection.
+We could also use `$pipeops` to access our underlying `Learner`, note we need to use `$learner_model` to get the learner from the `PipeOpLearner`:
+
 ```{r 05-pipelines-modeling-debugging-2, eval = TRUE}
-trained_p_rpart = graph_learner$graph_model$pipeops$classif.rpart
-trained_l_rpart = trained_p_rpart$learner_model
-trained_l_rpart
-trained_l_rpart$model
+trained_p_logreg = graph_lrn_sample$graph_model$pipeops$classif.log_reg
+trained_l_logreg = trained_p_logreg$learner_model
+trained_l_logreg
 ```
 
 :::{.callout-tip}
-A more straightforward approach to access the learner at the end of a Graph in a `r ref("GraphLearner")` is to use the `$base_learner()` method.
-One can therefore also use `graph_learner$base_learner()$model` to access the trained model.
-However, this method does not work for ensembling `r ref("GraphLearner")` objects containing multiple learners.
+
+## `$base_learner()`
+
+In this example we could have used `graph_lrn_sample$base_learner()` to immediately access our trained learner, however this does not generalize to more complex pipelines that may contain multiple learners.
 :::
 
-### Pipeline Hyperparameters {#sec-pipelines-hyperparameters}
+**Pipeline Hyperparameters**
 
-Much like `r ref("Learner")`s, PipeOps have *hyperparameters*, provided by the `r mlr3book::ref_pkg("paradox")` package.
-These can be accessed through the `$param_set` field, providing information about the adjustable hyperparameters.
-
-```{r 05-pipelines-in-depth-032, eval = TRUE}
-po_pca = po("pca")
-po_pca$param_set
-```
-
-Similar to `r ref("Learner")` objects, the `$param_set$values` field can be used to alter hyperparameter settings; alternatively, hyperparameter values can be set using the `$param_set$set_values()` function or during construction.
-
-```{r 05-pipelines-in-depth-033, eval = TRUE}
-po_pca$param_set$values$center = FALSE
-# More convenient when multiple hyperparameters need to be set:
-po_pca$param_set$set_values(center = TRUE)
-# Alternatively:
-po_pca = po("pca", center = FALSE)
-# All of these have the same result:
-po_pca$param_set$values
-```
-
-Each PipeOp can have its own individual hyperparameters, which are collected together in the Graph's `$param_set`.
-A PipeOp's parameter names are prefixed with its ID to avoid parameter name clashes.
+`PipeOp` hyperparameters are collected together in the `$param_set` of a graph and prefixed with the `PipeOp` IDs to avoid parameter name clashes.
+Below we use the same `PipeOp` twice but set the `id` to ensure their IDs are unique.
 
 ```{r 05-pipelines-in-depth-035, eval = TRUE}
-gr = po_pca %>>% po("scale", center = TRUE)
-gr$param_set
-```
-
-
-The hyperparameter settings of a `r ref("GraphLearner")` can be changed directly (recommended), but they can also be accessed indirectly by reading (and modifying) the underlying Graph's, PipeOp's, or learner's hyperparameters.
-
-:::{.callout-warning}
-When a learner is encapsulated in a `r ref("PipeOpLearner")` through `as_pipeop()`, its `ParamSet` is exposed.
-Once this PipeOp becomes part of a Graph, the hyperparameters are prefixed with the PipeOp's ID, which by default is the learner's ID.
-When a Graph is converted back into a learner using `as_learner()`, the resulting `r ref("GraphLearner")` retains the Graph's `r ref("ParamSet")`.
-Therefore the original learner's hyperparameters are now prefixed with the learner's ID.
-For example, if a `r ref("LearnerClassifRpart", "lrn(\"classif.rpart\")")` is encapsulated in a Graph, its `maxdepth` hyperparameter becomes `classif.rpart.maxdepth`.
-:::
-
-### IDs and Name Clashes
-
-To ensure that PipeOps can be accessed by their ID within Graphs, their IDs within a Graph must be unique.
-IDs can be set during construction using the `id` argument of `po()`, or they can be modified for existing PipeOps.
-For PipeOps already in a Graph, the `$set_names()` method can also be employed to change IDs, although this should rarely be necessary.
-
-```{r 05-pipelines-in-depth-040, eval = TRUE}
-# Without the `id` argument, this would lead to a name collision error
-gr = po("pca") %>>% po("pca", id = "pca2")
-gr
-gr$set_names(
-  old = c("pca", "pca2"),
-  new = c("pca_1", "pca_2")
-)
-gr
+gr = po("scale", center = FALSE, scale = TRUE, id = "scale") %>>%
+  po("scale", center = TRUE, scale = FALSE, id = "center") %>>%
+  lrn("classif.rpart", cp = 1)
+unlist(gr$param_set$values)
 ```
 
 :::{.callout-warning}
-Avoid changing the ID of a PipeOp that is already in a Graph through `graph$pipeops$<old_id>$id = <new_id>`, as this will only alter the PipeOp's record of its own ID, not the Graph's record.
-This would result in undefined behavior for the Graph.
+
+## PipeOp IDs in Graphs
+
+If you need to change the ID of a `PipeOp` in a `Graph` then use the `$set_names` method from the `Graph` class, e.g., `some_graph$set_names(old = "old_name", new = "new_name")`.
+Do not change the ID of a `PipeOp` through `graph$pipeops$<old_id>$id = <new_id>`, as this will only alter the `PipeOp`'s record of its own ID, and not the `Graph`'s record, which will lead to errors.
 :::
 
-## Recap
+Whether a pipeline is treated as a `Graph` or `GraphLearner`, hyperparameters are updated and accessed in the same way.
 
-`r ref_pkg("mlr3pipelines")` provides `r ref("PipeOp")` objects that provide preprocessing, postprocessing, and ensembling operations that can be created using the `r ref("po", "po()")` constructor function.
-PipeOps have an ID and hyperparameters that can be set during construction and can be modified later.
+```{r}
+gr$param_set$values$classif.rpart.maxdepth = 5
+lgr = as_learner(gr)
+lgr$param_set$values$classif.rpart.minsplit = 2
+unlist(lgr$param_set$values)
+```
 
-PipeOps are concatenated using the `r ref("concat_graphs", "%>>%")`-operator to form `r ref("Graph")` objects.
-Graphs can be converted to `r ref("Learner")` objects using the `r ref("as_learner")` function, after which they can be benchmarked and tuned using the tools provided by `r ref_pkg("mlr3")`.
-Various standard Graphs are provided by the `r ref("ppl", "ppl()")` constructor function.
+## Conclusion
+
+In this chapter, we introduced `r mlr3pipelines` and its building blocks: `Graph` and `PipeOp`.
+We saw how to create pipelines as `Graph` objects from multiple `PipeOp` objects and how to access `PipeOp`s from a `Graph`.
+We also saw how to treat a `Learner` as a `PipeOp` and how to treat a `Graph` as a `Learner`.
+In @sec-pipelines-nonseq we will take this functionality a step further and look at pipelines where `PipeOp`s are not executed sequentially, as well as looking at how you can use `r mlr3tuning` to tune pipelines.
+In @sec-preprocessing we will look specifically at pipelines for data preprocessing.
+
+@tbl-api-pipelines-seq provides an overview of the most important methods and classes discussed in this chapter.
+
+| Underlying R6 Class | Constructor (if applicable) | Important methods |
+| --------------------------- | --------------------- | -------------------------------------------- |
+| `r ref("PipeOp")`- | `r ref("po()")` | `$train()`/`$predict()`/`$state`/`$id`/`$param_set` |
+| `r ref("Graph")` | `%>>%` | `$pipeops`/`$edges`/`$train()`/`$predict()` |
+
+: Important classes and functions covered in this chapter with underlying `R6` class (if applicable), constructor to create an object of the class, and important class methods. {#tbl-api-pipelines-seq}
+
 
 ## Exercises
 
 1. Create a learner containing a Graph that first imputes missing values using `r ref("PipeOpImputeOOR", "po(\"imputeoor\")")`, standardizes the data using `r ref("PipeOpScale", "po(\"scale\")")`, and then fits a logistic linear model using `r ref("LearnerClassifLogReg", "lrn(\"classif.log_reg\")")`.
 2. Train the Graph created in the previous exercise on the `r ref("mlr_tasks_pima", "tsk(\"pima\")")` task and display the coefficients of the resulting model.
   What are two different ways to access the model?
-1. Verify that the "`age`" column of the input task of `r ref("LearnerClassifLogReg", "lrn(\"classif.log_reg\")")` from the previous exercise is indeed standardized.
+3. Verify that the "`age`" column of the input task of `r ref("LearnerClassifLogReg", "lrn(\"classif.log_reg\")")` from the previous exercise is indeed standardized.
   One way to do this would be to look at the `$data` field of the `r ref("LearnerClassifLogReg", "lrn(\"classif.log_reg\")")` model; however, that is specific to that particular learner and does not work in general.
   What would be a different, more general way to do this?
   Hint: use the `$keep_results` flag.
-1. Consider the `r ref("PipeOpSelect", "po(\"select\")")` in @sec-pipelines-stack that is used to only keep the columns ending in "`M`".
-  If the classification task had more than two classes, it would be more appropriate to list the single class we *do not* want to keep, instead of listing all the classes we do want to keep.
-  How would you do this, using the `r ref("Selector")` functions provided by `r ref_pkg("mlr3pipelines")`?
-  (Note: The `r ref("LearnerClassifLogReg", "lrn(\"classif.log_reg\")")` learner used in @sec-pipelines-stack cannot handle more than two classes. To build the entire stack, you will need to use a different learner, such as `r ref("LearnerClassifMultinom", "lrn(\"classif.multinom\")")`.)
-1. How would you solve the previous exercise without even explicitly naming the class you want to exclude, so that your Graph works for any classification task?
-  Hint: look at the `selector_subsample` in @sec-pipelines-bagging.
-1. Use the `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` PipeOp to impute missing values in the `r ref("mlr_tasks_penguins", "tsk(\"penguins\")")` task using learners based on `r ref("ranger::ranger")`.
-  Hint 1: you will need to use `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` twice, once for numeric features with `r ref("LearnerRegrRanger", "lrn(\"regr.ranger\")")`, and once for categorical features with `r ref("LearnerClassifRanger", "lrn(\"classif.ranger\")")`.
-  Using the `affect_columns` argument of `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` will help you here.
-  Hint 2: `r ref("ranger::ranger")` itself does not support missing values, but it is trained on all the features of `r ref("mlr_tasks_penguins", "tsk(\"penguins\")")` that it is not currently imputing, some of which will also contain missings.
-  A simple way to avoid problems here is to use `r ref("pipeline_robustify", "ppl(\"robustify\")")` *inside* `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` next to the `r ref("ranger::ranger")` learner.
 
 ::: {.content-visible when-format="html"}
 `r citeas(chapter)`
