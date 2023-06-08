@@ -11,8 +11,6 @@ library("mlr3pipelines")
 options(warnPartialMatchArgs = FALSE)
 options(warnPartialMatchAttr = FALSE)
 options(warnPartialMatchDollar = FALSE)
-options(mlr3.exec_chunk_size = 1)
-options(width = 73, digits = 3)
 
 knitr::opts_chunk$set(fig.width = 7, fig.height = 5)
 
@@ -25,18 +23,13 @@ In @sec-pipelines we looked at simple sequential pipelines that can be built usi
 In this chapter we will take this further and look at non-sequential pipelines that can perform more complex operations.
 We will then look at tuning pipelines by combining methods in `r mlr3tuning` and `r mlr3pipelines` and will consider some concrete examples using multi-fidelity tuning (@sec-hyperband) and feature selection (@sec-feature-selection).
 
-## Parallel `PipeOp`s
+We saw the power of the `%>>%`-operator in @sec-pipelines to assemble graphs from combinations of multiple `PipeOp`s and `Learner`s.
+Given a single `PipeOp` or `Learner`, the `%>>%`-operator will arrange these objects into a linear `Graph` with each `PipeOp` acting in sequence.
+However, by using the `r ref("gunion()")` function, we can instead combine multiple `PipeOp`s, `Graph`s, or a mixture of both, into a parallel `Graph`.
+In the following example, we create a `Graph` that centers its inputs and then copies the scaled data to two parallel streams: one replaces the data with columns that indicate whether data is missing, the other imputes missing data using the median (we will return to this in @sec-preprocessing-missing).
+The outputs of both streams are then combined into a single dataset using `r ref("PipeOpFeatureUnion")`.
 
-Beyond chaining PipeOps sequentially to perform preprocessing operations in order, it is also possible to arrange PipeOps in parallel.
-Most Graph layouts can be assembled using two tools:
-
-* The `r ref("gunion", "gunion()")` operation, which takes multiple PipeOps, Graphs, or a mixture of them, and arranges them in parallel, and
-* the `%>>%`-operator, which is capable of chaining Graphs that contain parallel elements, as long as the number of inputs and outputs matches.
-  It can even connect a Graph with a single output to a Graph with multiple inputs (the data is distributed to all inputs), or a Graph with multiple outputs to certain special PipeOps with a single input.
-
-The following creates a Graph that first centers its inputs, and then copies the scaled data to two parallel streams: one replaces the data with columns that indicate whether data is missing, the other imputes missing data using the median. The outputs of both streams are then combined into a single dataset using `r ref("PipeOpFeatureUnion")`.
-
-```{r 05-pipelines-modeling-003, fig.width = 8, eval = TRUE}
+```{r 05-pipelines-modeling-003-evalF, eval = FALSE}
 library(mlr3pipelines)
 
 gr = po("scale", center = TRUE, scale = FALSE) %>>%
@@ -47,11 +40,28 @@ gr = po("scale", center = TRUE, scale = FALSE) %>>%
   po("featureunion")
 gr$plot(horizontal = TRUE)
 ```
+```{r 05-pipelines-modeling-003-evalT, fig.width = 8, eval = TRUE, echo = FALSE}
+#| label: fig-pipelines-parallel-plot
+#| fig-cap: Simple parallel pipeline plot.
+#| fig-alt: 'Six boxes where first two are "<INPUT> -> scale", then "scale" has two arrows to "missind" and "imputemedian" which both have an arrow to "featureunion -> <OUTPUT>".'
+library(mlr3pipelines)
 
-Processing the first five lines of the "Pima" dataset with this Graph shows how the missing values of the `"insulin"` and `"triceps"` features are handled:
-They are imputed, and the corresponding `"missing"`-columns indicate where values were missing.
+gr = po("scale", center = TRUE, scale = FALSE) %>>%
+  gunion(list(
+    po("missind"),
+    po("imputemedian")
+  )) %>>%
+  po("featureunion")
+fig <- magick::image_graph(width = 1500, height = 1000, res = 100, pointsize = 24)
+gr$plot(horizontal = TRUE)
+invisible(dev.off())
+magick::image_trim(fig)
+```
+
+When applied to the first three rows of the `pima` task we can see how this imputes missing data and adds a column indicating where values were missing.
+
 ```{r 05-pipelines-modeling-004, eval = TRUE}
-pima_head = tsk("pima")$filter(1:5)
+pima_head = tsk("pima")$filter(1:3)
 pima_head$data(cols = c("diabetes", "insulin", "triceps"))
 result = gr$train(pima_head)[[1]]
 result$data(cols = c("diabetes", "insulin", "missing_insulin", "triceps",
@@ -60,12 +70,11 @@ result$data(cols = c("diabetes", "insulin", "missing_insulin", "triceps",
 
 ## `po("select")`, `po("featureunion")`, and `affect_columns`
 
-A typical pattern for Graphs is that an operation should be applied to a certain subset of features, but not to another subset.
-This can be realized in two ways, as illustrated in @fig-pipelines-select-affect
+It is common in `Graph`s for an operation to be applied to a subset of features.
+`r mlr3pipelines` enables this in two ways (@fig-pipelines-select-affect):
 
-1. Many preprocessing PipeOps have an `affect_columns` hyperparameter.
-   It can be set so that the PipeOp only operates on a certain subset of columns.
-1. One can use the `r ref("PipeOpSelect", "po(\"select\")")` operator in parallel, selecting certain features on which operations should be performed, and uniting the result using `r ref("PipeOpFeatureUnion", "po(\"featureunion\")")`.
+1. Many `PipeOp`s have an `affect_columns` hyperparameter, which can be set so that the `PipeOp` only operates on the given certain subset of columns.
+2. One can use the `r ref("PipeOpSelect", "po(\"select\")")` operator in parallel, selecting certain features on which operations should be performed, and uniting the result using `r ref("PipeOpFeatureUnion", "po(\"featureunion\")")`.
 
 ```{r eval = TRUE}
 #| label: fig-pipelines-select-affect
@@ -85,7 +94,7 @@ This can be realized in two ways, as illustrated in @fig-pipelines-select-affect
 #|   - "Two alternative paths, one through po(\"select\", X) and po(op1), another through po(\"select\", not X) and po(op2), both followed by po(\"featureunion\")"
 #| fig-subcap:
 #|   - Operating on subsets of tasks using `affect_columns`.
-#|   - "Operating on subsets of tasks using concurrent paths and `po(\"select\")`."
+#|   - 'Operating on subsets of tasks using concurrent paths, `po("select")`, and `po("featureunion").'
 #| out.width: "70%"
 #| echo: false
 knitr::include_graphics("Figures/affect_pipe.svg")
