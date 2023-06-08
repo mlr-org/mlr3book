@@ -34,7 +34,7 @@ gr$plot(horizontal = TRUE)
 ```
 ```{r 05-pipelines-modeling-003-evalT, fig.width = 8, eval = TRUE, echo = FALSE}
 #| label: fig-pipelines-parallel-plot
-#| fig-cap: Simple parallel pipeline plot.
+#| fig-cap: 'Simple parallel pipeline plot showing a common data source being scaled then the same data being passed to two `PipeOp`s in parallel whose outputs are then combined and returned to the user.'
 #| fig-alt: 'Six boxes where first two are "<INPUT> -> scale", then "scale" has two arrows to "missind" and "imputemedian" which both have an arrow to "featureunion -> <OUTPUT>".'
 library(mlr3pipelines)
 
@@ -63,15 +63,13 @@ result$data(cols = c("diabetes", "insulin", "missing_insulin", "triceps",
 ## `po("select")`, `po("featureunion")`, and `affect_columns`
 
 It is common in `Graph`s for an operation to be applied to a subset of features.
-`r mlr3pipelines` enables this in two ways (@fig-pipelines-select-affect):
-
-1. Many `PipeOp`s have an `affect_columns` hyperparameter, which can be set so that the `PipeOp` only operates on the given certain subset of columns.
-2. One can use the `r ref("PipeOpSelect", "po(\"select\")")` operator in parallel, selecting certain features on which operations should be performed, and uniting the result using `r ref("PipeOpFeatureUnion", "po(\"featureunion\")")`.
+In `r mlr3pipelines` this can either (@fig-pipelines-select-affect) be achieved by passing the column subset to the `affect_columns` hyperparameter of a `PipeOp` (assuming it has that hyperparameter), which controls which columns should be affected by the `PipeOp`.
+Alternatively, one can use the `r ref("PipeOpSelect", aside = TRUE)` operator to create operations in parallel on specified feature subsets, and uniting the result using `r ref("PipeOpFeatureUnion", aside = TRUE)`.
 
 ```{r eval = TRUE}
 #| label: fig-pipelines-select-affect
 #| layout-nrow: 2
-#| fig-cap: "Two ways of setting up preprocessing operators (`po(op1)` and `po(op2)`) so that they operate on complementary features (X and ¬X) of an input task."
+#| fig-cap: "Two methods of setting up `PipeOp`s (`po(op1)` and `po(op2)`) that operate on complementary features (X and ¬X) of an input task."
 #| fig-alt: 'Top plot shows the sequential pipeline "po(op1, affected_columns: ¬X") -> po(op2, affected_columns: X"). Bottom plot shows the parallel pipeline that starts with an arrow splitting and then pointing to both  po("select", ¬X) and po("select", X). These respectively point to po(op1) and po(op2), which then both point to po("featureunion").'
 #| fig-subcap:
 #|   - 'The `affect_columns` hyperparameter can be used to restrict operations to a subset of features. When used pipelines may still be run in sequence.'
@@ -82,63 +80,104 @@ knitr::include_graphics("Figures/affect_pipe.svg")
 knitr::include_graphics("Figures/select_pipe.svg")
 ```
 
-Both of these solutions make use of `r ref("Selector")`-functions.
-These are helper-functions that indicate to a PipeOp which features an operation it should apply to.
-Straightforward Selectors include, for example, `r ref("selector_grep", "selector_grep()")`, which selects features by name matching a regular expression, or `r ref("selector_type", "selector_type()")`, which selects by type.
-Other Selectors can perform set-operations (`r ref("selector_union", "selector_union()")`, `r ref("selector_setdiff", "selector_setdiff()")`) or take all features *not* taken by another Selector (`r ref("selector_invert", "selector_invert()")`).
+Both methods make use of `r ref("Selector", aside = TRUE)`-functions.
+These are helper-functions that indicate to a `PipeOp` which features it should apply to.
+`Selectors` may match column names by regular expressions `r ref("selector_grep()")`, or by column type `r ref("selector_type()")`.
+`Selectors` can also be used to join variables (`r ref("selector_union()")`), return their set difference (`r ref("selector_setdiff()")`), or select the complement of features from another `Selector` (`r ref("selector_invert()")`).
 
-If one wants to perform PCA on the "Petal"-features of the Iris dataset, but only do scaling on the other features, one would first need a Selector that selects these two columns.
-Solving the problem with the `affect_columns` hyperparameter would then work as follows:
+For example, in @sec-pipelines-pipeops we applied PCA to the bill length and depth of penguins from `penguins_simple` by first selecting these columns using the `Task` method `$select()` and then applying the `PipeOp`.
+We can now do this more simply with `selector_grep`, and could go on to use `selector_invert` to apply some other `PipeOp` to other features, below we use `po("scale")` and make use of the `affect_columns` method:
+
 ```{r 05-pipelines-multicol-1, eval = TRUE}
-sel_petal = selector_grep("^Petal")
-sel_not_petal = selector_invert(sel_petal)
+sel_bill = selector_grep("^bill")
+sel_not_bill = selector_invert(sel_bill)
 
-gr = po("scale", affect_columns = sel_not_petal) %>>%
-  po("pca", affect_columns = sel_petal)
+gr = po("scale", affect_columns = sel_not_bill) %>>%
+  po("pca", affect_columns = sel_bill)
 
-result = gr$train(tsk("iris"))
-result[[1]]$head()
+result = gr$train(tsk("penguins_simple"))
+result[[1]]$data()[1:3, 1:5]
 ```
 
-:::{.callout-warning}
-Care should be taken with this approach if PipeOps rename or add columns.
-In this example, if the `r ref("PipeOpPCA", "po(\"pca\")")` were used before the `r ref("PipeOpScale", "po(\"scale\")")`, the `r ref("PipeOpPCA", "po(\"pca\")")` would add columns `"PC1"` and `"PC2"`, and the `r ref("PipeOpScale", "po(\"scale\")")` would scale these columns as well, since they would match `sel_not_petal`.
-:::
+The biggest advantage of this method is that it creates a very simple, sequential Graph.
+However, one disadvantage of the `affect_columns` method is that it is relatively easy to have unexpected results if the ordering of `PipeOp`s is mixed up.
+For example, if we had reversed the order of `po("pca")` and `po("scale")` above then we would have first created columns `"PC1"` and `"PC2"` and then scaled these as they would match the pattern in `sel_not_bill`.
+Creating parallel paths with `po("select")` can help mitigate such errors by selecting features given by the `Selector` and creating an independent data processing streams with the given feature subset.
+Below we pass the parallel pipelines to `gunion` as a `list` to ensure they receive the same input, and then combine the outputs with `po("featureunion")`.
 
-Solving this using parallel paths makes use of the `r ref("PipeOpSelect", "po(\"select\")")` operator.
-It removes all features that are not selected by a given Selector, making it possible to have independent data processing streams for different feature subsets.
-Since two `r ref("PipeOpSelect", "po(\"select\")")` operators are present, it is necessary to give them different IDs to avoid ID name clashes.
-The solution makes use of the fact that parallel paths all receive copies of the input data when they are at the beginning of a Graph.
-```{r 05-pipelines-multicol-3, fig.width = 8, eval = TRUE}
+```{r 05-pipelines-multicol-3-evalF, eval = FALSE}
+path_pca = po("select", id = "s_bill", selector = sel_bill) %>>% po("pca")
+path_scale = po("select", id = "s_not_bill", selector = sel_not_bill) %>>% po("scale")
+
+gr = gunion(list(path_pca, path_scale)) %>>% po("featureunion")
+gr$plot(horizontal = TRUE)
+```
+```{r 05-pipelines-multicol-3-evalT, fig.width = 8, eval = TRUE, echo = FALSE}
+#| label: fig-pipelines-pcascale
+#| fig-cap: Visualization of our `Graph` where features are split into two paths, one with PCA and one with scaling, then combined and returned.
+#| fig-alt: 'Seven boxes where first is "<INPUT>" which points to "s_bill -> pca" and "s_not_bill" -> scale", then both "pca" and "scale" point to "featureunion -> <OUTPUT>".'
+po_select_bill = po("select", id = "s_bill", selector = sel_bill)
+po_select_not_bill = po("select", id = "s_not_bill", selector = sel_not_bill)
+
+path_pca =  po_select_bill %>>% po("pca")
+path_scale = po_select_not_bill %>>% po("scale")
+
+gr = gunion(list(path_pca, path_scale)) %>>% po("featureunion")
+fig <- magick::image_graph(width = 1500, height = 1000, res = 100, pointsize = 24)
+gr$plot(horizontal = TRUE)
+invisible(dev.off())
+magick::image_trim(fig)
+```
+
+The `po("select")` method also has the significant advantage that it allows the same set of features to be used on multiple operations and also allows some features to remain untransformed (`affect_columns` effectively filters out any columns not included in a `Selector`).
+`r ref("PipeOpNOP")` performs no operation on its inputs and is thus useful when you only want to perform a transformation on a subset of features and leave the others untouched:
+
+```{r 05-pipelines-multicol-5-evalF, eval = FALSE}
 gr = gunion(list(
-  po("select", id = "s_petal", selector = sel_petal) %>>% po("pca"),
-  po("select", id = "s_sepal", selector = sel_not_petal) %>>% po("scale")
+  po_select_bill %>>% po("scale"),
+  po_select_not_bill %>>% po("nop")
 )) %>>% po("featureunion")
 gr$plot(horizontal = TRUE)
 ```
-```{r 05-pipelines-multicol-4, eval = TRUE}
-result = gr$train(tsk("iris"))
-result[[1]]$head()
-```
-
-The advantage of the first method is that it creates a very simple, sequential Graph.
-However, sometimes it is not possible to perform a desired operation only using `affect_columns`, particularly when the same set of features is used in multiple operations, or when the original features should be kept.
-For example, the following performs PCA on the "Petal" features, but also keeps all original features.
-The latter is accomplished using the `r ref("PipeOpNOP", "po(\"nop\")")` operator, which does not change its operand.
-
-
-```{r 05-pipelines-multicol-5, fig.width = 8, eval = TRUE}
+```{r 05-pipelines-multicol-5-evalT, fig.width = 8, eval = TRUE, echo = FALSE}
+#| label: fig-pipelines-selectnop
+#| fig-cap: Visualization of our `Graph` where features are split into two paths, features that start with 'bill' are scaled and the rest are untransformed.
+#| fig-alt: 'Six boxes where first is "<INPUT>" which points to "s_bill -> scale" and "s_not_bill -> nop", then both "scale" and "nop" point to "featureunion -> <OUTPUT>".'
 gr = gunion(list(
-  po("select", id = "sel_petal", selector = sel_petal) %>>% po("pca"),
-  po("nop")
+  po_select_bill %>>% po("scale"),
+  po_select_not_bill %>>% po("nop")
 )) %>>% po("featureunion")
+fig <- magick::image_graph(width = 1500, height = 1000, res = 100, pointsize = 24)
 gr$plot(horizontal = TRUE)
+invisible(dev.off())
+magick::image_trim(fig)
 ```
+
 ```{r 05-pipelines-multicol-6, eval = TRUE}
-result = gr$train(tsk("iris"))
-result[[1]]$head()
+gr$train(tsk("penguins_simple"))[[1]]$data()[1:3, 1:5]
 ```
 
+##  Common Patterns and `ppl()` {#sec-pipelines-ppl}
+
+Now you have the tools to create sequential and non-sequential pipelines, you can now create an infinite number of transformations on `Task`, `Learner`, and `Prediction` objects.
+In @sec-pipelines-bagging and @sec-pipelines-stack we will work through two complex examples to demonstrate how you can make complex and powerful graphs using the methods and classes we have already looked at.
+However, there are many common problems in ML that can be well solved by the same pipelines, and so to make your life easier we have implemented and saved these pipelines in the `r ref("mlr_graphs", aside = TRUE)` dictionary; pipelines in the dictionary can be accessed with the `r ref("ppl()", aside = TRUE)` sugar function.
+
+At the time of writing, this dictionary includes seven `Graph`s (required arguments included):
+
+* `ppl("robustify")`: Perform common preprocessing steps to make any `Task` compatible with a given `Learner`.
+  Optional arguments are the `r ref("Task")` and `r ref("Learner")` in question, as well as individual switches that decide which kind of preprocessing should be done.
+  The "robustify" Graph element queries the metadata provided by the respective objects and performs only the necessary preprocessing.
+  This pipeline is returned to in more detail in @sec-prepro-robustify.
+* `ppl("branch", graphs)`: Uses `r ref("PipeOpBranch")` to create different path branches from the given `graphs` where only one branch is evaluated. This is returned to in more detail in @sec-pipelines-branch.
+* `ppl("stacking", base_learners, super_learner)`: Stacking, returned to in detail in @sec-pipelines-stack, is the process of using predictions from one or more models (`base_learners`) as features in a subsequent model (`super_learner`)
+* `ppl("bagging", graph)`: In `r mlr3pipelines`, bagging (from **b**ootstrapp **agg**regat**ing**), described in detail in @sec-pipelines-bagging, is the process of running a `graph` multiple times on different data samples and then averaging the results. The `iterations` argument controls the number of bagging iterations, `frac` controls the sampling fraction, the averaging method can also be adjusted through the `averager` parameter.
+* `ppl("greplicate", graph, n)`: Create a `Graph` that replicates `graph` (which can also be a single `PipeOp`) `n` times.
+  The pipeline avoids ID clashes by adding a suffix to each `PipeOp`, we will see this pipeline in use in @sec-pipelines-bagging.
+* `ppl("targettrafo", graph)`: Create a `Graph` that transforms the prediction target of a task and ensures that any transformations applied during training (using the function passed to the `targetmutate.trafo` hyperparameter) are inverted in the resulting predictions (using the function passed to the `targetmutate.inverter` hyperparameter); an example is given in @sec-prepro-scale.
+* `ppl("ovr", graph)`: One-versus-rest classification for converting multiclass classificaiton tasks into several binary classification tasks with one task for each class in the original task. These tasks are then evaluated by the given `graph`, which should be a learner (or a pipeline containing a learner that emits a prediction). The predictions made on the binary tasks are combined into the multiclass prediction needed for the original task.
+
+<!-- FIXME: REVIEWED TO HERE -->
 ## Example: Bagging {#sec-pipelines-bagging}
 
 The basic idea of Bagging, introduced by [@Breiman1996], is to create multiple predictors and then aggregate those to a single, more powerful predictor.
@@ -238,6 +277,15 @@ The result shows that the constructed learner behaves and performs very closely 
 The `time_both` measure also indicates that our implementation is orders of magnitude slower, because `r ref("ranger::ranger")` is written in C++.
 However, constructing this custom learner took much less time, compared to what the authors of `r ref("ranger::ranger")` likely needed.
 If the goal is to construct new kinds of learning algorithms that work for a specific purpose, then computational time is often less expensive than developer time!
+
+<!-- FIXME
+
+ADD
+
+  The bagging pipeline shown in @sec-pipelines-bagging is therefore constructed by calling
+
+  ppl("bagging", graph = lrn("classif.rpart"))
+-->
 
 ## Example: `PipeOpLearnerCV` and Stacking {#sec-pipelines-stack}
 
@@ -346,6 +394,19 @@ bmr$aggregate()
 In real-world applications, stacking can be implemented across multiple levels and on various different representations of the dataset.
 On a lower level, different preprocessing methods can be defined in conjunction with several learners.
 On a higher level, we can then combine those predictions in order to form a very powerful model.
+
+<!-- FIXME
+
+ADD
+
+The example from @sec-pipelines-stack can thus be written:
+
+  ppl("stacking",
+    base_learners = lrns("classif.rpart"),
+    super_learner = lrn("classif.rpart")
+  )
+
+   -->
 
 ## Tuning Graphs {#sec-pipelines-tuning}
 
@@ -514,6 +575,16 @@ head(graph$train(mnist_task)[[1]]$feature_names)
 graph$param_set$values$branch.selection = "nop"  # use the "No-Op" path
 head(graph$train(mnist_task)[[1]]$feature_names)
 ```
+
+<!-- FIXME:
+
+ADD
+
+  The choice between PCA, Yeo-Johnson transform, and no-op that is shown in  can, for example, be produced by calling:
+
+  ppl("branch", graphs = pos(c("pca", "yeojohnson", "nop")))
+
+ -->
 
 Tuning this hyperparameter can help determine which of the possible options works best in combination with a given learner.
 Branching can even be used to tune which of several learners is most appropriate for a given dataset.
@@ -685,77 +756,6 @@ as.data.table(instance$result)[,
     classif.ce)
 ]
 ```
-
-##  Common Patterns and `ppl()` {#sec-pipelines-ppl}
-
-{{< include _optional.qmd >}}
-
-There are certain parts of Graphs that frequently occur in various contexts, but that could not reasonably be provided as single PipeOps by `mlr3pipelines`.
-Examples for this were presented in the previous section:
-patterns such as alternative paths or stacking are generally useful, but they reflect specific ways of connecting PipeOps instead of singular operations.
-
-There are other commonly occurring problems that are usually solved by a combination of more than one PipeOp.
-An example is converting data to make it compatible with a given learner:
-It is often necessary to impute missing values *and* to one-hot-encode categorical features, which are both provided as PipeOps.
-
-These frequently needed building blocks are referred to as "Graph elements".
-They can be constructed using the `r ref("mlr_graphs")` `Dictionary`.
-The most straightforward way to access these is through the `ppl()` function, which requires a name as its first argument, followed by several other arguments that are specific to the element being constructed.
-The help page for a Graph element named `"<name>"` can be queried as `?mlr_graphs_<name>`.
-
-The following is a list of the provided Graph elements.
-Their mandatory arguments are shown.
-They also have optional arguments for fine adjustments which are described on their help page.
-
-* **`r ref("mlr_graphs_robustify", "ppl(\"robustify\")")`**: Perform preprocessing that makes a given `r ref("Task")` compatible with a given `r ref("Learner")`.
-  Optional arguments are the `r ref("Task")` and `r ref("Learner")` in question, as well as individual switches that decide which kind of preprocessing should be done.
-  The "robustify" Graph element queries the metadata provided by the respective objects and performs only the necessary preprocessing.
-  E.g., if a given `r ref("Learner")` has the `"missings"` property (i.e. supports missing values) but does not have `"factor"` in its `$feature_types` (i.e. can not handle categorical features), then `r ref("pipeline_robustify", "ppl(\"robustify\")")` will numerically encode categorical features, but will not do imputation.
-* **`r ref("mlr_graphs_branch", "ppl(\"branch\", graphs)")`**: Alternative path branching, as described in @sec-pipelines-branch.
-  The mandatory `graphs` argument must be a list of PipeOps or Graphs that should lie on the resulting alternative paths.
-  The choice between PCA, Yeo-Johnson transform, and no-op that is shown in @sec-pipelines-branch can, for example, be produced by calling:
-  ```{r, eval = FALSE}
-  ppl("branch", graphs = pos(c("pca", "yeojohnson", "nop")))
-  ```
-* **`r ref("mlr_graphs_stacking", "ppl(\"stacking\", base_learners, super_learner)")`**: Stacking, as described in @sec-pipelines-stack. `base_learners` must be a list of learners that are used to augment the incoming data.
-  The learner given to `super_learner` is then trained on the original data (unless the optional `use_features` is set to `FALSE`) and the predictions made by these learners.
-  The example from @sec-pipelines-stack can thus be written:
-  ```{r, eval = FALSE}
-  ppl("stacking",
-    base_learners = lrns("classif.rpart"),
-    super_learner = lrn("classif.rpart")
-  )
-  ```
-* **`r ref("mlr_graphs_bagging", "ppl(\"bagging\", graph)")`**: Bagging, as described in @sec-pipelines-bagging.
-  `graph` can either be a single learner or contain a more complex pipeline, such as one involving preprocessing, as long as it yields a prediction at the end.
-  Optional parameters control the number of bagging iterations (`iterations`, default 10), the fraction of samples for each bagging learner (`frac`, default 0.7), and the PipeOp doing the aggregation of predictions (`averager`, defaults to simple averaging).
-  The bagging pipeline shown in @sec-pipelines-bagging is therefore constructed by calling
-  ```{r, eval = FALSE}
-  ppl("bagging", graph = lrn("classif.rpart"))
-  ```
-* **`r ref("mlr_graphs_greplicate", "ppl(\"greplicate\", graph, n)")`**: Create a Graph that contains `n` copies of `graph`.
-  `graph` can be a Graph, but can also be a single PipeOp.
-  `r ref("pipeline_greplicate", "ppl(\"greplicate\")")` in particular takes care of avoiding ID collisions by automatically adding a suffix to each PipeOp that counts up from 1.
-  It is particularly useful when building bagging Graphs manually, and an example call is shown in @sec-pipelines-bagging.
-* **`r ref("mlr_graphs_targettrafo", "ppl(\"targettrafo\", graph)")`**: Create a Graph that transforms the prediction target of a task.
-  The problem with modifying the target column of a task is that a learner that is trained on this task will make predictions relative to the transformed scale.
-  It is therefore necessary to perform an additional operation on the predictions made by such a learner which inverts the prediction, bringing them to the original scale.
-  The `"targettrafo"` Graph element takes care of this.
-  The `graph` argument should be the learner or pipeline that should be executed after the target was transformed, but before inversion.
-  The transformation / inverter functions are set through the resulting Graph's `$targetmutate.trafo` and `$targetmutate.inverter` hyperparameters.
-
-  The following is an example Graph that log-transforms the target before fitting a linear model, the predictions of which are later exponentiated.
-  ```{r, eval = FALSE}
-  gr = ppl("targettrafo", graph = lrn("regr.lm"))
-  gr$param_set$values$targetmutate.trafo = function(x) log(x)
-  gr$param_set$values$targetmutate.inverter = function(x) exp(x)
-  ```
-* **`r ref("mlr_graphs_ovr", "ppl(\"ovr\", graph)")`**: Do one-versus-rest classification.
-  This Graph element splits a single multiclass classification task into several binary classification tasks, with one task for each class in the original task.
-  These tasks are then evaluated by the given `graph`, which should be a learner (or a pipeline containing a learner that emits a prediction).
-
-  The predictions made on the binary tasks are then combined into the multiclass prediction needed for the original task.
-  If possible, the `$predict_type` of the learner(s) in `graph` should be set to `"prob"`.
 
 ## Recap
 
