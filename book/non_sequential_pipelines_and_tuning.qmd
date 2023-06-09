@@ -60,7 +60,7 @@ result$data(cols = c("diabetes", "insulin", "missing_insulin", "triceps",
   "missing_triceps"))
 ```
 
-## `po("select")`, `po("featureunion")`, and `affect_columns`
+## Selectors and parallel pipelines
 
 It is common in `Graph`s for an operation to be applied to a subset of features.
 In `r mlr3pipelines` this can either (@fig-pipelines-select-affect) be achieved by passing the column subset to the `affect_columns` hyperparameter of a `PipeOp` (assuming it has that hyperparameter), which controls which columns should be affected by the `PipeOp`.
@@ -173,7 +173,9 @@ At the time of writing, this dictionary includes seven `Graph`s (required argume
 * `ppl("stacking", base_learners, super_learner)`: Stacking, returned to in detail in @sec-pipelines-stack, is the process of using predictions from one or more models (`base_learners`) as features in a subsequent model (`super_learner`)
 * `ppl("targettrafo", graph)`: Create a `Graph` that transforms the prediction target of a task and ensures that any transformations applied during training (using the function passed to the `targetmutate.trafo` hyperparameter) are inverted in the resulting predictions (using the function passed to the `targetmutate.inverter` hyperparameter); an example is given in @sec-prepro-scale.
 
-## Bagging with `"greplicate"` and `"subsample"` {#sec-pipelines-bagging}
+## Practical pipelines by example
+
+### Bagging with `"greplicate"` and `"subsample"` {#sec-pipelines-bagging}
 
 The basic idea of `r index('bagging')` (from **b**ootstrapp **agg**regat**ing**), introduced by @Breiman1996, is to aggregate create multiple predictors into a single, more powerful predictor (@fig-pipelines-bagging).
 Predictions are usually aggregated by the arithmetic mean for regression tasks or majority vote for classification.
@@ -196,7 +198,7 @@ To begin, we use `r ref("PipeOpSubsample")` to sample a fraction of the data (he
 single_pred = po("subsample", frac = 0.7) %>>% lrn("classif.rpart")
 ```
 
-Next we use `r ref("pipeline_greplicate")` to copy the graph `single_pred` 10 times (`n = 10`) and finally `r ref("PipeOpClassifAvg")` to take the majority vote of all predictions.
+Next we use `r ref("pipeline_greplicate")` to copy the graph `single_pred` 10 times (`n = 10`) and finally `r ref("PipeOpClassifAvg")` to take the majority vote of all predictions, note that we pass `innum = 10` to `"classifavg"` to tell the `PipeOp` to expect 10 inputs.
 
 ```{r 05-pipelines-non-sequential-010-evalT, eval = FALSE}
 pred_set = ppl("greplicate", graph = single_pred, n = 10)
@@ -274,7 +276,7 @@ bmr$aggregate(msrs(c("classif.ce", "time_both")))[, .(learner_id, classif.ce, ti
 In only a few lines of code, we took a weak learner and turned it into a powerful model that we can see is comparable to the implementation in `r ref("ranger::ranger")`, however our pipeline is much slower as `r ref("ranger::ranger")` uses C++.
 In the next section we will look at a second example, which makes use of cross-validation within pipelines.
 
-## Stacking with "learner_cv" {#sec-pipelines-stack}
+### Stacking with "learner_cv" {#sec-pipelines-stack}
 
 Stacking [@Wolpert1992] is another technique that can significantly improve model performance.
 The basic idea behind stacking is to use predictions from one model as features for a subsequent model to try to improve performance (@fig-pipelines-stacking).
@@ -394,156 +396,97 @@ Having covered the building blocks of `r mlr3pipelines` and seen these in practi
 ## Tuning Graphs {#sec-pipelines-tuning}
 
 {{< include _optional.qmd >}}
-<!-- fixme: reviewed to here -->
-Having as many options for preprocessing as provided by `r mlr3pipelines` has many benefits, but it also comes with a drawback:
-It enlarges the space of possible hyperparameter configurations considerably.
-Not only do preprocessing operations bring their own hyperparameter settings, but the decisions on whether to do preprocessing, and which preprocessing operation to perform, also need to be made.
-Tuning ML models with `r mlr3pipelines` can be considered at various levels of complexity:
 
-1. Tuning the hyperparameters of a learner or a PipeOp individually when it is part of a Graph.
-2. Jointly tuning the hyperparameters of both learner and its preprocessing operations.
-3. Tuning not only the hyperparameters, but also the choice of which operation to perform.
+By making use of `GraphLearner`, it is possible to tune a `Graph` of arbitrary complexity using `r mlr3tuning`.
+However, tuning pipelines is not straightforward as not only do you have to choose which `Learner` hyperparameters to tune, but you also have to consider which `PipOp`s to include in the pipeline and which of their hyperparameters to tune.
+For example we saw how to create different complexities of bagging pipelines in @sec-pipelines-bagging, if we wanted to tune this we would have to decide: 1) which `Learner` to use as our weak learner; 2) the hyperparameters to tune for the weak learner and their ranges; 3) if we should tune the replications of `"greplicate"`; 4) if we should tune or select the averaging method; 5) should we add a custom feature selection and tune this; 6) what sampling method should we use and should the fraction be tuned?
+This gets even more complicated with stacking if we have many weak learners we might want to tune.
+And yet more complicated if we also want to decide if further preprocessing steps improve model performance.
+To consider these questions, in @sec-pipelines-combined we will look at how to tune `Learner` and `PipeOp` hyperparameters and then in @sec-pipelines-branch and @sec-pipelines-proxy we will takes this a step further to see how we can also tune the choice of which operations to include in the pipeline, known as "Combined Algorithm Selection and Hyperparameter optimization" (CASH) [@Thornton2013].
 
-The first level is not much different from tuning individual learners, as described in @sec-optimization.
-The only thing to watch out for here is that a learner's hyperparameter names are prefixed with its ID, as shown in @sec-pipelines-inspect.
-The second level is demonstrated in the following @sec-pipelines-combined.
-The third level is also referred to as the "Combined Algorithm Selection and Hyperparameter optimization" (CASH) [@Thornton2013].
-This is demonstrated in @sec-pipelines-branch, which shows how to use alternative path branching.
-An alternative way of implementing it is to use `r ref("PipeOpProxy", "po(\"proxy\")")`, demonstrated in the (advanced) @sec-pipelines-proxy.
+### Tuning Graph Hyperparameters {#sec-pipelines-combined}
 
-In this section, we will use the well-known "MNIST" dataset [@lecun1998gradient], which comprises 28 x 28 pixel images of handwritten digits.
-It is a classification task with the goal of identifying the digits accurately.
-It is often used to demonstrate deep learning with convolutional layers.
-However, for this demonstration, we will not use the information about the relative location of pixels.
-Instead, we use each pixel's intensity as a separate feature.
-We obtain the data from OpenML, which is described in greater detail in @sec-large-benchmarking.
-To speed up performance estimation, we subset the given data to 5% of its original size.
-```{r 06-pipelines-get-mnist-openml}
-library("mlr3oml")
-mnist_data = odt(id = 554)
-subset = sample(mnist_data$nrow, mnist_data$nrow * 0.05, replace = FALSE)
-mnist_task = as_task_classif(mnist_data$data[subset],
-    target = "class", id = "mnist")
-head(mnist_task$feature_names)
+In the absolute simplest case if you only want to tune the hyperparameters of a `Learner` you could do this using an `AutoTuner` as usual.
+Say we are running a stacking pipeline with `classif.kknn` and `classif.rpart` as our weak learners and `classif.log_reg` as our super learner and we want to tune the decision tree, then we might run the following:
+
+```{r, warning = FALSE}
+rpart = auto_tuner(tnr("random_search"),
+  lrn("classif.rpart", cp = to_tune(0, 1), predict_type = "prob"),
+  rsmp("holdout"), term_evals = 10)
+
+pipe = as_learner(ppl("stacking",
+  base_learners = c(lrn("classif.kknn", predict_type = "prob"), rpart),
+  super_learner = lrn("classif.log_reg")))
+
+resample(tsk("sonar"), pipe, rsmp("holdout"))$aggregate()
 ```
 
+However, if we now wanted to tune the hyperparameters of the decision tree and the KNN model, we would have to choose between tuning these separately (e.g., with two `AutoTuner`s) or combined.
+The first option would be very efficient as you would essentially be running multiple nested resampling process independently, which increases computational overhead and prevents the tuning process from learning about the other hyperparameter configurations.
+Instead, we could tune the models simultaneously, and even tune a `PipeOp` at the same time:
 
-### Tuning Combined Spaces {#sec-pipelines-combined}
-
-Instead of using deep learning, we will use the much simpler k-nearest-neighbor (KNN) learner `r ref("LearnerClassifKKNN", "lrn(\"classif.kknn\")")`, again with the simple `"rectangular"` distance kernel.
-We investigate if doing a principal component analysis using `r ref("PipeOpPCA", "po(\"pca\")")`, and selecting the highest variance components using the `rank.` hyperparameter, can improve performance.
-Because the `k` hyperparameter of the KNN learner also needs to be found, we need to tune it simultaneously.
-
-First, we need to define the Graph that we are tuning.
-We have the option of setting each component's hyperparameter being tuned to `to_tune()`, as is done in @sec-optimization, but here we will demonstrate how to define the search space `r ref("ParamSet")` directly.
-
-```{r 05-pipelines-modeling-008}
-library("mlr3learners")
-graph_learner = po("pca") %>>%
-  lrn("classif.kknn", kernel = "rectangular")
-graph_learner = as_learner(graph_learner)
-
-library("paradox")
-search_space = ps(
-  pca.rank. = p_int(
-    lower = 2,
-    upper = length(mnist_task$feature_names),
-    logscale = TRUE
-  ),
-  classif.kknn.k = p_int(lower = 1, upper = 32, logscale = TRUE)
-)
+```{r}
+pipe = as_learner(
+  po("pca", rank. = to_tune(2, 9)) %>>%
+  ppl("stacking",
+    base_learners = c(
+      lrn("classif.kknn", k = to_tune(1, 32)),
+      lrn("classif.rpart", cp = to_tune(0.1))
+    ),
+    super_learner = lrn("classif.log_reg")))
+pipe$param_set$values
 ```
 
-We tune this using the `r ref("tune")` function on a 6x6 grid, stepping through both the number of selected principal components (`pca.rank.`) and the KNN's `k` hyperparameter on a log-scale.
+We can see how the pipelines `$param_set` includes the tune tokens for all elements of the pipeline so when we call `tune` these can be combined into different hyperparameter configurations.
 
-
-```{r debug-dummy, echo=FALSE, eval = TRUE}
-instance = list(result_x_domain = list(pca.rank. = 30))
-```
-```{r 05-pipelines-modeling-009}
-library("mlr3tuning")
-
-instance = tune(
-  tuner = tnr("random_search"),
-  task = mnist_task,
-  learner = graph_learner,
-  resampling = rsmp("holdout"),
-  measure = msr("classif.ce"),
-  search_space = search_space,
-  term_evals = 10
-)
-
-instance$result
+```{r}
+instance = tune(tnr("random_search"), tsk("sonar"), pipe, rsmp("holdout"),
+  msr("classif.ce"), term_evals = 10)
+instance$result[, .(pca.rank., classif.kknn.k, classif.rpart.cp, classif.ce)]
 ```
 
-:::{.callout-tip}
-Tuning complex pipelines can take a long time:
-Not only are the individual training steps often more complex and therefore take longer; the increased search space dimension usually also means that more evaluations need to be performed to get an acceptable level of performance.
-It is therefore recommended to make use of parallelization using `r ref_pkg("future")`, which is demonstrated in @sec-parallelization.
-:::
-
-
-Note that the output values are the logarithm of the actual result, which is:
-```{r 05-pipelines-modeling-009-2}
-instance$result_x_domain
-```
-
-The observed performance values are shown in @fig-pipelines-opttrace-1.
-It becomes clear that, for different values of `rank.`, different `k` values can be optimal, so jointly tuning both hyperparameters is prudent.
-
-```{r calcbaseline, include = FALSE}
-baselineperf = resample(mnist_task, po("pca") %>>% lrn("classif.kknn", kernel = "rectangular"), rsmp("cv", folds = 3))$aggregate(msr("classif.ce"))
-baselineperf2 = resample(mnist_task, lrn("classif.kknn", kernel = "rectangular"), rsmp("cv", folds = 3))$aggregate(msr("classif.ce"))
-```
-
-```{r fig.align='center', fig.width = 7, fig.height = 3}
-#| label: fig-pipelines-opttrace-1
-#| fig-cap: "Observed performance values when optimizing both `rank.` of `po(\"pca\")` and `k` of `lrn(\"classif.kknn\")` at the same time.
-#|   The x-axis shows `k` values (log scale). Each facet (i.e. individual plot) shows the behavior for a different `rank.` value, displayed at the top.
-#|   The red star shows the performance of the untuned model: using `po(\"pca\") %>>% lrn(\"classif.kknn\")` with their defaults: `rank.` set to the number of features, and `k` set to 7."
-#| fig-alt: "Plot showing performance values of pca, followed by KNN."
-#| echo: false
-library("ggplot2")
-
-ggplot(instance$archive$data[, c(rbindlist(x_domain), list(classif.ce = classif.ce))], aes(x = classif.kknn.k, y = classif.ce)) +
-  geom_line() +
-  ggstar::geom_star(data = data.frame(classif.kknn.k = 7, classif.ce = baselineperf, pca.rank. = length(mnist_task$feature_names)), fill = "red", size = 4, starshape = 1) +
-  facet_grid(cols = vars(pca.rank.)) +
-  scale_x_log10() +
-  theme_minimal() +
-  labs(title = "Performance of po(\"pca\") %>>% lrn(\"classif.kknn\")")
-```
+Using the same syntax as we have learnt in @sec-optimization, you can now tune hyperparameters for fixed pipelines.
+Tuning pipelines will usually take longer than tuning individual learners as training steps are often more complex and the search space may be much larger, therefore parallelization is often required in practice (@sec-parallelization).
 
 ### Tuning Alternative Paths with `po("branch")` {#sec-pipelines-branch}
 
-While we see that tuning the `r ref("PipeOpPCA", "po(\"pca\")")` has benefits, we have not yet seen whether using PCA at all is beneficial.
-It is possible that using the tuned PCA simply does the least damage, or that a much simpler operation would perform equally well or better.
-
-Here we can use the `r ref("PipeOpBranch", "po(\"branch\")")` and `r ref("PipeOpUnbranch", "po(\"unbranch\")")` PipeOps, which make it possible to specify multiple alternative paths.
-Data only flows along one of these paths, which can be controlled by a hyperparameter, as is shown in @fig-pipelines-alternatives (a).
+In the previous section we tuned the KKNN and decision tree in the stacking pipeline, as well as tuning the rank of the PCA.
+However, we tuned the PCA without asking if it was beneficial at all, in this section we will answer that question by making use of `r ref("PipeOpBranch", aside = TRUE)` and `r ref("PipeOpUnbranch", aside = TRUE)`, which make it possible to specify multiple alternative paths.
+`po("branch")` creates multiple paths such that data can only flow through *one* of these as determined by the `selection` hyperparameter (@fig-pipelines-alternatives).
 This concept makes it possible to tune alternative preprocessing methods or alternative learner models.
 
-`po("(un)branch")` is initialized either with the number of branches, or with a `character`-vector indicating the names of the branches.
-If names are given, the "branch-choosing" hyperparameter becomes more readable.
-In the following, we set three options:
+```{r, echo = FALSE}
+#| label: fig-pipelines-branching
+#| fig-cap: 'Figure demonstrates the `po("branch")` and `po("unbranch")` operators where three separate branches are created by data only flows through the PCA one as this is specified as the argument to `selection`.'
+#| fig-alt: 'Graph with "Dtrain" on the left with an arrow to `po("branch", selection = "pca")` which then has a dark shaded arrow to a box that says "PCA". Above this box is a transparent box that says "PipeOpNoop" and below the "PCA" box is another transparent box thay says "YeoJohnson", the implication is that only the "PCA" box is active. The "PCA" box then has an arrow to `po("unbranch")` -> "Learner".'
+#| out.width: "70%"
+knitr::include_graphics("Figures/branching.svg")
+```
 
-1. Doing nothing (`r ref("PipeOpNOP", "po(\"nop\")")`)
-2. Applying a PCA
-3. Removing constant features and applying the Yeo-Johnson transform, using `r ref("PipeOpYeoJohnson", "po(\"yeojohnson\")")`
+To demonstrate alternative paths we will make use of the MNIST [@lecun1998gradient] data, which is useful for demonstrating preprocessing.
+The data is loaded from OpenML, which is described in @sec-openml, we subset the data to 5% of its original size for efficiency.
 
-It is important to "unbranch" again after "branching" to ensure that the outputs are merged into one result objects.
+```{r}
+library(mlr3oml)
+mnist_task = otsk(id = 3573)
+mnist_task = as_task(mnist_task)$
+  filter(sample(mnist_task$nrow, 1000))$
+  select(mnist_task$feature_names[sample(mnist_task$ncol, 100)])
+```
 
-For this demo, we will use the optimal `rank.` value from the previous optimization.
+`po("branch")` is initialized either with the number of branches, or with a `character`-vector indicating the names of the branches, the latter makes the `selection` hyperparameter (rturned to just below) more readable.
+Below we create three branches: do nothing (`po("nop")`), apply PCA (`po("pca")`), remove constant features (`po("removeconstants")`) then apply the Yeo-Johnson transform (`po("yeojohnson")`).
+It is important to use `po("unbranch")` (with same arguments as `"branch"`) to ensure that the outputs are merged into one result objects.
 
 ```{r 05-pipelines-non-sequential-003, eval = TRUE}
-rank_opt = instance$result_x_domain$pca.rank.
+paths = c("nop", "pca", "yeojohnson")
 
-graph = po("branch", c("nop", "pca", "yeojohnson")) %>>%
+graph = po("branch", paths, id = "branch_PO") %>>%
   gunion(list(
     po("nop"),
-    po("pca", rank. = rank_opt),
+    po("pca"),
     po("removeconstants") %>>% po("yeojohnson")
-  )) %>>% po("unbranch", c("nop", "pca", "yeojohnson"))
+  )) %>>% po("unbranch", paths, id = "unbranch_PO")
 ```
 
 The resulting Graph looks as follows:
@@ -555,134 +498,81 @@ graph$plot(horizontal = TRUE)
 The output of this Graph depends on the setting of the `branch.selection` hyperparameter:
 
 ```{r 05-pipelines-branch-01}
-graph$param_set$values$branch.selection = "pca"  # use the "PCA" path
+graph$param_set$values$branch_PO.selection = "pca"  # use the "PCA" path
 head(graph$train(mnist_task)[[1]]$feature_names)
-graph$param_set$values$branch.selection = "nop"  # use the "No-Op" path
+graph$param_set$values$branch_PO.selection = "nop"  # use the "No-Op" path
 head(graph$train(mnist_task)[[1]]$feature_names)
 ```
 
-<!-- FIXME:
+`ppl("branch")` simplifies the above by allowing you to just pass the different paths to the `graphs` argument:
 
-ADD
+```{r, eval = FALSE}
+ppl("branch", graphs = pos(c("nop", "pca", "yeojohnson")))
+```
 
-  The choice between PCA, Yeo-Johnson transform, and no-op that is shown in  can, for example, be produced by calling:
+Tuning the `selection` hyperparameter can help determine which of the possible options works best in combination with a given learner:
 
-  ppl("branch", graphs = pos(c("pca", "yeojohnson", "nop")))
+```{r}
+graph_rpart = as_learner(graph %>>% lrn("classif.rpart"))
+graph_rpart$param_set$values$branch_PO.selection = to_tune(paths)
+instance = tune(tnr("random_search"), mnist_task, graph_rpart,
+  rsmp("holdout"), msr("classif.ce"), term_evals = 10)
+instance$result
+```
 
- -->
-
-Tuning this hyperparameter can help determine which of the possible options works best in combination with a given learner.
+Here we see that in combination with the decision tree, `pca` was the best performing `PipeOp`.
 Branching can even be used to tune which of several learners is most appropriate for a given dataset.
-We now extend this example so that both the preprocessing (PCA, Yeo-Johnson transform, or no preprocessing), as well as the model to use (KNN or decision tree) can be tuned.
-For this, we add another branching pathway to our Graph:
+We now extend this example to add the choice between a decision tree and KKNN:
 
 ```{r 05-pipelines-branch-02, eval = TRUE}
-par(cex = 0.7)
 graph_learner = graph %>>%
-  po("branch", c("classif.rpart", "classif.kknn"), id = "branch2") %>>%
-    gunion(list(
-      lrn("classif.rpart"),
-      lrn("classif.kknn", kernel = "rectangular")
-    )) %>>%
-  po("unbranch", c("classif.rpart", "classif.kknn"), id = "unbranch2")
+  ppl("branch", lrns(c("classif.rpart", "classif.kknn")))
+graph_learner$plot()
+
 graph_learner = as_learner(graph_learner)
-graph_learner$graph$plot()
 ```
 
-Note that it is necessary to give the two branching operations different IDs to avoid name clashes.
+Now we can see why we added those IDs earlier to avoid name clashes.
 
-Finally, we would still like to tune the `k` hyperparameter of the KNN learner, as it may depend on the type of preprocessing performed.
-However, this hyperparameter is only active when the "`classif.kknn`" path is chosen.
-We therefore have to declare a dependency in the search space.
-Our search space, which tunes over all options of both branching operators as well as the KNN learner's `k` hyperparameter, is as follows:
-
+Finally, we will additionally tune the `k` hyperparameter of the KNN learner, as it may depend on the type of preprocessing performed.
+However, this hyperparameter is only active when the "`classif.kknn`" path is chosen and so we set a dependency (@sec-optimization-depends):
 
 ```{r 05-pipelines-branch-03}
-search_space = ps(
-  branch.selection = p_fct(c("nop", "pca", "yeojohnson")),
-  branch2.selection = p_fct(c("classif.rpart", "classif.kknn")),
-  classif.kknn.k = p_int(lower = 1, upper = 32, logscale = TRUE,
-    depends = branch2.selection == "classif.kknn")
+graph_learner$param_set$set_values(
+  branch_PO.selection = to_tune(paths),
+  branch.selection = to_tune(c("classif.rpart", "classif.kknn")),
+  classif.kknn.k = to_tune(p_int(1, 32, depends = branch.selection == "classif.kknn"))
 )
 
-# set seed for comparison with the alternative optimization method below
-set.seed(1)
 instance = tune(
   tuner = tnr("random_search"),
   task = mnist_task,
   learner = graph_learner,
   resampling = rsmp("cv", folds = 3),
   measure = msr("classif.ce"),
-  search_space = search_space,
   term_evals = 10
 )
 
-cbind(
-  as.data.table(instance$result_x_domain),
-  classif.ce = instance$result_y
-)
+instance$result[, .(branch_PO.selection, classif.kknn.k, branch.selection, classif.ce)]
 ```
 
-The results reveal that the tuned KNN performs better than the untuned decision tree, "classif.rpart".
-A more thorough investigation could try to tune the decision tree to check if its performance can be brought to the level of the KNN algorithm.
-However, increasing the number of options significantly enlarges the search space.
-The `grid_search` tuner, which we have used here because of its straightforward interpretability, is not recommended for search spaces that have more than a very small number of dimensions.
-Therefore, if this investigation were to be carried further, one would need to use a different optimizer, such as random search or Bayesian optimization, the latter of which is demonstrated in @sec-bayesian-optimization.
-
-```{r fig.align='center', fig.width = 7, fig.height = 3}
-#| label: fig-pipelines-opttrace-2
-#| fig-cap: "Observed performance values when optimizing both preprocessing (between \"pca\", \"yeojohnson\", and \"nop\", which is no preprocessing) and learner (between KNN and the decision tree \"classif.rpart\") at the same time.
-#|   The x-axis shows preprocessing. Each facet (i.e. individual plot) shows the learner being used, together with setting for \"k\", if applicable."
-#| fig-alt: "Plot showing performance values of pca, yeojohnson, or nop, followed by KNN or decision tree."
-#| echo: false
-
-ggplot(instance$archive$data[, learner := ifelse(is.na(classif.kknn.k), "classif.rpart", sprintf("classif.kknn\nk = % 2s", (sapply(x_domain, `[[`, "classif.kknn.k"))))],
-  aes(x = branch.selection, y = classif.ce)) +
-  geom_point() +
-  facet_grid(cols = vars(learner)) +
-  theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Performance of Various Learners with Different Preprocessing")
-```
-
-:::{.callout-tip}
-Graphs with alternative path branching can also be created using `ppl()`, see @sec-pipelines-ppl
-:::
+By tuning the pipeline hyperparameters and the decision of which operations and learners to include, we were able to achieve good model performance using the KNN learner with the Yeo-Johnson transform.
 
 ### Tuning with `po("proxy")` {#sec-pipelines-proxy}
 
 {{< include _optional.qmd >}}
 
-The `r ref("PipeOpProxy", "po(\"proxy\")")` operator is a meta-operator that performs the operation that is stored in its `content` hyperparameter.
-This can either be another PipeOp, or an entire Graph.
-A PipeOp which can itself contain Graphs that can be tuned over, makes it optimization over different operation possible, similarly to `r ref("PipeOpBranch", "po(\"branch\")")` / `r ref("PipeOpUnbranch", "po(\"unbranch\")")`.
-@fig-pipelines-alternatives shows the conceptual difference between `r ref("PipeOpBranch", "po(\"branch\")")` and `r ref("PipeOpProxy", "po(\"proxy\")")`.
+r ref("PipeOpProxy")` is a meta-operator that performs the operation that is stored in its `content` hyperparameter, which could be another `PipeOp` or `Graph`, it can therefore be used to tune over and select different `PipeOp`s or `Graph`s that could be passed to this hyperparameter (@fig-pipelines-alternatives).
 
-```{r eval = TRUE}
+```{r, echo = FALSE}
 #| label: fig-pipelines-alternatives
-#| layout-nrow: 2
-#| fig-cap: "
-#|   Two ways of parametrizing the PipeOps or learners that should be used.
-#|   The setups shown in both examples have the same effect: Data is PCA-transformed before being fed to the learner.
-#|   (a): Using `po(\"branch\")` it is possible to choose which one out of various alternative paths should be taken.
-#|        In this example, the PCA PipeOp is active, the alternatives (Yeo-Johnson transform, or no operation through `po(\"nop\")`) are inactive.
-#|        A `po(\"unbranch\")` is necessary to mark the end of the alternative paths.
-#|   (b): `po(\"proxy\")` has the hyperparameter `content`, which can be set to a another PipeOp. In this example, it is set to PCA.
-#| "
-#| fig-alt:
-#|   - "po(\"branch\"), followed by, alternatively, po(\"nop\"), PCA, and Yeo-Johnson transform, which are all followed by `po(\"unbranch\")` and a learner.
-#|      The PCA branch is active."
-#|   - "`po(\"proxy\")`, followed by a learner. The content of the `po(\"proxy\")` is set to a PCA PipeOp."
-#| fig-subcap:
-#|   - "Usage of `po(\"branch\")`"
-#|   - "Usage of `po(\"proxy\")`"
+#| fig-cap: 'Figure demonstrates the `po("proxy")` operator with a `PipeOp` as its argument.'
+#| fig-alt: 'Graph with "Dtrain -> po("proxy", content = PCA) -> Learner", the "PCA" is represented as a box that implies a PipeOp.'
 #| out.width: "70%"
-#| echo: false
-knitr::include_graphics("Figures/branching.svg")
 knitr::include_graphics("Figures/proxy.svg")
 ```
 
-To use `r ref("PipeOpProxy", "po(\"proxy\")")` instead of alternative path branching to perform the above optimization, one would first set up a Graph that contains `r ref("PipeOpProxy", "po(\"proxy\")")` operators as placeholders for the operations (preprocessing, learning) that should be tuned.
-Note the different IDs to avoid a name clash.
+To recreate the example above with `po("proxy")`, the first step is to create placeholder `PipeOpProxy` operators to stand in for the operations (i.e., different paths) that should be tuned.
 
 ```{r}
 graph_learner = po("proxy", id = "preproc") %>>%
@@ -690,41 +580,52 @@ graph_learner = po("proxy", id = "preproc") %>>%
 graph_learner = as_learner(graph_learner)
 ```
 
-The tuning space for the `content` hyperparameters can now be a discrete set of the possibilities that should be evaluated.
-Using `r ref("p_fct", "paradox::p_fct()")` with a named list of PipeOps that should be inserted works here.
-Internally, `r paradox` is creating a transformation function here, see @sec-defining-search-spaces for more details.
-For the learner-part, a more complex trafo-function is required, as the selection of the learner depends on more than one search space component:
-The choice of the learner itself (`r ref("LearnerClassifRpart", "lrn(\"classif.rpart\")")` or `r ref("LearnerClassifKKNN", "lrn(\"classif.kknn\")")`), as well as the `k` hyperparameter of the KNN learner.
-This trafo-function is passed to the `.extra_trafo` argument of `r ref("ps", "ps()")`.
-The transformation accepts the hyperparameter configuration that was generated by the search space as input `x`, and returns the configuration to be assigned to the Graph -- both as named lists.
-The help page of `r ref("ps", "ps()")` gives more details on this.
-Inside this transformation, the `learner.content` value must be clonsed before modification to avoid altering the original `r ref("Learner")` object inside the search space by reference!
-Observe how this optimization, when performed with the same seed, yields the same result as above.
+The tuning space for the `content` hyperparameters should be a discrete set of possibilities to be evaluated, passed as a `r ref("p_fct")` (@sec-tune-ps).
+For the `"preproc"` proxy operator this would simply be the different `PipeOp`s that we want to consider:
 
 ```{r}
-search_space = ps(
-  preproc.content = p_fct(list(
-    nop = po("nop"),
-    pca = po("pca", rank. = rank_opt),
-    yeojohnson = po("removeconstants") %>>% po("yeojohnson")
-  )),
-  learner.content = p_fct(list(
+# define content for the preprocessing proxy operator
+preproc.content = p_fct(list(
+  nop = po("nop"),
+  pca = po("pca"),
+  yeojohnson = po("removeconstants") %>>% po("yeojohnson")
+))
+```
+
+For the `"learner"` proxy, this is more complicated as the selection of the learner depends on more than one search space component:
+The choice of the learner itself (`classif.rpart` or `classif.kknn`) and the tuned `k` hyperparameter of the KNN learner.
+To enable this we pass a transformation to `.extra_trafo` (@sec-tune-trafo).
+Note that inside this transformation we clone `learner.content` otherwise we would end up modifying the original `r ref("Learner")` object inside the search space by reference (@sec-r6).
+
+```{r}
+# define content for the learner proxy operator
+learner.content = p_fct(list(
     classif.rpart = lrn("classif.rpart"),
-    classif.kknn = lrn("classif.kknn", kernel = "rectangular")
-  )),
-  classif.kknn.k = p_int(lower = 1, upper = 32, logscale = TRUE,
-    depends = learner.content == "classif.kknn"),
-  .extra_trafo = function(x, param_set) {
+    classif.kknn = lrn("classif.kknn")
+))
+
+# define transformation to set the content values
+trafo = function(x, param_set) {
     if (!is.null(x$classif.kknn.k)) {
       x$learner.content = x$learner.content$clone(deep = TRUE)
       x$learner.content$param_set$values$k = x$classif.kknn.k
       x$classif.kknn.k = NULL
     }
     x
-  }
+}
+```
+
+We can now put this all together, add the KNN tuning, and run the experiment.
+
+```{r}
+search_space = ps(
+ preproc.content = preproc.content,
+ learner.content = learner.content,
+ # tune KKNN parameter as normal
+  classif.kknn.k = p_int(1, 32, depends = learner.content == "classif.kknn"),
+  .extra_trafo = trafo
 )
 
-set.seed(1)  # for comparison with the optimization above
 instance = tune(
   tuner = tnr("random_search"),
   task = mnist_task,
@@ -736,30 +637,43 @@ instance = tune(
 )
 
 as.data.table(instance$result)[,
-  .(preproc.content, learner.content,
+  .(preproc.content,
     classif.kknn.k = x_domain[[1]]$learner.content$param_set$values$k,
-    classif.ce)
+    learner.content, classif.ce)
 ]
 ```
 
-## Recap
+Once again, the best configuration is a KNN learner with the Yeo-Johnson transform.
+In practice `"proxy"` offers complete flexibility and may be more useful for more complicated use-cases, whereas `ppl("branch")` is more efficient in more straightforward scenarios.
 
-`r ref_pkg("mlr3pipelines")` provides `r ref("PipeOp")` objects that provide preprocessing, postprocessing, and ensembling operations that can be created using the `r ref("po", "po()")` constructor function.
-PipeOps have an ID and hyperparameters that can be set during construction and can be modified later.
+<!-- TODO: ADD HYPERBAND SVM AND FEATURE SELECTION EXAMPLES THAT USE GRAPHS AND TUNING -->
 
-PipeOps are concatenated using the `r ref("concat_graphs", "%>>%")`-operator to form `r ref("Graph")` objects.
-Graphs can be converted to `r ref("Learner")` objects using the `r ref("as_learner")` function, after which they can be benchmarked and tuned using the tools provided by `r ref_pkg("mlr3")`.
-Various standard Graphs are provided by the `r ref("ppl", "ppl()")` constructor function.
+## Conclusion
+
+In this chapter, we built on what we learnt in @sec-pipelines to develop complex non-sequential `Graph`s.
+We saw how to build our own graphs, as well as how to make use of `ppl()` to load `Graph`s that are available in `r mlr3pipelines`.
+We then looked at different ways to tune pipelines, including joint tuning of hyperparameters and tuning the selection of `PipeOp`s in a `Graph`.
+In @sec-preprocessing we will put all of this into practice as we look at pipelines for data preprocessing.
+
+@tbl-api-pipelines-nonseq provides an overview of the most important methods and classes discussed in this chapter.
+
+| Underlying R6 Class | Constructor (if applicable) | Important methods |
+| --------------------------- | --------------------- | -------------------------------------------- |
+| `r ref("Graph")` | `r ref("ppl()")` | `$pipeops`/`$edges`/`$train()`/`$predict()` |
+| `r ref("PipeOpSelect")` | `r ref("selector_grep()")`/`r ref("selector_type()")`/`r ref("selector_invert()")` |  |
+| `r ref("PipeOpBranch")`/`r ref("PipeOpUnbranch")` | `po("branch")`/`po("unbranch")` |  |
+| `r ref("PipeOpProxy")` | `po("proxy")` |  |
+
+: Important classes and functions covered in this chapter with underlying `R6` class (if applicable), constructor to create an object of the class, and important class methods. {#tbl-api-pipelines-nonseq}
 
 ## Exercises
 
-4. Consider the `r ref("PipeOpSelect", "po(\"select\")")` in @sec-pipelines-stack that is used to only keep the columns ending in "`M`".
+1. Consider the `r ref("PipeOpSelect", "po(\"select\")")` in @sec-pipelines-stack that is used to only keep the columns ending in "`M`".
   If the classification task had more than two classes, it would be more appropriate to list the single class we *do not* want to keep, instead of listing all the classes we do want to keep.
   How would you do this, using the `r ref("Selector")` functions provided by `r ref_pkg("mlr3pipelines")`?
-  (Note: The `r ref("LearnerClassifLogReg", "lrn(\"classif.log_reg\")")` learner used in @sec-pipelines-stack cannot handle more than two classes. To build the entire stack, you will need to use a different learner, such as `r ref("LearnerClassifMultinom", "lrn(\"classif.multinom\")")`.)
-5. How would you solve the previous exercise without even explicitly naming the class you want to exclude, so that your Graph works for any classification task?
-  Hint: look at the `selector_subsample` in @sec-pipelines-bagging.
-6. Use the `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` PipeOp to impute missing values in the `r ref("mlr_tasks_penguins", "tsk(\"penguins\")")` task using learners based on `r ref("ranger::ranger")`.
+  (Note: The `"classif.log_reg"` learner used in @sec-pipelines-stack cannot handle more than two classes. To build the entire stack, you will need to use a different learner).
+2. How would you solve the previous exercise without explicitly naming the class you want to exclude, so that your Graph works for any classification task?   Hint: look at the `selector_subsample` in @sec-pipelines-bagging.
+3. Use the `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` PipeOp to impute missing values in the `r ref("mlr_tasks_penguins", "tsk(\"penguins\")")` task using learners based on `r ref("ranger::ranger")`.
   Hint 1: you will need to use `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` twice, once for numeric features with `r ref("LearnerRegrRanger", "lrn(\"regr.ranger\")")`, and once for categorical features with `r ref("LearnerClassifRanger", "lrn(\"classif.ranger\")")`.
   Using the `affect_columns` argument of `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` will help you here.
   Hint 2: `r ref("ranger::ranger")` itself does not support missing values, but it is trained on all the features of `r ref("mlr_tasks_penguins", "tsk(\"penguins\")")` that it is not currently imputing, some of which will also contain missings.
