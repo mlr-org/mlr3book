@@ -32,6 +32,8 @@ serverefresh:
 	Rscript -e 'renv::restore("book/", prompt = FALSE)'
 	quarto preview book/ --cache-refresh
 
+serveref: serverefresh
+
 clean:
 	$(RM) -r book/_book book/.quarto book/site_libs;\
 	find . -name "*.ps" -type f -delete;
