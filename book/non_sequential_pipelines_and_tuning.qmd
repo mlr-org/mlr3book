@@ -646,7 +646,52 @@ as.data.table(instance$result)[,
 Once again, the best configuration is a KNN learner with the Yeo-Johnson transform.
 In practice `"proxy"` offers complete flexibility and may be more useful for more complicated use-cases, whereas `ppl("branch")` is more efficient in more straightforward scenarios.
 
-<!-- TODO: ADD HYPERBAND SVM AND FEATURE SELECTION EXAMPLES THAT USE GRAPHS AND TUNING -->
+### Hyperband {#sec-hyperband-example-svm}
+
+In this short section we will put together everything we have learnt above to demonstrate how to make use of the Hyperband tuner for any `Learner`, this section assumes you have read @sec-hyperband-tuner.
+In this example we will demonstrate how to tune any `Learner` by using the `frac` parameter of `r ref("PipeOpSubsample")` as our fidelity parameter, i.e., we are controlling the amount of data fed to the model.
+We will optimize the hyperparameters, `cost` and `gamma`, of a SVM on the `sonar` dataset:
+
+```{r optimization-070}
+learner = lrn("classif.svm", id = "svm", type = "C-classification",
+  kernel = "radial", cost  = to_tune(1e-5, 1e5, logscale = TRUE),
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE))
+```
+
+We can then construct `po("subsample")` and specify that we want to use the `frac` parameter between $[3^{-3}, 1]$ as our fidelity parameter and we set the `"budget"` tag to pass this information to Hyperband.
+We add this to our SVM and create a `GraphLearner`.
+
+```{r}
+graph_learner = as_learner(
+  po("subsample", frac = to_tune(p_dbl(3^-3, 1, tags = "budget"))) %>>%
+  learner
+)
+```
+
+As good practice we encapsulate our learner and add a fallback to prevent fatal errors (@sec-tuning-errors)
+
+```{r}
+graph_learner$encapsulate = c(train = "evaluate", predict = "evaluate")
+graph_learner$timeout = c(train = 30, predict = 30)
+graph_learner$fallback = lrn("classif.featureless")
+```
+
+Now we can tune our SVM by tuning our `GraphLearner` as normal, below we set `eta = 3` for Hyperband.
+
+```{r optimization-076}
+instance = tune(
+  tuner = tnr("hyperband", eta = 3),
+  task = tsk("sonar"),
+  learner = graph_learner,
+  resampling = rsmp("cv", folds = 3),
+  measures = msr("classif.ce")
+)
+
+unlist(instance$result$x_domain[[1]][2:3])
+```
+
+
+<!-- TODO: ADD FEATURE SELECTION EXAMPLES THAT USE GRAPHS AND TUNING -->
 
 ## Conclusion
 
@@ -658,8 +703,8 @@ In @sec-preprocessing we will put all of this into practice as we look at pipeli
 @tbl-api-pipelines-nonseq provides an overview of the most important methods and classes discussed in this chapter.
 
 | Underlying R6 Class | Constructor (if applicable) | Important methods |
-| --------------------------- | --------------------- | -------------------------------------------- |
-| `r ref("Graph")` | `r ref("ppl()")` | `$pipeops`/`$edges`/`$train()`/`$predict()` |
+| ----- | ------ | --- |
+| `r ref("Graph")` | `r ref("ppl()")` | `$train()`/`$predict()` |
 | `r ref("PipeOpSelect")` | `r ref("selector_grep()")`/`r ref("selector_type()")`/`r ref("selector_invert()")` |  |
 | `r ref("PipeOpBranch")`/`r ref("PipeOpUnbranch")` | `po("branch")`/`po("unbranch")` |  |
 | `r ref("PipeOpProxy")` | `po("proxy")` |  |
@@ -680,7 +725,5 @@ In @sec-preprocessing we will put all of this into practice as we look at pipeli
   A simple way to avoid problems here is to use `r ref("pipeline_robustify", "ppl(\"robustify\")")` *inside* `r ref("PipeOpImputeLearner", "po(\"imputelearner\")")` next to the `r ref("ranger::ranger")` learner.
 
 ::: {.content-visible when-format="html"}
-```{r citeas, cache = FALSE}
-citeas(chapter)
-```
+`r citeas(chapter)`
 :::
