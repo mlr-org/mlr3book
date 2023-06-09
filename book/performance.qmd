@@ -1,182 +1,135 @@
-# Evaluation, Resampling and Benchmarking {#sec-performance}
+# Evaluation and Benchmarking {#sec-performance}
 
 {{< include _setup.qmd >}}
 
-`r authors("Evaluation, Resampling and Benchmarking")`
+`r chapter = "Evaluation and Benchmarking"`
+`r authors(chapter)`
 
-<!-- TODO: check links e.g. autoplot etc. -->
+In supervised machine learning, a model can only be deployed in practice if it generalizes well to new, unseen data, that is if it has a good `r index("generalization performance", aside = TRUE)`.
+Accurate estimation of the generalization performance is crucial for many aspects of machine learning application and research -- whether we want to fairly compare a novel algorithm with established ones, or to find the best algorithm for a particular task.
+The concept of `r index("performance estimation")` provides information on how well a model will generalize to new data and plays an important role in the context of model comparison ( @sec-benchmarking), model selection, and hyperparameter tuning (@sec-optimization).
 
-In supervised machine learning, a model can only be deployed in practice if it generalizes well to new, unseen data.
-Accurate estimation of this so-called `r index("generalization performance")` is crucial for many aspects of machine learning application and research --- whether we want to fairly compare a novel algorithm with established ones or to find the best algorithm for a particular task after tuning.
-Hence, the concept of `r index("performance estimation")` provides information on how well a model will generalize to new data and plays an important role in the context of model comparison (which we will cover in @sec-benchmarking), model selection, and hyperparameter tuning (the topic of @sec-optimization).
-<!-- And if a model has made its way into production use, we naturally want to monitor its performance on newly gathered data to ensure that it still performs well enough to stay in use, or to re-train it if needed. -->
-
-To properly assess the generalization performance of a model, we must first decide on a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
-A performance measure typically computes a numeric score indicating how well the model predictions match the ground truth.
-However, it may also reflect other qualities such as the time for training a model or predicting.
+Assessing the generalization performance of a model begins with selecting a `r index("performance measure")` that is appropriate for our given task and evaluation goal.
+As we have seen in @sec-eval, performance measures typically compute a numeric score indicating how well the model predictions match the ground truth (though some technical measures were seen in @sec-basics-measures-tech).
 Once we have decided on a performance measure, the next step is to adopt a strategy that defines how to use the available data to estimate the generalization performance.
-Unfortunately, using the same data to train and test a model is a bad strategy as it would lead to an overly optimistic performance estimate.
-For example, an overfitted model may perfectly fit the data on which it was trained by merely memorizing it, but it will then only guess randomly on new data.
-Assessing its performance using the same data it was trained would misleadingly suggest a well-performing model.
-This makes it necessary to test a model on independent data that has not been used to train the model.
-However, we typically train a deployed model on all available data, which leaves no further data to assess its generalization performance.
-To address this issue, existing performance estimation strategies withhold a subset of the available data for evaluation purposes.
-This so-called `r index("test set")` is then used to mimic the presence of unseen data and to estimate the generalization performance.
-The process of holding back part of the data for evaluation purposes simulates the application of the deployed model in practice:
-Over time, new data is gathered that was not seen during the model training process.
-The model is used in practice to make predictions on this new data and we trust that it performs as well as reported by the performance estimate.
-<!-- As time moves on, new data is gathered that was never seen during the model training process, the deployed model makes predictions based on this new data, and we trust that the deployed model performs as well as reported by the performance estimate. -->
-Very useful information on performance measures and performance estimation can be found in @japkowicz2011evaluating.
+Using the same data to train and test a model is a bad strategy as it would lead to an overly optimistic performance estimate, for example a model that is overfitted (fit too closely to the data) could make perfect predictions on training data simply by memorizing it and then only make random guesses for new data.
+In @sec-basics-partition we introduced the `partition()` function, which splits data into data for training the model and data for testing the model and estimating the generalization performance, this is known as the holdout strategy (@sec-holdout-scoring) and is where we will begin this chapter.
+We will then consider more advanced strategies for assessing the generalization performance (@sec-resampling), look at robust methods for comparing models (@sec-benchmarking), and finally will discuss specialized performance measures for binary classification (@sec-roc).
+For an in-depth overview about measures and performance estimation, we recommend @japkowicz2011evaluating.
 
-Below, we will learn different strategies to estimate the generalization performance of a `r ref("Learner")` and how to conduct benchmark experiments for comparing multiple learners using the `r mlr3` package.
+::: {.callout-warning}
+A common **misunderstanding** is that holdout and other more advanced resampling strategies can prevent model overfitting.
+In fact, these methods just make overfitting visible as we can separately evaluate train/test performance.
+Resampling strategies also allow us to make unbiased estimations of the generalization error.
+:::
 
 ## Holdout and Scoring {#sec-holdout-scoring}
 
-A simple strategy for performance estimation is the `r index("holdout")` method, which randomly partitions the data into a single training and test set using a pre-defined splitting ratio.
-The training set is used to create a provisional model as an intermediate result (hereafter abbreviated as an intermediate model), whose sole purpose is to estimate the performance using the test set.
-This performance estimate is then used as a proxy for the performance of the final model trained on all available data which is deployed in practice.
-Ideally, the training set should be as large as possible so that the intermediate model represents the final model trained on all available data well.
-If the training data is too small, the intermediate model learns less complex relationships compared to the final model, resulting in a pessimistically biased performance estimate.
-On the other hand, we also want as much test data as possible to reliably estimate the generalization performance.
-However, both goals are not possible to achieve at the same time if we have only access to a limited amount of data.
-In practice, it is common to use 2/3 of the data as training set and 1/3 as test set for the holdout strategy as this provides a reasonable trade-off between bias and variance of the generalization performance estimate (see also @kohavi1995 and @dobbin2011).
+An important goal of ML is to learn a model that can then be used to make predictions about new data.
+For this model to be as accurate as possible, we would ideally train it on as much data as is available.
+However, data is limited and as we have discussed we cannot train and test a model on the same data.
+In practice, one would usually create an `r index('intermediate model', aside = TRUE)`, which is trained on a subset of the available data and then tested on the remainder of the data.
+The performance of this intermediate model, obtained by comparing the model predictions to the ground truth, is an estimate of the generalization performance of the final model, which is the model fitted on all data.
 
-In @sec-basics, we have already applied the holdout method by manually partitioning the data contained in a `r ref("Task")` object into a single training set (to train the model) and a single test set (to estimate the generalization performance).
-In the following we will go into more detail regarding the evaluation process, so let us set up a learner and task again:
+The `r index('holdout', aside = TRUE)` strategy is a simple method to create this split between training and testing datasets, whereby the original data is split into two datasets using a defined ratio.
+Ideally, the training dataset should be as large as possible so the intermediate model represents the final model as well possible.
+If the training data is too small, the intermediate model is unlikely to perform as well as the final model, resulting in a pessimistically biased performance estimate.
+On the other hand, if the training data is too large, then we will not have a reliable estimate of the generalization performance due to high variance resulting from small test data.
+As a rule of thumb, it is common to use 2/3 of the data for training and 1/3 for testing as this provides a reasonable trade-off between bias and variance of the generalization performance estimate (see also @kohavi1995 and @dobbin2011).
+
+In @sec-basics, we used `partition()` to apply the holdout method to a `r ref("Task")` object.
+To recap by example let's split the `penguins` task with a 2/3 holdout, which is the default in `mlr3`:
 
 ```{r performance-003}
 task = tsk("penguins")
-splits = partition(task, ratio = 2/3)
+splits = partition(task)
 learner = lrn("classif.rpart")
 learner$train(task, splits$train)
 pred = learner$predict(task, splits$test)
 ```
 
-The next step is to select a suitable performance measure from the many possibilities available in `r mlr3` in the `r ref("mlr_measures")` dictionary.
-<!-- TODO: Some practical hints on how to choose a perf. measure here? E.g., mse when outliers should be avoided and large absolute errors should be penalized more, mae when errors should be penalized proportionally to the magnitude of the error -->
-Passing the dictionary to the `as.data.table` function provides an overview of implemented measures with additional information from which we can select a suitable performance measure (see also the link provided under *Measures overview* in @sec-appendix-overview-tables).
-
-```{r performance-004}
-msr_tbl = as.data.table(mlr_measures)
-msr_tbl[1:5, .(key, task_type, predict_type, task_properties)]
-```
-
-<!-- ::: {.callout-tip} -->
-We will typically look for a measure that fits our `task_type` at hand (e.g., `"classif"` for the `penguins` task).
-Looking at the `task_properties` columns is useful to identify performance measures that support only binary classification tasks (indicated by `"twoclass"` in the `task_properties` column) such as the `"classif.auc"` measure (see also @sec-roc-space for more details on the AUC).
-Similarly, some measures require the learner to predict probabilities (indicated by `"prob"` in the `predict_type` column), while others require predicting discrete class labels (indicated by `"response"`).
-Note that some measures list a `NA` as `task_type`, or do not list any `task_properties`, which indicates that they do not have specific requirements in that regard.
-When constructing a learner, we could specify `predict_type = "prob"` to support measures that are not defined on class labels but on probabilities, such as the aforementioned AUC.
-<!-- An overview of common performance measures implemented in `r mlr3`, including a short description can also be found by following the link provided in the overview table under *Measures overview* in @sec-appendix-overview-tables. -->
-<!-- ::: -->
-
-From @sec-predicting, we know that a `r ref("Prediction")` object contains both predictions (column `response`) and ground truth (column `truth`).
-In performance estimation, we are usually interested in calculating a numeric score that quantifies the differences between predicted values and ground truth values.
-In `r mlr3`, this score is computed by a `r ref("Measure")` object, which usually defines how the differences between predicted and ground truth values are quantified.
-`r ref("Measure")` objects can be created by passing the `key` from the `r ref("mlr_measures")` dictionary of the selected performance measure to the `msr()` function:
+We can now estimate the generalization performance of a final model by evaluating the quality of the predictions from our intermediate model.
+As we have seen in @sec-eval, this is simply a case of choosing one or more measures and passing them to the `$score()` function.
+So to estimate the accuracy of our final model we would pass the accuracy measure to our intermediate model:
 
 ```{r}
-measure = msr("classif.acc")
-measure
+pred$score(msr("classif.acc"))
 ```
 
-Many performance measures are based on point-wise losses, i.e., they compute the differences between the predicted values and ground truth values first on observation level and then aggregate the individual loss values into a single numeric score (composite loss).
+::: {.callout-tip}
+When splitting data it is essential to do this randomly to remove any information that is encoded in data ordering.
+The order of data is often informative in real-world datasets, for example hospital data will likely be ordered by time of patient admission.
+In the `penguins` task, the data is ordered such that the first 152 rows all have the label 'Adelie', the next 68 have label 'Chinstrap', and the final 124 have label 'Gentoo'; so if we did not split the data randomly we could end up with a model that is only trained on one or two species.
+
+`partition()` and all resampling strategies discussed below automatically randomly split the data to prevent any biases (so do not forget to set a seed for reproducibility).
+:::
+
+Many performance measures are based on 'decomposable' losses, which means they compute the differences between the predicted values and ground truth values first on an observation level and then aggregate the individual loss values into a single numeric score (composite loss).
 For example, the classification accuracy compares whether the predicted values from the `response` column have the same value as the ground truth values from the `truth` column of the `r ref("Prediction")` object.
-Hence, for each observation, the point-wise loss takes either value 1 (if `response` and `truth` have the same value) or 0 otherwise.
-The `$score()` method summarizes these individual loss values into a composite loss by counting the fraction of observations where the point-wise loss is 1 (i.e., the fraction of observations where `response` and `truth` have the same value).
-Other performance measures exist that are not based on point-wise losses, as they are not defined on observation level, but on a set of observations.
-Examples include the AUC measure (see also @sec-roc-space).
-In @fig-score, we illustrate the input-output behavior of the `$score()` method.
+Hence, for each observation, the decomposable loss takes either value 1 (if `response` and `truth` have the same value) or 0 otherwise.
+The `$score()` method summarizes these individual loss values into a composite loss by counting the fraction of observations where the decomposable loss is 1 (i.e., the fraction of observations where `response` and `truth` have the same value).
+Other performance measures that are not decomposable instead act on a set of observations, we will return to this in detail when we look at the AUC measure in @sec-roc.
+@fig-score illustrates the input-output behavior of the `$score()` method, we will return to this as we turn to more complex evaluation strategies.
 
 ```{r performance-017}
 #| echo: false
 #| label: fig-score
 #| fig-cap: "Illustration of the `$score()` method which aggregates predictions of multiple observations contained in a prediction object into a single numeric score"
 #| fig-align: "center"
-#| fig-alt: "A funnel-shaped diagram. Illustration of the `$score()` method which aggregates predictions of multiple observations contained in a prediction object into a single numeric score."
+#| fig-alt: A funnel-shaped diagram where the far left box shows the output from a classification prediction object with row_ids, truth, and response columns. Next to this is a box that just says '$score()', which then passes to the right in a funnel shape to a box that says 'classif.acc 0.920354'.
 knitr::include_graphics("Figures/predict-score-single.drawio.svg")
 ```
-
-The code below shows how to estimate the classification accuracy using the `$score()` method of the previously created `r ref("Prediction")` object:
-
-```{r}
-pred$score(measure)
-```
-
-It is also possible to create a list of multiple measures using the `msrs()` function and pass it to the `$score()` method to compare a vector of scores. 
-
-```{r}
-measures = msrs(c("classif.acc", "classif.ce"))
-pred$score(measures)
-```
-
-A `r ref("Measure")` can also provide meta information such as the time it took to train the model or the time to make predictions.
-These measures do not use of the information contained in the `r ref("Prediction")` object and therefore require passing the trained learner to the `$score()` method, which includes the corresponding elapsed time information:
-
-```{r}
-measures = msrs(c("time_train", "time_predict"))
-pred$score(measures, learner = learner)
-```
-
-::: {.callout-tip}
-More information about a specific performance measure, including its mathematical definition, can be obtained using the `$help()` method of a `r ref("Measure")` object, which opens the help page of the corresponding measure, e.g., `msr("classif.acc")$help()` provides all information about the classification accuracy.
-:::
 
 ## Resampling {#sec-resampling}
 
 `r index("Resampling")` strategies repeatedly split all available data into multiple training and test sets, with one repetition corresponding to what is called a resampling iteration in `r mlr3`.
 An intermediate model is then trained on each training set and the remaining test set is used to measure the performance in each resampling iteration.
-The generalization performance is finally estimated by aggregating the performance scores over multiple resampling iterations (see @fig-ml-abstraction for an illustration).
-Resampling methods allow using more data points for testing, while keeping the training sets to learn the intermediate models as large as possible.
+The generalization performance is finally estimated by aggregating the performance scores over multiple resampling iterations (@fig-ml-abstraction).
 By repeating the data splitting process often enough, more data points can be used for both training and testing, allowing a more efficient use of all available data for performance estimation.
-<!-- Repeating the data splitting process often enough increases the likelihood that each data point is part of both the train and test set, making more efficient use of all available data for performance estimation. -->
-<!-- Repeating the data splitting process often enough increases the likelihood that across all resampling iterations each data point will be used for training and testing, allowing more efficient use of all available data for performance estimation. -->
-Furthermore, a high number of resampling iterations can reduce the variance and result in a more reliable performance estimate.
-<!-- , which allows us to be more confident in our performance estimates. -->
-This effectively means that the performance estimate is less likely affected by an unlucky split (e.g., a split that does not reflect the original data distribution).
-<!-- , which is a known issue of the holdout method. -->
-However, since resampling strategies create multiple intermediate models trained on different parts of the available data and average their performance, they evaluate the performance of the learning algorithm that induced these intermediate models, rather than the performance of the final model which is deployed in practice.
+Furthermore, a high number of resampling iterations can reduce the variance in our scores and thus result in a more reliable performance estimate.
+This means that the performance estimate is less likely to be affected by an 'unlucky' split (e.g., a split that does not reflect the original data distribution).
 <!-- It is therefore important to train the intermediate models on nearly all data points from the same distribution so that the intermediate models and the final model are similar. -->
 The best we can do if we only have access to a limited amount of data is to estimate the performance of the final model by the performance of the learning algorithm.
 
 ```{r performance-002, echo=FALSE}
 #| label: fig-ml-abstraction
-#| fig-cap: "A general abstraction of the performance estimation process: The available data is (repeatedly) split into (a set of) training data and test data (data splitting / resampling process). The learner is applied to each training data and produces intermediate models (learning process). Each intermediate model along with its associated test data produces predictions. The performance measure compares these predictions with the associated actual target values from each test data and computes a performance value for each test data. All performance values are aggregated into a scalar value to estimate the generalization performance (evaluation process)."
+#| fig-cap: "A general abstraction of the performance estimation process. The available data is (repeatedly) split into (a set of) training data and test data (data splitting / resampling process). The learner is trained on each training dataset and produces intermediate models (learning process). Each intermediate model makes predictions based on the features in the test data. The performance measure compares these predictions with the ground truth from the test data and computes a performance value for each test dataset. All performance values are aggregated into a scalar value to estimate the generalization performance (evaluation process)."
 #| fig-align: "center"
-#| fig-alt: "A flowchart-like diagram with 3 overlapping boxes. Left box has the caption 'Data splitting / resampling process', upper right box has caption 'Learning process', and lower right box has caption 'Evaluation process'. The process starts in the left box with 'Data' and an arrow to 'Resampling Strategy', which bifurcates into two elements stacked vertically: 'Train Set(s)' above and 'Test Set(s)' below. The 'Train set(s)' element leads to a large blue box with the caption 'Learning process'. There, the 'Train set(s)' flows into the Learner, together with 'Hyperparameters'. An arrow points from the 'Learner' to a stack of 'Intermediate Model(s)'. One thick arrow goes down into the yellow box to a stack of 'Prediction(s)'. And arrow goes from there to 'Performance measure'. The 'Test set(s)' from earlier also have an arrow to 'Performance measure'. From there, a thick arrow goes to 'Performance Value(s)', which has a final dashed arrow to 'Aggregated Performance'."
+#| fig-alt: "A flowchart-like diagram with 3 overlapping boxes. Left box has the caption 'Data splitting / resampling process', upper right box has caption 'Learning process', and lower right box has caption 'Evaluation process'. The process starts in the left box with 'Data' and an arrow to 'Resampling Strategy', which separates into two elements stacked vertically: 'Train Set(s)' above and 'Test Set(s)' below. The 'Train set(s)' element leads to a 'Learner' box, which is inside the larger 'Learning Process' box. A box that says 'Hyperparameters' also sits within the 'Learning Process' and is connected with an arrow also pointing to 'Learner'. An arrow points from the 'Learner' to a stack of 'Intermediate Model(s)'. One thick arrow goes down into the yellow box to a stack of 'Prediction(s)'. An arrow goes from there to 'Performance measure'. The 'Test set(s)' from earlier also have an arrow to 'Performance measure'. From there, a thick arrow goes to 'Performance Value(s)', which has a final dashed arrow to 'Aggregated Performance'."
 knitr::include_graphics("Figures/ml_abstraction-2.svg")
 ```
 
-<!-- Existing resampling strategies differ in how they partition the available data into training and test set. -->
 A variety of resampling strategies exist, each with their respective advantages and disadvantages, which depend on the number of available samples, the task complexity, and the type of model.
-For example, the $k$-fold `r index("cross-validation")` method randomly partitions the data into $k$ non-overlapping subsets, called folds (see @fig-cv-illustration).
-Then $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as test data exactly once in each of the $k$ iterations.
-The $k$ performance estimates resulting from each fold are then aggregated to obtain a more reliable performance estimate.
-This makes cross-validation a popular strategy, as each observation is guaranteed to be used in one of the test sets throughout the procedure, making efficient use of the available data for performance estimation.
-Common values for $k$ are 5 and 10, resulting in each training set containing a factor of 4/5 or 9/10 of the original data.
-Several variations of cross-validation exist, including repeated $k$-fold cross-validation where the entire process illustrated in @fig-cv-illustration is repeated multiple times, and leave-one-out cross-validation (LOO-CV) where the number of folds is equal to the number of observations, leading to the test set in each fold consisting of exactly one observation.
-While LOO-CV sounds like a good strategy in general as it reduces variance, it is computationally very expensive due to the need to fit $N$ models.
-Furthermore, LOO-CV has also drawbacks especially for imbalanced binary classification tasks with a relatively small minority class, e.g., if the test set is a data point from the minority class, the trained model may rely more strongly on the majority class.
-Concepts such as stratification (see @sec-strat-group), which are available for many resampling strategies and can mitigate this problem, are not possible for LOO-CV.
-For linear or polynomial regression models, LOO-CV with mean squared error (MSE) as performance measure can be computed efficiently via a closed-form formula without the need to fit $N$ models, yet this does not apply in the general case (see @james2013introduction).
-<!-- Specific settings such as linear regression allow for a more efficient implementation, yet this does not apply in the general case. -->
 
-`r index("Subsampling")` and `r index("bootstrapping")` are two related strategies, the difference being that subsampling randomly selects a proportion of the data $k$ times _without replacement_, whereas bootstrapping performs a similar procedure _with replacement_.
-Therefore, bootstrapping can result in training sets of the same size as the original data, but at cost of repeating some observations.
-On average, in bootstrapping $1 - e^{-1} \approx 63.2\%$ of the data points will be contained in the training set, referred to as "in-bag" samples, conversely to the remaining 36.8% "out of bag" samples that are used as test set.
-For both procedures, it is generally recommended to choose more rather than fewer repetitions (e.g. $\geq 200$).
-Although increasing this value will lead to longer computation times, the benefit of performing more repetitions (e.g. $\geq 200$) to obtain a more reliable performance estimate usually outweighs the higher computation times.
-For subsampling, sampling ratios of 4/5 or 9/10 are common, resulting in training set proportions analogous to 5-fold or 10-fold cross-validation.
-Note that terminology regarding resampling strategies is not consistent across the literature: Subsampling for example is also referred to as "repeated holdout", or "Monte Carlo cross-validation", which is why it is advisable to verify formal definitions of resampling techniques applied in literature.
+<!-- FIXME: BB REWRITE START HERE -->
+A very common strategy is $k$-fold `r index("cross-validation", aside = TRUE)` (CV), which randomly partitions the data into $k$ non-overlapping subsets, called folds (@fig-cv-illustration).
+The $k$ models are trained on training data consisting of $k-1$ of the folds, with the remaining fold being used as the test data, this process is then repeated until each fold has acted exactly once as the test data.
+The $k$ performance estimates resulting from each fold are aggregated to obtain a more reliable performance estimate (@hastie2001).
+Cross-validation guarantees that each observation will be used in one of the test sets throughout the procedure, making efficient use of the available data for performance estimation.
+Common values for $k$ are 5 and 10, meaning each training will consist of 4/5 or 9/10 of the original data respectively.
+Several variations of cross-validation exist, including repeated $k$-fold cross-validation [Repeated $k$-fold cross-validation]{.aside}\index{resampling!repeated k-fold cross-validation} where the $k$-fold process is repeated multiple times, and `r index('leave-one-out cross-validation', aside = TRUE)` (LOO-CV) where the number of folds is equal to the number of observations, leading to the test set in each fold consisting of exactly one observation.
+LOO-CV sounds reduces variance in the performance estimate but is computationally very expensive due to the need to fit $N$ models.
+For linear or polynomial regression models, LOO-CV with mean squared error (MSE) as the performance measure can be computed efficiently via a closed-form formula without the need to fit $N$ models, yet this does not apply in the general case (see @james2013introduction).
+Furthermore, LOO-CV is also problematic in imbalanced binary classification tasks as concepts such as stratification (see @sec-strat-group) cannot be applied to LOO-CV.
+
+`r define("Subsampling")` and `r define("bootstrapping")` are two related resampling strategies.
+Subsampling randomly selects a given ratio (4/5 and 9/10 are common) of the data for the training dataset where each observation in the dataset is drawn *without replacement* from the original dataset.
+The model is trained on this data and then tested on the remaining data, and this process is repeated $k$ times.
+This differs from $k$-fold CV as the subsets of training/test data between iterations are not related and each is drawn independently from one another, which means that, across iterations, observations could occur in more than one testing dataset (but only once per dataset).
+Bootstrapping follows the same process as subsampling but data is drawn *with replacement* from the original dataset, this means an observation could be selected multiple times (and thus duplicated) in the training data (but never more than once per test dataset).
+This means that bootstrapping can result in training sets of the same size as the original data, but at the cost of repeating some observations.
+On average, $1 - e^{-1} \approx 63.2\%$ of the data points will be contained in the training set during bootstrapping, referred to as "in-bag" samples (the other 36.8% are known as "out-of-bag" samples).
+For both procedures, it is recommended to choose a higher number of repetitions, e.g. $\geq 200$.
+Although increasing this value will lead to longer computation times, the benefit of performing more repetitions to obtain a more reliable performance estimate will usually outweigh higher computation times.
+Note that terminology regarding resampling strategies is not consistent across the literature, for example subsampling is sometimes referred to as "repeated holdout" \index{repeated holdout|see{subsampling}} or "Monte Carlo cross-validation" \index{Monte Carlo cross-validation|see{subsampling}}, which is why it is advisable to verify formal definitions of resampling techniques applied in literature.
 
 The choice of the resampling strategy usually depends on the specific task at hand and the goals of the performance assessment, but some rules of thumb are available.
-If the available data is fairly small ($N \leq 500$), repeated cross-validation with a large number of repetitions can be used to keep the variance of the performance estimates low.
+If the available data is fairly small ($N \leq 500$), repeated cross-validation with a large number of repetitions can be used to keep the variance of the performance estimates low (10 folds and 10 repetitions is a good place to start).
 For the $500 \leq N \leq 50000$ range, 5- to 10-fold cross-validation is generally recommended.
 In general, the larger the dataset, the fewer splits are required, yet sample-size issues can still occur, e.g., due to imbalanced data.
 Additional recommendations are given by @hpo_practical, which focuses on the model optimization aspect covered in @sec-optimization.
-<!-- For more information on resampling strategies in general, @japkowicz2011evaluating give a comprehensive overview. -->
-Properties and pitfalls of different resampling techniques which we have summarized here have been widely studied and discussed in the literature, see e.g., @molinaro2005prediction, @kim2009estimating, and @bischl2012resampling.
- <!-- @bengio2003no,  -->
+Properties and pitfalls of different resampling techniques, some of which we have summarized here, have been widely studied and discussed in the literature, e.g., @molinaro2005prediction, @kim2009estimating, and @bischl2012resampling.
+<!-- FIXME: BB REWRITE END HERE -->
 
 <!-- Source: https://docs.google.com/presentation/d/1BJXJ365C9TWelojV93IeQJAtEiD3uZMFSfkhzgYH-n8/edit?usp=sharing -->
 ```{r performance-007, echo=FALSE}
@@ -187,173 +140,102 @@ Properties and pitfalls of different resampling techniques which we have summari
 knitr::include_graphics("Figures/cross-validation.svg")
 ```
 
-In `r mlr3`, many resampling strategies have already been implemented so that users do not have to implement them from scratch, which can be tedious and error-prone.
-In this section, we cover how to use `r mlr3` to
+In the rest of this section we will go through querying and constructing resampling strategies in `mlr3`, instantiating train-test splits, and then performing resampling on learners.
 
-* query (@sec-resampling-strategies) implemented resampling strategies,
-* construct (@sec-resampling-construct) resampling objects for a selected resampling strategy,
-* instantiate (@sec-resampling-inst) the train-test splits of a resampling object on a given task, and
-* perform (@sec-resampling-exec) the selected resampling strategy on a learning algorithm to obtain resampling results.
+### Constructing a resampling strategy {#sec-resampling-construct}
 
-### Query {#sec-resampling-strategies}
-
-All implemented resampling strategies can be queried by looking at the `r ref("mlr_resamplings")` dictionary (also listed in @sec-appendix-overview-tables).
-Passing the dictionary to the `as.data.table` function provides a more structured output with additional information:
+All implemented resampling strategies are stored in the `r ref("mlr_resamplings")` dictionary.
 
 ```{r performance-008}
 as.data.table(mlr_resamplings)
 ```
 
-For example, the column `params` shows the parameters of each resampling strategy (e.g., the train-test splitting `ratio` or the number of `repeats`) and the column `iters` displays to the number of performed resampling iterations.
-The number of iterations is a choosable parameter of many strategies such as subsampling, where the `repeats` parameter can be adjusted accordingly.
-For the holdout strategy however, `iters` will of course always show a value of 1.
+The `params` column shows the parameters of each resampling strategy (e.g., the train-test splitting `ratio` or the number of `repeats`) and `iters` displays the number of performed resampling iterations by default.
 
-### Construction {#sec-resampling-construct}
-
-Once we have decided on a resampling strategy, we have to construct a `r ref("Resampling")` object via the function `r ref("rsmp()")`, which will define the resampling strategy we want to employ.
-For example, to construct a `r ref("Resampling")` object for holdout, we use the value shown in the `key` column from the `r ref("mlr_resamplings")` dictionary and pass it to the `r ref("rsmp()")` convenience function.
-Here we select the `holdout` strategy, which allows us to use the same train-test-split which we previously applied using `r ref("partition()")`:
+`r ref("Resampling", index = TRUE, aside = TRUE)` objects can be constructed by passing the strategy 'key' to the sugar function `r ref("rsmp()", aside = TRUE)`.
+For example, to construct the holdout strategy with a 4/5 split (2/3 is default):
 
 ```{r performance-009}
-resampling = rsmp("holdout")
-print(resampling)
+rsmp("holdout", ratio = 0.8)
 ```
 
-By default, the `rsmp("holdout")` will use 2/3 of the data as training set and 1/3 as test set.
-We can adjust this by specifying the `ratio` parameter for holdout either during construction or by updating the `ratio` parameter afterwards.
-For example, we construct a `r ref("Resampling")` object for holdout with a 80:20 split, then update it to 75:25:
-
-```{r performance-010}
-resampling = rsmp("holdout", ratio = 0.8)
-resampling$param_set$values = list(ratio = 0.75)
-resampling
-```
-
-Holdout only estimates the generalization performance using a single test set, so our performance estimate might vary greatly depending on random chance, and in particular when the dataset contains only few samples.
-To obtain a more reliable performance estimate that makes use of all available data, we have to use other resampling strategies.
-For example, we could also set up a 10-fold cross-validation:
+Parameters for objects inheriting from `Resampling` work in the exact same way as measures and learners and can be set, retrieved, and updated accordingly:
 
 ```{r performance-011}
-rsmp("cv", folds = 10)
+# 3-fold CV
+cv3 = rsmp("cv", folds = 3)
+# Bootstrapping with 3 repeats and 9/10 ratio
+boot100 = rsmp("bootstrap", repeats = 3, ratio = 0.9)
+# 2-repeats 5-fold CV
+rcv25 = rsmp("repeated_cv", repeats = 2, folds = 5)
 ```
 
-Analogously, bootstrapping with 100 repetitions and a sampling ratio of 9/10 could be defined like this:
-
-```{r}
-rsmp("bootstrap", repeats = 100, ratio = 0.9)
-```
-
- <!-- The `$is_instantiated` field of a `r ref("Resampling")` object constructed as shown above is set to `FALSE`.
-This means that the resampling strategy is not yet applied to a task, i.e., the train-test splits are not contained in the `r ref("Resampling")` object. -->
-
-### Instantiation {#sec-resampling-inst}
-
-<!-- In this section, we show how to instantiate a resampling strategy (i.e., how to generate the train-test splits) by applying it to a task. -->
-<!-- To obtain the row indices for the training and the test splits, we need to call the `instantiate()` method on a `r ref("Task")` object. -->
-<!-- The resulting train-test indices are then stored in the `r ref("Resampling")` object: -->
-
-When a `r ref("Resampling")` object is constructed, it does not yet contain a concrete set of train-test splits.
-Instead, it merely defines how the data splitting process will be performed on the task when actually running the resampling strategy.
-To actually generate the train-test splits for a given task, we can manually instantiate a resampling strategy by calling the `$instantiate()` method of the previously constructed `r ref("Resampling")` object on the `r ref("mlr_tasks_penguins")` task.
-This will manifest a fixed partition and store the row indices for the training and test sets directly in the `r ref("Resampling")` object.
-We can access these row IDs via the `$train_set()` and `$test_set()` methods:
+When a `r ref("Resampling")` object is constructed, it is simply a definition for how the data splitting process will be performed on the task when running the resampling strategy.
+However, it is possible to manually instantiate a resampling strategy, i.e., generate all train-test splits, by calling the `$instantiate()`\index{\$instantiate()}[`$instantiate()`]{.aside} method on a given task.
+So carrying on our `penguins` example we can instantiate the 3-fold CV object and then view the row indices of the data selected for training and testing each fold using `$train_set()` and `$test_set()` respectively:
 
 ```{r performance-012}
-task = tsk("penguins")
-resampling = rsmp("holdout", ratio = 0.8)
-resampling$instantiate(task)
-train_ids = resampling$train_set(1)
-str(train_ids)
-test_ids = resampling$test_set(1)
-str(test_ids)
+cv3$instantiate(task)
+# first 5 observations in first training fold
+cv3$train_set(1)[1:5]
+# first 5 observations in third test fold
+cv3$test_set(3)[1:5]
 ```
 
-The fact that a `r ref("Resampling")` object is instantiated is indicated by the `$is_instantiated` field.
-When the aim is to fairly compare multiple learners, it is crucial to use the same train-test splits to obtain comparable results.
-That is, we need to ensure that all learners being compared use the same training data to build a model and that they use the same test data to evaluate the model performance.
-Note that in practice, you might rarely need to manually call `$instantiate()`, especially when using `resample()`, which we will discuss next.
+When the aim is to fairly compare multiple learners, best practice dictates that all learners being compared use the same training data to build a model and that they use the same test data to evaluate the model performance.
+In practice, manually instantiating resampling strategies is rarely required but might be useful for debugging or digging deeper into a model's performance.
+Resampling strategies are instantiated automatically for you when using the `resample()`  method, which we will discuss next.
 
-::: {.callout-tip}
-In @sec-benchmarking, you will learn about the `r ref("benchmark()")` function, which automatically instantiates `r ref("Resampling")` objects on all tasks.
-This will ensure a fair comparison by making use of the exact same training and test sets for learning and evaluating the fitted intermediate models.
-:::
+### Resampling experiments {#sec-resampling-exec}
 
-### Perform Resampling {#sec-resampling-exec}
-
-The `r ref("resample()")` function is used to run the resampling strategy defined by a `r ref("Resampling")` object on a task for a given learner.
-It repeatedly fits a model on training sets and stores the predictions made on the corresponding test sets.
-The `r ref("Resampling")` does not have to be instantiated before being passed to `resample()`, it takes care of that for us.
-Calling `resample()` on a task, learner, and resampling object returns a `r ref("ResampleResult")` which contains all information needed to estimate the generalization performance.
-We can print the `r ref("ResampleResult")` to see its contents:
+The `r ref("resample()", aside = TRUE)` function takes a given `Task`, `Learner`, and `r ref("Resampling")` object to run the given resampling strategy.
+`resample()` repeatedly fits a model on training sets and stores predictions in a `r ref("ResampleResult", aside = TRUE)` object, which contains all information needed to estimate the generalization performance.
 
 ```{r performance-013}
-resampling = rsmp("cv", folds = 4)
-rr = resample(task, learner, resampling)
-rr
+rr = resample(task, learner, cv3)
+as.data.table(rr)
 ```
 
-Here, we used 4-fold cross-validation as resampling strategy.
-The resulting `r ref("ResampleResult")` object provides various methods to access the stored information.
-The two most relevant methods for performance assessment are `$score()` and `$aggregate()`.
-
-In @sec-eval, we learned that `r ref("Prediction")` objects can contain both model predictions and ground truth values, which are used to calculate the performance measure using the `$score()` method.
-Similarly, we can use the `$score()` method of a `r ref("ResampleResult")` object to calculate the performance measure for each resampling iteration separately.
-This means that the `$score()` method produces one value per resampling iteration that reflects the performance estimate of the intermediate model trained in the corresponding iteration.
-<!-- Specifically, it extracts the model predictions of each resampling iteration and calculates the performance measure in each resampling iteration separately. -->
-By default, `$score()` uses the test set in each resampling iteration to calculate the performance measure.
-
-::: {.callout-tip}
-We are not limited to scoring predictions on the test set --- if we set the argument `predict_sets = "train"` within the `$score()` method, we calculate the performance measure of each resampling iteration based on the training set instead of the test set.
-:::
-
-In the code example below, we explicitly use the classification accuracy (`classif.acc`) as performance measure and pass it to the `$score()` method to obtain the estimated performance of each resampling iteration separately:
+We can see the three iterations (one for each fold) returned by the `ResampleResult`.
+As with `Prediction` objects, we can evaluate the score *in each iteration* with `$score()`:
 
 ```{r performance-014}
-acc = rr$score(msr("classif.acc"))
-acc[, .(iteration, classif.acc)]
+acc = rr$score(msr("classif.ce"))
+acc[, .(iteration, classif.ce)]
 ```
 
-<!-- Already a box in previous chapter
 ::: {.callout-tip}
-If we do not explicitly pass a `r ref("Measure")` object to the `$score()` method, the classification error (`classif.ce`) and the mean squared error (`regr.mse`) are used as defaults for classification and regression tasks respectively.
+By default `$score()` evaluates the performance in the *test* sets in each iteration, however you could evaluate the *train* set performance with `$score(predict_sets = "train")`.
 :::
--->
 
-Similarly, we can pass `r ref("Measure")` objects to the `$aggregate()` method to calculate an aggregated score across all resampling iterations.
-There are two approaches for aggregating scores across resampling iterations: The first is referred to as the `r index("macro average")`, which first calculates the measure in each resampling iteration separately, and then averages these scores across all iterations.
-The second approach is the `r index("micro average")`, which pools all predictions across resampling iterations into one `r ref("Prediction")` object and computes the measure on this directly.
-The classification accuracy `msr("classif.acc")` uses the macro average by default, but the micro average can be computed as well by specifying the `average` argument:
-
-```{r performance-015}
-#| eval: true
-rr$aggregate(msr("classif.acc"))
-rr$aggregate(msr("classif.acc", average = "micro"))
-```
-
-::: {.callout-tip}
-The classification accuracy compares the predicted class and the ground truth class of a single observation (point-wise loss) and calculates the proportion of correctly classified observations (average of point-wise loss).
-For performance measures that simply take the (unweighted) average of point-wise losses such as the classification accuracy, macro averaging and micro averaging will be equivalent unless the test sets in each resampling iteration have different sizes.
-For example, in the code example above, macro averaging and micro averaging yield the same classification accuracy because the `r ref("mlr_tasks_penguins")` task (consisting of 344 observations) is split into 4 equally-sized test sets (consisting of 86 observations each) for the 4-fold cross-validation.
-When using 5-fold cross-validation instead, macro averaging and micro averaging can lead to a (slightly) different performance estimate as the test sets can not all have the same size:
-
-```{r performance-016}
-rr5 = resample(task, learner, rsmp("cv", folds = 5))
-rr5$aggregate(msr("classif.acc"))
-rr5$aggregate(msr("classif.acc", average = "micro"))
-```
-
-As an intuition regarding the different approaches, consider what happens in calculating the mean of a vector compared to the mean of two group-wise means:
+Whilst `$score()` returns the performance in each evaluation, `r index('$aggregate()', aside = TRUE, code = TRUE)`, returns the aggregated score across all resampling iterations.
 
 ```{r}
-mean(c(3, 5, 9, 1, 5, 3))
-mean(mean(c(3, 5, 9)), mean(c(1, 5, 3)))
+rr$aggregate(msr("classif.ce"))
 ```
 
-We can see that the results differ, and are easily affected by the sizes of each subgroup.
+By default, the majority of measures will aggregate scores using a `r index("macro average")`, which first calculates the measure in each resampling iteration separately, and then averages these scores across all iterations.
+However, it is also possible to aggregate scores using a `r index("micro average")`, which pools predictions across resampling iterations into one `r ref("Prediction")` object and then computes the measure on this directly:
 
+```{r performance-015}
+rr$aggregate(msr("classif.ce", average = "micro"))
+```
 
-For other performance measures that are not defined on observation level but rather on a set of observations such as the area under the ROC curve `msr("classif.auc")`, macro averaging and micro averaging will usually lead to different values.
-Note that the default type of aggregation is determined by the `r ref("Measure")` object, see also the fields `$average` and `$aggregator` the in help page of `r ref("Measure")` for more details.
+We can see a *small* difference between the two methods, which is because classification error is a decomposable loss (@sec-holdout-scoring), in fact if the test sets all had the same size then the micro and macro methods would be identical (see box below).
+For errors like AUC, which are defined across the set of observations, then the difference between micro- and macro-averaging will be larger.
+The default type of aggregation method can be found by querying the `$average` field of a `r ref("Measure")` object.
+
+::: {.callout-tip}
+As a simple example to explain macro- and micro-averaging, consider the difference between taking the mean of a vector (micro) compared to the mean of two group-wise means (macro):
+
+```{r}
+# macro
+mean(mean(c(3, 5, 9)), mean(c(1, 5)))
+# micro
+mean(c(3, 5, 9, 1, 5))
+```
+
+In the above example where we used the `penguins` data, there is a difference in the classification error between micro and macro methods because the dataset has 344 rows, which is not divisible by three, hence the test sets are not of an equal size.
 :::
 
 The aggregated score returned by `$aggregate()` estimates the generalization performance of our selected learner on the given task using the resampling strategy defined in the `r ref("Resampling")` object.
@@ -369,425 +251,268 @@ While we are usually interested in this aggregated score, it can be useful to lo
 knitr::include_graphics("Figures/predict-score-aggregate-resampling.drawio.svg")
 ```
 
-### Inspecting ResampleResult Objects {#sec-resampling-inspect}
+To visualize the resampling results, you can use the `r ref("mlr3viz::autoplot.ResampleResult()")` function to plot scores across folds as boxplots or histograms (@fig-resamp-viz).
+Histograms can be useful to visually gauge the variance of the performance results across resampling iterations, whereas boxplots are often used when multiple learners are compared side-by-side (see @sec-benchmarking).
 
-Now we will take a look at some important fields and methods of a `r ref("ResampleResult")` object.
-We first take a glimpse at what is actually contained in the object before converting it to a `r ref("data.table")` for further inspection:
+```{r performance-035}
+#| layout-ncol: 2
+#| label: fig-resamp-viz
+#| fig-subcap:
+#|   - "Boxplot of accuracy scores."
+#|   - "Histogram of accuracy scores."
+#| message: false
+#| fig-alt: "Left: a boxplot ranging from 0.875 to 1.0 and the interquartile range between 0.925 and 0.7. Right: a histogram with five bars in a roughly normal distribution with mean 0.95, minimum 0.875 and maximum 1.0."
+rr = resample(task, learner, rsmp("cv", folds = 10))
+autoplot(rr, measure = msr("classif.acc"), type = "boxplot")
+autoplot(rr, measure = msr("classif.acc"), type = "histogram")
+```
+
+### ResampleResult Objects {#sec-resampling-inspect}
+
+As well as being useful for estimating the generalization performance, the `r ref("ResampleResult")` object can also be used for model inspection.
+We can use the `$predictions()` method to obtain a list of `r ref("Prediction")` objects corresponding to the predictions from each resampling iteration, which can be used to analyze the predictions of individual intermediate models from each resampling iteration and, e.g., to manually compute a macro averaged performance estimate.
 
 ```{r performance-018}
-rr
-rrdt = as.data.table(rr)
-rrdt
+# list of prediction objects
+rrp = rr$predictions()
+# print first two
+rrp[1:2]
+
+# macro averaged performance
+mean(sapply(rrp, function(.x) .x$score()))
 ```
 
-We can see that the `r ref("Task")`, `r ref("Learner")`, and `r ref("Resampling")` objects we previously passed to the `r ref("resample()")` function are stored in list columns of the `r ref("data.table")`.
-In addition, we also have an integer column `iteration` that indicates the resampling iteration and another list column that contains the corresponding `r ref("Prediction")` objects of each iteration.
-We can access the respective `prediction` column or directly use the `$predictions()` method of the `r ref("ResampleResult")` object (without converting it to a `r ref("data.table")` first) to obtain a list of `r ref("Prediction")` objects of each resampling iteration.
-
-This allows us to analyze the predictions of individual intermediate models from each resampling iteration and, e.g., to manually compute a macro averaged performance estimate.
-Instead, we can use the `$prediction()` method to extract a single `r ref("Prediction")` object that combines the predictions of each intermediate model across all resampling iterations.
+The `$prediction()` method can be used to extract a single `r ref("Prediction")` object that combines the predictions of each intermediate model across all resampling iterations.
 The combined prediction object can be used to manually compute a micro averaged performance estimate, for example:
 
-```{r performance-020}
-#| eval: true
+```{r}
 pred = rr$prediction()
 pred
-pred$score(msr("classif.acc"))
+pred$score()
 ```
 
-By default, the intermediate models produced at each resampling iteration are discarded after the prediction step to reduce memory consumption of the `r ref("ResampleResult")` object and because only the predictions are required to calculate the performance measure.
+By default, the intermediate models produced at each resampling iteration are discarded after the prediction step to reduce memory consumption of the `r ref("ResampleResult")` object (only the predictions are required to calculate the performance measure).
 However, it can sometimes be useful to inspect, compare, or extract information from these intermediate models.
-To do so, we can configure the `r ref("resample()")` function to keep the fitted intermediate models by setting `store_models = TRUE`.
+We can configure the `r ref("resample()")` function to keep the fitted intermediate models by setting `store_models = TRUE`.
 Each model trained in a specific resampling iteration is then explicitly stored and can be accessed via `$learners[[i]]$model`, where `i` refers to the `i`-th resampling iteration:
 
 ```{r performance-021}
-rr = resample(task, learner, resampling, store_models = TRUE)
+rr = resample(task, learner, cv3, store_models = TRUE)
+# get the model from the first iteration
 rr$learners[[1]]$model
 ```
 
-Here, we see the decision tree model fitted by the `r ref_pkg("rpart")` package.
-As models fitted by `r ref_pkg("rpart")` provide information on how important features are, we can inspect how the importance varies across the resampling iterations:
+In this example, we could then inspect the most important variables in each iteration to help us learn more about the respective fitted models:
 
 ```{r performance-022}
-lapply(rr$learners, function(x) x$model$variable.importance)
+# print 2nd and 3rd iteration
+lapply(rr$learners, function(x) x$model$variable.importance)[2:3]
 ```
-
-Every resampling iteration involves a training step and a prediction step.
-Learner-specific error or warning messages may occur during both of these two steps.
-If the learner passed to the `r ref("resample()")` function runs in an encapsulated framework that allows logging (see the `$encapsulate` field of a `r ref("Learner")` object), all potential warning or error messages will be stored in the `$warnings` and `$errors` fields of the `r ref("ResampleResult")` object.
 
 ### Custom Resampling {#sec-resamp-custom}
 
 {{< include _optional.qmd >}}
 
 Sometimes it is necessary to perform resampling with custom splits, e.g., to reproduce results reported in a study with pre-defined folds.
-A custom resampling strategy can be constructed using `rsmp("custom")`, where the row indices of the observations used for training and testing must be defined manually when instantiated in a task.
-In the example below, we construct a custom holdout resampling strategy by manually assigning row indices to the `$train` and `$test` fields.
+
+A custom holdout resampling strategy can be constructed using `rsmp("custom")`, where the row indices of the observations used for training and testing must be defined manually when instantiated in a task.
+In the example below, we first construct a custom holdout resampling strategy by manually assigning row indices to the `$train` and `$test` fields, then construct a CV type strategy by passing row indices as list elements:
 
 ```{r performance-023}
 resampling = rsmp("custom")
+
+# holdout strategy with one fold
 resampling$instantiate(task,
-  train = list(c(1:50, 151:333)),
-  test = list(51:150)
+  train = list(c(1:50, 54:333)),
+  test = list(51:53)
 )
+resample(task, learner, resampling)$prediction()
+
+# CV type strategy with multiple folds
+train_sets = c(1:5, 153:158, 277:280)
+resampling$instantiate(task,
+  train = list(train_sets, train_sets + 5),
+  test = list(train_sets + 15, train_sets + 25)
+)
+resample(task, learner, resampling)$prediction()
 ```
 
-The resulting `r ref("Resampling")` object can then be used like all other resampling strategies.
-To show that both sets contain the row indices we have defined, we can inspect the instantiated `r ref("Resampling")` object:
-
-```{r performance-024}
-str(resampling$train_set(1))
-str(resampling$test_set(1))
-```
-
-A custom version of the cross-validation strategy can be constructed using `rsmp("custom_cv")`.
-The important difference is that we now have to specify either a custom `factor` variable or a `factor` column from the data to determine the folds.
-In the example below, we instantiate a custom 4-fold cross-validation strategy using a `factor` variable called `folds` that contains 4 equally sized levels to define the 4 folds, each with one quarter of the total size of the `"penguin"` task:
+A custom cross-validation strategy can more efficiently be constructed with `rsmp("custom_cv")`.
+In this case, we now have to specify either a custom `factor` variable or a `factor` column from the data to determine the folds.
+In the example below, we use a smaller version of the `penguins` task and instantiate a custom 2-fold cross-validation strategy using a `factor` variable called `folds` where the first and third rows are used as the test set in Fold 1, and the second and fourth rows are used as the test set in Fold 2:
 
 ```{r performance-025}
+task_small = tsk("penguins")$filter(c(1, 100, 200, 300))
 custom_cv = rsmp("custom_cv")
-folds = as.factor(rep(1:4, each = task$nrow/4))
-custom_cv$instantiate(task, f = folds)
-custom_cv
+folds = as.factor(c(1, 2, 1, 2))
+custom_cv$instantiate(task_small, f = as.factor(folds))
+resample(task_small, learner, custom_cv)$predictions()
 ```
 
-
-### Resampling with Stratification and Grouping {#sec-strat-group}
+### Stratification and Grouping {#sec-strat-group}
 
 {{< include _optional.qmd >}}
 
-In `r mlr3`, we can assign a special role to a feature contained in the data by configuring the corresponding `$col_roles` field of a `r ref("Task")`, which we introduced in @sec-row-col-roles.
-Two of these column roles are of particular interest for resampling: `"group"` and `"stratum"`.
+Using column roles (@sec-row-col-roles), it is possible to group or stratify observations according to a particular feature or the target.
+We will look at each of these in turn.
 
-In some cases, it is desirable to keep observations together when the data is split into corresponding training and test sets, especially when a set of observations naturally belong to a group, e.g., when the data contains repeated measurements of individuals (longitudinal studies) or when dealing with spatial or temporal data.
-When observations belong to groups, we want to ensure that all observations of the same group belong to either the training set or the test set to prevent any potential leakage of information between training and testing sets.
-For example, in a longitudinal study, measurements of a person are usually taken at multiple time points.
-Grouping ensures that the model is tested on data from each person that it has not seen during training, while maintaining the integrity of the person's measurements across different time points.
-In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave-one-object-out" cross-validation strategy, where not only a single observation is left out, but all observations associated with a certain group (see @fig-group for an illustration).
+#### Grouped Resampling {.unlisted .unnumbered}
 
-<!-- where it is not one measurement that is left out, but all measurements associated with one particular individual, institution, or broader object of measurement. -->
+Keeping observations together when the data is split can be useful, and sometimes essential, during resampling -- spatial analysis (@sec-spatiotemporal) is a prominent example of when this is essential, as observations belong to natural groups (e.g., countries).
+When observations belong to groups, we need to ensure all observations of the same group belong to *either* the training set *or* the test set to prevent potential leakage of information between training and testing.
+For example, in a longitudinal study, measurements are taken from the same individual at multiple time points.
+Grouping ensures that the model is tested on data from each *person*, and not each observations, thereby ensuring that data in the training set is not correlated with data in the test set.
+In this context, the leave-one-out cross-validation strategy can be coarsened to the "leave-one-object-out" cross-validation strategy, where all observations associated with a certain group are left out (@fig-group).
 
 ```{r performance-026, echo=FALSE}
 #| label: fig-group
 #| fig-cap: "Illustration of the train-test splits of a leave-one-object-out cross-validation with 3 groups of observations (highlighted by different colors)."
 #| fig-align: "center"
-#| fig-alt: "Illustration of the train-test splits of a leave-one-object-out cross-validation with 3 groups of observations (highlighted by different colors)."
+#| fig-alt: "Three images with a vertical dashed line separating them, each image shows a blue box with text 'Train' and white space around it with text 'Test'. The left image shows a blue box with green and red dots inside it and yellow dots outside it, the caption says 'Iteration 1'. The middle image shows a blue box with green and yellow dots inside it and red dots outside it, the caption says 'Iteration 2'. The right image shows a blue box with yellow and red dots inside it and green dots outside it, the caption says 'Iteration 3'."
 knitr::include_graphics("Figures/loobject.svg")
 ```
 
-In `r mlr3`, the column role `"group"` allows to specify the column in the data that defines the group structure of the observations (see also the help page of `r ref("Resampling")` for more information on the column role `"group"`).
-The column role can be specified by assigning a feature to the `$col_roles$group` field which will then determine the group structure.
-The following code performs leave-one-object-out cross-validation using the feature `year` of the `r ref("mlr_tasks_penguins")` task to determine the grouping.
-Since the feature `year` contains only three distinct values (i.e., `2007`, `2008`, and `2009`), the corresponding test sets consist of observations from only one year:
-
-<!-- In `r mlr3`, we can assign a special column role to a feature contained in the data either during task construction or afterwards by specifying the feature that defines the group in the `$col_roles$group` field.  -->
-<!-- For example, the column role `"group"` specifies which column in the data should be used to define the group structure of the observations (see also the help section on `r ref("Resampling")` for more information on the column role `"group"`). -->
-
-<!-- A possible use case for the need of grouping (or blocking) of observations during resampling is spatiotemporal modeling, where observations inherit a natural grouping, either in space or time or in both space and time that need to be considered during resampling. -->
+The `"group"` column role allows us to specify the column in the data that defines the group structure of the observations.
+In the following code we construct a leave-one-out resampling strategy, assign the `"group"` role to the the 'year' column of the `penguins` dataset, instantiate the resampling strategy, and finally show how the years are nicely separated in the first fold.
 
 ```{r performance-027}
-task_grp = tsk("penguins")
-task_grp$col_roles$group = "year"
 r = rsmp("loo")
+task_grp = tsk("penguins")
+task_grp$set_col_roles("year", "group")
 r$instantiate(task_grp)
-
-table(task_grp$data(cols = "year"))
+table(task_grp$data(rows = r$train_set(1), cols = "year"))
 table(task_grp$data(rows = r$test_set(1), cols = "year"))
 ```
 
-:::{.callout-tip}
-If there are many groups, say 100, we can limit the number of resampling iterations using k-fold cross-validation (or any other resampling strategy with a previously definable number of resampling iterations) instead of performing leave-one-object-out cross-validation.
-In this case, each group is considered as a single observation, so that the division into training and test sets is done as determined by the resampling strategy
-:::
+Other cross-validation techniques work in a similar way, where folds are determined at a group-level (as opposed to an observation-level).
 
-Another column role available in `r mlr3` is `"stratum"`, which implements stratified sampling.
+#### Stratified Sampling {.unlisted .unnumbered}
+
 Stratified sampling ensures that one or more discrete features within the training and test sets will have a similar distribution as in the original task containing all observations.
-This is especially useful when a discrete feature is highly imbalanced and we want to make sure that the distribution of that feature is similar in each resampling iteration.
-Stratification is commonly used for imbalanced classification tasks where the classes of the target feature are imbalanced (see @fig-stratification for an illustration).
-Stratification by the target feature ensures that each intermediate model is fit on training data where the class distribution of the target is representative of the actual task.
-Otherwise it could happen that target classes are severely under- or over represented in individual resampling iterations, skewing the estimation of the generalization performance.
+This is especially useful when a discrete feature is highly imbalanced and we want to make sure that the distribution of that feature is similar in each resampling iteration (@fig-stratification).
+We can also stratify on the target feature to ensure that each intermediate model is fit on training data where the class distribution of the target is representative of the actual task, this is useful to ensure target classes are not strongly under-represented by random chance in individual resampling iterations, which would lead to degenerate estimations of the generalization performance.
 
 ```{r performance-028, echo=FALSE}
 #| label: fig-stratification
 #| fig-cap: "Illustration of a 3-fold cross-validation with stratification for an imbalanced binary classification task with a majority class that is about twice as large as the minority class. In each resampling iteration, the class distribution from the available data is preserved (which is not necessarily the case for cross-validation without stratification)."
 #| fig-align: "center"
-#| fig-alt: "Illustration of a 3-fold cross-validation with stratification for an imbalanced binary classification task with a majority class that is about twice as large as the minority class. In each resampling iteration, the class distribution from the available data is preserved (which is not necessarily the case for cross-validation without stratification)."
+#| fig-alt: "The figure shows rectangles in yellow and green to represent the majority and minority class respectively. On the left side are rectangles corresponding to the task before it is split; the majority class is clearly larger than the minority class. In the next three boxes we see Iterations 1-3 where the visual size difference between the majority and minority classes is preserved."
 knitr::include_graphics("Figures/stratification.svg")
 ```
 
-<!-- Stratified sampling ensures that the training and test sets will have similar distribution regarding one or more discrete features as in the original task containing all observations. -->
-The `$col_roles$stratum` field of a `r ref("Task")` can be set to one or multiple features, including the target in case of classification tasks.
-In case of multiple features, each combination of the values of all stratification features will form a stratum.
-For example, the target column `species` of the `r ref("mlr_tasks_penguins")` task is imbalanced:
+Unlike grouping, it is possible to stratify by multiple discrete features using the `"stratum"` column role.
+In this case, stratum would be formed out of each combination of the stratified features, e.g., for two stratified features A and B with levels Aa, Ab, Ba, Bb respectively then the created stratum would be AaBa, AaBb, AbBa, AbBb.
+
+The `penguins` task displays imbalance in the `species` column, as can be seen in the output below:
 
 ```{r performance-029}
 prop.table(table(task$data(cols = "species")))
 ```
 
-Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the training and test sets of a 3-fold cross-validation strategy:
+Without specifying a `"stratum"` column role, the `species` column may have quite different class distributions across the training and test sets of a k-fold cross-validation strategy, as can be seen in the example below.
 
 ```{r performance-030}
-r = rsmp("cv", folds = 3)
-r$instantiate(task)
-prop.table(table(task$data(rows = r$test_set(1), cols = "species")))
-prop.table(table(task$data(rows = r$test_set(2), cols = "species")))
-prop.table(table(task$data(rows = r$test_set(3), cols = "species")))
+cv10 = rsmp("cv", folds = 10)
+cv10$instantiate(task)
+rbind("Fold 1" = prop.table(table(task$data(rows = cv10$test_set(1), cols = "species"))),
+"Fold 2" = prop.table(table(task$data(rows = cv10$test_set(2), cols = "species"))))
 ```
 
-In the worst case, and especially for highly imbalanced classes, the minority class might be entirely left out of the training set in one or more resampling iterations.
-Consequently, the intermediate models within these resampling iterations will never predict the minority class, resulting in a misleading performance estimate for any resampling strategy without stratification.
-Relying on such a misleading performance estimate can have severe consequences for a deployed model, as it will perform poorly on the minority class in real-world scenarios.
-For example, misclassification of the minority class can have serious consequences in certain applications such as in medical diagnosis or fraud detection, where failing to identify the minority class may result in serious harm or financial losses.
-Therefore, it is important to be aware of the potential consequences of imbalanced class distributions in resampling and use stratification to mitigate highly unreliable performance estimates.
+We can see across folds how Chinstrap is represented quite differently (`r round(prop.table(table(task$data(rows = cv10$test_set(1), cols = "species")))[2],2)` vs. `r round(prop.table(table(task$data(rows = cv10$test_set(2), cols = "species")))[2],2)`)
+
+When imbalance is severe, minority classes might not occur in the training sets entirely.
+Consequently, the intermediate models within these resampling iterations will never predict the missing class, resulting in a misleading performance estimate for any resampling strategy without stratification, which could have severe consequences for a deployed model as it will perform poorly on the minority class in real-world scenarios (e.g., medical diagnosis of rare diseases).
+It is important to be aware of the potential consequences of imbalanced class distributions in resampling and use stratification to mitigate highly unreliable performance estimates.
 The code below uses `species` as `"stratum"` column role to illustrate that the distribution of `species` in each test set will closely match the original distribution:
 
 ```{r performance-031}
 task_str = tsk("penguins")
-task_str$col_roles$stratum = "species"
-r = rsmp("cv", folds = 3)
-r$instantiate(task_str)
+# set species to have both the 'target' and 'stratum' column role
+task_str$set_col_roles("species", c("target", "stratum"))
+cv10$instantiate(task_str)
 
-prop.table(table(task_str$data(rows = r$test_set(1), cols = "species")))
-prop.table(table(task_str$data(rows = r$test_set(2), cols = "species")))
-prop.table(table(task_str$data(rows = r$test_set(3), cols = "species")))
+rbind("Fold 1" = prop.table(table(task_str$data(rows = cv10$test_set(1), cols = "species"))),
+"Fold 2" = prop.table(table(task_str$data(rows = cv10$test_set(2), cols = "species"))))
 ```
 
-Rather than assigning the `$col_roles$stratum` directly, it is also possible to use the `$set_col_roles()` method to add or remove columns to specific roles incrementally:
-
-```{r performance-032}
-task_str$set_col_roles("species", remove_from = "stratum")
-task_str$col_roles$stratum
-
-task_str$set_col_roles("species", add_to = "stratum")
-task_str$col_roles$stratum
-```
-
-We can further inspect the current stratification via the `$strata` field, which returns a `data.table` of the number of observations (`N`) and row indices (`row_id`) of each stratum.
-Since we stratified by the `species` column, we expect to see the same class frequencies as when we tabulate the task by the `species` column:
-
-```{r performance-033}
-task_str$strata
-table(task$data(cols = "species"))
-```
-
-Should we add another stratification column, the `$strata` field will show the same values as when we cross-tabulate the two variables of the task:
+You can view the observations that fall into each stratum using the `$strata` field of a `Task` object, this can be particularly useful when we are interested in multiple strata:
 
 ```{r performance-034}
-task_str$set_col_roles("year", add_to = "stratum")
-
+task_str$set_col_roles("year", "stratum")
 task_str$strata
 table(task$data(cols = c("species", "year")))
 ```
 
-### Plotting Resample Results {#sec-autoplot-resampleresult}
-
-`r mlr3viz` provides an `r ref("autoplot()")` function to automatically visualize the resampling results either in a boxplot or histogram:
-
-<!-- Note: using `fig-subcap` here as `fig-cap` would duplicate the captions. Plots are simple enough to not warrant individual captions though :/ -->
-
-```{r performance-035}
-#| layout-ncol: 2
-#| fig-subcap:
-#|   - "Boxplot of accuracy scores."
-#|   - "Histogram of accuracy scores."
-#| message: false
-resampling = rsmp("bootstrap")
-rr = resample(task, learner, resampling)
-
-library(mlr3viz)
-autoplot(rr, measure = msr("classif.acc"), type = "boxplot")
-autoplot(rr, measure = msr("classif.acc"), type = "histogram")
-```
-The histogram is useful to visually gauge the variance of the performance results across resampling iterations, whereas the boxplot is often used when multiple learners are compared side-by-side.
-
-We can also visualize a 2-dimensional prediction surface of individual models in each resampling iteration if the task is restricted to two features:
-
-```{r performance-036}
-#| warning: false
-#| fig-cap: "Decision boundaries of a decision tree learner across 4 cross-validation folds"  
-task$select(c("bill_length", "flipper_length"))
-resampling = rsmp("cv", folds = 4)
-rr = resample(task, learner, resampling, store_models = TRUE)
-autoplot(rr, type = "prediction")
-```
-
-Prediction surfaces like this are a useful tool for model inspection, as they can help to identify the cause of unexpected performance result.
-Naturally, they are also popular for educational purposes to illustrate the prediction behavior of different learning algorithms, such as the classification tree in the example above with its characteristic orthogonal lines.
-
 ## Benchmarking {#sec-benchmarking}
 
-<!-- introduction from chapter intro moved to section intro -->
-`r index("Benchmarking")` in supervised machine learning refers to the comparison of different learners on a single task or multiple tasks.
-When comparing learners on a single task or on a domain consisting of multiple similar tasks, the main aim is often to rank the learners according to a pre-defined performance measure and to identify the best-performing learner for the considered task or domain.
-In an applied setting, benchmarking may be used to evaluate whether a deployed model used for a given task or domain can be replaced by a better alternative solution.
-When comparing multiple learners on multiple tasks, the main aim is often more of a scientific nature, e.g., to gain insights into how different learners perform in different data situations or whether there are certain data properties that heavily affect the performance of certain learners (or certain hyperparameters of learners).
-For example, it is common practice for algorithm designers to analyze the generalization performance or runtime of a newly proposed learning algorithm in a benchmark study where it has been compared with existing learners.
-<!-- In an applied setting, benchmarking is used to compare a production model to e.g. a novel method or re-trained model based on the original learner to evaluate whether the model is still suitable. -->
+`r index("Benchmarking")` in supervised machine learning refers to the comparison of different learners on one or more tasks.
+When comparing *multiple learners on a single task* or on a domain consisting of multiple similar tasks, the main aim is often to rank the learners according to a pre-defined performance measure and to identify the best-performing learner for the considered task or domain.
+When comparing *multiple learners on multiple tasks*, the main aim is often more of a scientific nature, e.g., to gain insights into how different learners perform in different data situations or whether there are certain data properties that heavily affect the performance of certain learners (or certain hyperparameters of learners).
+It is common (and good) practice for algorithm designers to analyze the generalization performance or runtime of a newly proposed learning algorithm in a benchmark study where it has been compared with existing learners.
 
-<!-- previous subsection intro
-`r index("Benchmarking")` is used to compare the performance of different learning algorithms applied on one or more tasks using (potentially different) resampling strategies.
-The purpose is to rank the learning algorithms regarding a performance measure of interest and to identify the best learning algorithms for a certain task or across various tasks.
--->
-The `r mlr3` package offers the convenience function `r ref("benchmark()")` to conduct a `r index("benchmark experiment")`.
-<!-- and repeatedly train and evaluate multiple learners under the same conditions. -->
-The function internally runs the `r ref("resample()")` function on each task separately and collects the results, so one can think of it as an extension of `r ref("resample()")`.
-The provided resampling strategy is automatically instantiated on each task to ensure a fair comparison by training and evaluating multiple learners under the same conditions.
-This means that all provided learners use the same train-test splits for each task, which we emphasized in the previous section.
-<!-- Example moved from quick start: -->
-For illustration, we show a minimal code example that compares the classification accuracy of the decision tree against a featureless learner which always predicts the majority class:
+### benchmark() {#sec-bm-design}
 
-```{r performance-006}
-learners = c(learner, lrn("classif.featureless"))
-d = benchmark_grid(tasks = task, learners = learners, resamplings = resampling)
-bmr = benchmark(design = d)
-acc = bmr$aggregate(msr("classif.acc"))
-acc[, .(task_id, learner_id, classif.acc)]
-```
+`r index('Benchmark experiments')` in `mlr3` are conducted with `r ref("benchmark()", aside = TRUE)`, which simply runs `r ref("resample()")` on each task and learner separately, then collects the results.
+The provided resampling strategy is automatically instantiated on each task to ensure that all learners are compared against the same training and test data.
 
-In this section, we cover how to
-
-* construct a benchmark design (@sec-bm-design) to define the benchmark experiments to be performed,
-* run the benchmark experiments (@sec-bm-exec) and aggregate their results, and
-* convert benchmark objects (@sec-bm-resamp) to other types of objects that can be used for different purposes.
-
-### Constructing Benchmarking Designs {#sec-bm-design}
-
-In `r mlr3`, we can define a design to perform benchmark experiments via the `r ref("benchmark_grid()")` convenience function.
-The design is essentially a table of scenarios to be evaluated and usually consists of unique combinations of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")` triplets.
-
-The `r ref("benchmark_grid()")` function constructs an exhaustive design to describe which combinations of learner, task and resampling should be used in a benchmark experiment.
-It properly instantiates the used resampling strategies so that all learners are evaluated on the same train-test splits for each task, ensuring a fair comparison.
-To construct a list of `r ref("Task")`, `r ref("Learner")` and `r ref("Resampling")` objects, we can use the convenience functions `r ref("tsks()")`, `r ref("lrns()")`, and `r ref("rsmps()")`.
-
-<!-- To set up the learners, we deviate from the default behavior by setting them to predict probabilities rather than class labels (`predict_type = "prob"`) to allow scoring the results using the AUC measure. -->
-
-<!-- We also set them up to predict for the observations of both the training and test set by (`predict_sets = c("train", "test")`), rather than only making predictions on the test data. -->
-
-We design an example benchmark experiment and train a classification tree from the `r ref_pkg("rpart")` package, a random forest from the `r ref_pkg("ranger")` package and a featureless learner serving as a baseline on four different binary classification tasks.
-The constructed `r index("benchmark design")` is a `data.table` containing the task, learner, and resampling combinations in each row that should be performed:
+To use the `benchmark()` function we first call `r ref("benchmark_grid()")`, which constructs an exhaustive *design* to describe all combinations of the learners, tasks and resamplings to be used in a benchmark experiment, and instantiates the resampling strategies.
+By example, below we setup a design to see if a random forest, decision tree, or featureless baseline (@sec-basics-featureless), perform best across two classification tasks.
 
 ```{r performance-037}
-tasks = tsks(c("german_credit", "sonar", "breast_cancer"))
-learners = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"),
+tasks = tsks(c("german_credit", "sonar"))
+learners = lrns(c("classif.rpart", "classif.ranger", "classif.featureless"),
   predict_type = "prob")
 resampling = rsmps("cv", folds = 5)
 
 design = benchmark_grid(tasks, learners, resampling)
 head(design)
 ```
-<!-- Note: Raphael's chapter comments were against printing the design grid, whereas Bernd in a later meeting was explicitly for printing it. -->
 
-<!-- No longer needed as new printer makes this superfluous
-Since the `r ref("data.table")` contains R6 objects within list-columns, we unfortunately can not infer too much about the `task` column, but the `r ref("ids")` utility function can be used for quick inspection or subsetting:
-
-```{r performance-038}
-mlr3misc::ids(design$task)
-design[mlr3misc::ids(task) == "sonar", ]
-```
--->
-
-It is also possible to subset the design, e.g., to exclude a specific task-learner combination by manually removing a certain row from the design which is a `data.table`.
-Alternatively, we can construct a custom benchmark design by manually defining a `data.table` containing task, learner, and resampling objects (see also the examples section in the help page of `r ref("benchmark_grid()")`).
+The resulting design is essentially just a `data.table`, which can be modified if you want to remove particular combinations or could even be created from scratch without the `benchmark_grid` function.
 
 ::: {.callout-warning}
+## Reproducibility when using benchmark_grid
+
 By default, `benchmark_grid()` instantiates the resamplings on the tasks, which means that concrete train-test splits are generated.
 Since this process is random, it is necessary to set a seed **prior to** calling `benchmark_grid()` in order to ensure reproducibility of the data splits.
 :::
 
-<!-- :::{.callout-tip} -->
-<!-- Note that if you construct a custom design with `r ref("data.table()")`, the train/test splits will be different for each row of the design if you do not [**manually instantiate**](#resampling-inst) the resampling before constructing the design. -->
-<!-- ::: -->
-
-<!-- ```{r performance-021} -->
-<!-- #| echo: false -->
-<!-- # Creating a grid using a cross join -->
-<!-- design_manual = data.table::CJ( -->
-<!--   task = tsks(c("german_credit", "sonar")), -->
-<!--   learner = lrns(c("classif.ranger", "classif.rpart", "classif.featureless"), -->
-<!--                  predict_type = "prob", predict_sets = c("train", "test")), -->
-<!--   resampling = rsmps("cv", folds = 3), -->
-<!--   sorted = FALSE -->
-<!-- ) -->
-
-<!-- # Manually remove e.g. the third combination from the grid -->
-<!-- design_manual = design_manual[-3] -->
-
-<!-- # Manually instantiate the resamplings -->
-<!-- Map(function(task, resampling) { -->
-<!--   resampling$instantiate(task) -->
-<!-- }, task = design_manual$task, resampling = design_manual$resampling) -->
-<!-- ``` -->
-
-
-### Perform Benchmark Experiments {#sec-bm-exec}
-
-To run the benchmark experiment, we can pass the constructed benchmark design to the `r ref("benchmark()")` function, which will internally call `r ref("resample()")` for all the combinations of task, learner, and resampling strategy in our benchmark design:
+The constructed benchmark design can then be passed to `r ref("benchmark()")` to run the experiment and the result is a `r ref("BenchmarkResult")` object:
 
 ```{r performance-039}
 bmr = benchmark(design)
 bmr
 ```
 
-Once the benchmarking is finished (this can take some time, depending on the size of your design), we can aggregate the performance results with the `$aggregate()` method of the returned `r ref("BenchmarkResult")`:
+As `benchmark()` is just an extension of `resample()`, we can once again use `$score()`, or `$aggregate()` depending on your use-case, though note that in this case `$score()` will return results over each fold of each learner/task/resampling combination.
 
 ```{r performance-040}
-acc = bmr$aggregate(msr("classif.acc"))
-acc[, .(task_id, learner_id, classif.acc)]
+head(bmr$score())
+bmr$aggregate()[, .(task_id, learner_id, classif.ce)]
 ```
 
-As the results are shown in a `r ref("data.table")`, we can easily aggregate or otherwise post-process the results.
-For example, if we are interested in the learner that performed best across all tasks, we could average the performance of each individual learner across all tasks.
-Please note that averaging performance scores across multiple tasks as in this example is not always appropriate for comparisons across different tasks.
-This is because different tasks may have different levels of difficulty, complexity, or variability in the data they involve. 
-Therefore, averaging the performance across different tasks may not provide a fair comparison.
-A more common alternative to compare the overall algorithm performance across multiple tasks is to first compute the ranks of each learner on each task separately and then compute the average ranks.
-This may provide a more robust comparison of the performance by taking into account the relative ranking of the learner on each task, rather than their raw performance scores.
-However, when using ranks, we lose the information about the numerical differences of the calculated performance scores.
-<!-- TODO: link to the "statistical tests for benchmarks" section? -->
-For illustration purposes, we show how to average the performance of each individual learner across all tasks:
+This would conclude a basic benchmark experiment where you can draw tentative conclusions about model performance, in this case we would possibly conclude the decision tree is a better performing model.
+We draw conclusions cautiously here as we have not run any statistical tests or included standard errors of measures, so we cannot definitively say if one model outperforms the other.
 
-```{r performance-041}
-acc[, list(mean_accuracy = mean(classif.acc)), by = "learner_id"]
-```
+As the results of `$aggregate()` are returned in a `data.table`, you can post-process and analyze the results in any way you want.
+A common *mistake* is to average the learner performance over all tasks when the tasks vary significantly.
+This is a mistake as averaging the performance will miss out important insights into how learners compare on 'easier' or more 'difficult' predictive problems.
+A more robust alternative to compare the overall algorithm performance across multiple tasks is to compute the ranks of each learner on each task separately and then calculate the average ranks.
+This can provide a better comparison as task specific 'quirks' are taken into account by comparing learners within tasks before comparing them across tasks.
+However, using ranks will lose information about the numerical differences of the calculated performance scores.
+Analysis of benchmarking experiments is covered in more detail in @sec-benchmark-analysis.
 
-Ranking the performance scores can either be done via standard `r ref("data.table")` syntax, or more conveniently with the `r mlr3benchmark` package.
-We first use `r ref("as_benchmark_aggr")` to aggregate the `r ref("BenchmarkResult")` using our measure, after which we use the `$rank_data()` method to convert the performance scores to ranks.
-The `minimize` argument is used to indicate that the classification accuracy should not be minimized, i.e. a higher score is better.
-
-```{r performance-042}
-library("mlr3benchmark")
-
-bma = as_benchmark_aggr(bmr, measures = msr("classif.acc"))
-bma$rank_data(minimize = FALSE)
-```
-
-This results in per-task rankings of the three learners.
-Unsurprisingly, the featureless learner ranks last, as it always predicts the majority class.
-However, it is common practice to include it as a baseline in benchmarking experiments to easily gauge the relative performance of other algorithms.
-In this simple benchmark experiment, the random forest ranked first, outperforming a single classification tree as one would expect.
-
-### Inspect BenchmarkResult Objects {#sec-bm-resamp}
+### BenchmarkResult Objects {#sec-bm-resamp}
 
 A `r ref("BenchmarkResult")` object is a collection of multiple `r ref("ResampleResult")` objects.
-We can analogously use `r ref("as.data.table")` to take a look at the contents and compare them to the `r ref("data.table")` of the `r ref("ResampleResult")` from the previous section (`rrdt`):
 
 ```{r performance-043}
 bmrdt = as.data.table(bmr)
-
-bmrdt[1:2, -"uhash"]
-rrdt[1:2, ]
+bmrdt[1:2, .(task, learner, resampling, iteration)]
 ```
 
-We see that the general contents of a `r ref("BenchmarkResult")` and `r ref("ResampleResult")` which we specified in @sec-resampling-inspect is very similar, with the additional unique identification column `"uhash"` in the former being the only difference.
-We did not show this column to save space, but it is used to uniquely identify individual `ResampleResult`s:
-
-```{r}
-bmrdt[c(1, 7, 12), ]
-```
-
-
-The stored `r ref("ResampleResult")`s can be extracted via the `$resample_result(i)` method, where `i` is the index of the performed benchmark experiment.
-This allows us to investigate the extracted `r ref("ResampleResult")` or individual resampling iterations as shown previously (see @sec-resampling).
+The contents of a `r ref("BenchmarkResult")` and `r ref("ResampleResult")` (@sec-resampling-inspect) are almost identical and the stored `r ref("ResampleResult")`s can be extracted via the `$resample_result(i)` method, where `i` is the index of the performed benchmark experiment.
+This allows us to investigate the extracted `r ref("ResampleResult")` and individual resampling iterations as shown in @sec-resampling, as well as the predictions from each fold with `$resample_result(i)$predictions()`.
 
 ```{r performance-044}
 rr1 = bmr$resample_result(1)
@@ -796,103 +521,50 @@ rr2 = bmr$resample_result(2)
 rr2
 ```
 
-Multiple `r ref("ResampleResult")` can be again converted to a `r ref("BenchmarkResult")` with the function `r ref("as_benchmark_result()")` and combined with `c()`:
+In addition, `BenchmarkResult`s also have the `r ref('as_benchmark_result()', aside = TRUE, index = TRUE)` method, which can be used to convert objects from `ResampleResult` to `BenchmarkResult`, and then optionally combined, which is useful when conducting experiments across multiple machines.
 
 ```{r performance-045}
 bmr1 = as_benchmark_result(rr1)
 bmr2 = as_benchmark_result(rr2)
 
-bmr_combined = c(bmr1, bmr2)
-bmr_combined$aggregate(msr("classif.acc"))
+c(bmr1, bmr2)
 ```
 
-Combining multiple `r ref("BenchmarkResult")`s into a larger result object can be useful if related benchmarks where computed on different machines.
-
-<!-- Note: Removing ROC stuff from this section made it too small to justify a heading I think.
-### Plotting Benchmark Results {#autoplot-benchmarkresult}
--->
-
-Similar to creating automated visualizations for tasks, [predictions](#autoplot-prediction), or [resample results](#autoplot-resampleresult), the `r mlr3viz` package also provides a `r ref("autoplot()")` method to visualize benchmark results, by default as a box plot:
+Boxplots are most commonly used to visualize benchmark experiments as they can intuitively summarize results across tasks and learners simultaneously.
+They can also be used to identify potentially unexpected behavior, such as a learner performing reasonably well for most tasks, but yielding noticeably worse scores in one task.
+In the case of @fig-benchmark-box, the three learners show consistent relative performance to each other and in an expected order.
 
 ```{r performance-046}
 #| fig-height: 5
 #| fig-width: 6
+#| label: fig-benchmark-box
 #| fig-cap: "Boxplots of accuracy scores for each learner across resampling iterations and the three tasks. Random forests (`classif.ranger`) consistently performs outperforms the other learners."
+#| fig-alt: Nine boxplots, one corresponding to each task/learner combination. In all cases the random forest performs best and the featureless baseline the worst.
 autoplot(bmr, measure = msr("classif.acc"))
 ```
 
-Such a plot summarizes the benchmark experiment across all tasks and learners.
-Visualizing performance scores across all learners and tasks in a benchmark helps identifying potentially unexpected behavior, such as a learner performing reasonably well for most tasks, but yielding noticeably worse scores in one task.
-In the case of our example above, the three learners show consistent relative performance to each other, in the order we would expect: Random forest performs best, then the single decision tree, and the featureless learner in last place.
-
-**TODO:** We will expand on benchmark experiments in more depth in chapter (insert ref to batchtools/benchmark chapter once finalized).
-
-<!-- We're moving this to a later chapter
-### Statistical Tests
-
-{{< include _optional.qmd >}}
-
-The `r mlr3benchmark` package we previously used for ranking also provides infrastructure for applying statistical significance tests on `r ref("BenchmarkResult")` objects.
-Currently, Friedman tests and pairwise Friedman-Nemenyi tests [@demsar2006] are supported to analyze benchmark experiments with at least two independent tasks and at least two learners.
-
-`$friedman_posthoc()` can be used for a pairwise comparison:
-
-```{r performance-047}
-bma = as_benchmark_aggr(bmr, measures = msr("classif.acc"))
-bma$friedman_posthoc()
-```
-
-These results would indicate a statistically significant difference between the `"featureless"` learner and `"ranger"`, assuming a 95% confidence level.
-
-The results can be summarized in a critical difference plot which typically shows the mean rank of a learning algorithm on the x-axis along with a thick horizontal line that connects learners which are not significantly different:
-
-```{r performance-048}
-autoplot(bma, type = "cd")
-```
-
-Similar to the test output before, this visualization leads to the conclusion that the `"featureless"` learner and `"ranger"` are significantly different, whereas the critical rank difference of 1.66 is not exceed for the comparison of the `"featureless"` learner, `"rpart"` and `"ranger"`, respectively.
-
--->
-
 ## Evaluation of Binary Classifiers {#sec-roc}
 
-We will now look at specialized performance measures for binary classification implemented in `r mlr3`.
-We start introducing the confusion matrix and some useful performance measures that can be derived from it to evaluate binary classifiers when the focus is on accurately predicting the two discrete classes.
-We also describe a trade-off between two important measures and illustrate how different thresholds to cut-off predicted probabilities into discrete classes affect these measures.
-In @sec-roc-space, we then put special emphasis on a method to visually compare the performance of classifiers.
+In @sec-basics-classif-learner we touched on the concept of a confusion matrix and how they can be used to breakdown binary classification predictions in more detail.
+In this section, we will look at specialized performance measures for binary classification in more detail.
+We will first return to the confusion matrix and discuss measures that can be derived from it and then will look at ROC analysis which incorporates these measures.
 
 ### Confusion Matrix
 
-For binary classifiers that predict discrete classes, we can compute a `r index("confusion matrix")` which summarizes the following quantities in a two-dimensional contingency table (see also @fig-confusion):
+To recap, a `r index('confusion matrix')` summarizes the following quantities in a two-dimensional contingency table (see also @fig-confusion):
 
-* **True positives (TP)**: Positive instances that are correctly classified as positive.
-* **True negatives (TN)**: Negative instances that are correctly classified as negative.
-* **False positives (FP)**: Negative instances that are incorrectly classified as positive.
-* **False negatives (FN)**: Positive instances that are incorrectly classified as negative.
+* **True positives (TPs)**: Positive instances that are correctly classified as positive.
+* **True negatives (TNs)**: Negative instances that are correctly classified as negative.
+* **False positives (FPs)**: Negative instances that are incorrectly classified as positive.
+* **False negatives (FNs)**: Positive instances that are incorrectly classified as negative.
 
 Different applications may have a particular interest in one (or multiple) of the aforementioned quantities.
-Consider spam classification where a model classifies a mail as spam (positive class) or no spam (negative class).
-<!-- or diagnostic tests in medicine where we are more interested either in true or false positives rather then just the average proportion of correct classifications. -->
-Here, we might accept some FN as long as we have a high number of TN.
-This means that some spam mails not classified as such are fine (they can be deleted manually) as long as most of the important mails are correctly identified as no spam.
-On the other hand, consider an application at the airport security checkpoint where the aim is to determine whether a travel bag contains a weapon (positive class) or no weapon (negative class).
-A classifier used to detect weapons should be able to achieve very high number of TP (as FN are not acceptable), even if this comes at the expense of more FP --- a false alarm once in a while, assuming a weapon is in the travel bag when it is not, is totally fine, as the security staff can manually check the travel bag. 
-In contrast, overlooking a weapon in a travel bag can have serious consequences.
-<!-- On the other hand, a classifier used to detect weapons at an airport security checkpoint (where identifying a weapon is the positive class and no weapon the negative class) should be able to achieve very high number of TP (as FN are not acceptable), even if this comes at the expense of more FP (a false alarm once in a while assuming there is a weapon although this is not the case is totally fine). -->
-Similar holds for medical diagnostic tests to identify, e.g., an infectious disease (positive class), where a high number of TP is usually more important than a low number of FP.
-Although FP are in general undesirable, it might be less severe to consider a healthy patient infectious than to label an unhealthy patient non-infectious and send him home, which could infect other people.
-The importance of a low number of FP increases if a medical diagnostic test is used to initiate medical treatment, as it may be expensive or invasive for a patient.
-<!-- For example,  (healthy patients receive a positive medical test indicating a serious disease) -->
-<!-- (a medical diagnostic test can be repeated before a patient receives an invasive treatment)  -->
-<!-- However, if we received millions of mails per day, we might have a stronger preference towards a low number of false negatives as otherwise our inbox would still see too much spam. -->
-<!-- More careful considerations need to be made for medical diagnostic tests, where a positive test for a medical condition can lead to expensive or invasive treatments, which we want to avoid if not truly necessary. -->
-<!-- Likewise, if a medical treatment is required, we do not want to falsely assume otherwise based on a test result. -->
+For example, the `spam` classification tasks is concerned with classifying if mail is spam (positive class) or not (negative class).
+In this case, we are likely to accept FNs (some spam classified as genuine mail) as long as we have a low number of FPs (genuine and possibly important mail classified as spam).
+In another example, say we are predicting if a travel bag contains a weapon (positive class) or not (negative class) at an airport.
+This classifier must have a very high number of TPs (as FNs are not acceptable at all), even if this comes at the expense of more FPs (false alarms).
 
-<!-- In Chapter @sec-basics, we have already seen how we can obtain the confusion matrix of a `r ref("Prediction")` by accessing the `$confusion` field. -->
-In the code example below, we first retrieve the `r ref("mlr_tasks_german_credit")` task for binary classification and construct a random forest learner using `classif.ranger` that predicts probabilities using the `predict_type = "prob"` option.
-Next, we use the `r ref("partition()")` helper function we used earlier as a shortcut to a simple holdout split.
-We train the learner on the training set and use the trained model to generate predictions on the test set.
-Finally, we retrieve the confusion matrix from the resulting `r ref("Prediction")` object by accessing the `$confusion` field (see also @sec-classif-eval):
+As we saw in @sec-basics-classif-learner, it is possible for a classifier to have a good classification accuracy but to overlook the nuances provided by a full confusion matrix, as in the following `german_credit` example:
 
 ```{r performance-050}
 task = tsk("german_credit")
@@ -901,31 +573,14 @@ splits = partition(task, ratio = 0.8)
 
 learner$train(task, splits$train)
 pred = learner$predict(task, splits$test)
+pred$score(msr("classif.acc"))
 pred$confusion
 ```
 
-<!-- These examples illustrate that there is a trade-off between different aspects of classification performance and different types of errors that can occur.  -->
-The above exemplary applications illustrate that it depends on the application which quantities from the confusion matrix are important and which may be less important.
-<!-- A simple measure such as the classification accuracy does not reflect all of these quantities. -->
-While the classification accuracy only takes into account the TP and TN to calculate the average proportion of correctly classified instances, the confusion matrix provides a more holistic picture of the classifier's performance.
-However, the absolute numbers (TP, TN, FP, FN) shown in a confusion matrix can be less useful when the classes are imbalanced.
-Also the classification accuracy is usually a bad choice in highly imbalanced cases, as it considers only the overall proportion of correctly classified instances without taking into account the total number of positive and negative instances.
-<!-- the relative proportions of correctly and incorrectly classified instances within the positive or negative class. -->
-<!-- the relative proportions of true and false positives or negatives. -->
-For example, consider a case where the occurrence of a disease in the population is 1%.
-A model that always predicts "no disease" for every patient would have a classification accuracy of 99%, indicating a well-performing model.
-However, the model is useless as it does not identify diseased patients.
-<!-- Different fields have therefore derived various  -->
-It is therefore useful to also consider other measures from the confusion matrix, as different applications tend to have different notions of what qualities a "good" classification model should exhibit.
+The classification accuracy only takes into account the TP and TN whereas the confusion matrix provides a more holistic picture of the classifier's performance.
 
-### Confusion Matrix-based Measures
-
-<!-- Unfortunately, many of these derived measures have different names for historical reasons, originating from different fields. -->
-<!-- For a good overview of common confusion matrix-based measures, see the comprehensive table on `r link("https://en.wikipedia.org/wiki/Confusion_matrix#Table_of_confusion", "Wikipedia")` which also provides many common aliases for each measure. -->
-Many measures derived from the confusion matrix have different names for historical reasons, originating from different fields.
-A good overview of common confusion matrix-based measures can be obtained from the comprehensive table on `r link("https://en.wikipedia.org/wiki/Confusion_matrix#Table_of_confusion", "Wikipedia")` which also provides many common aliases for each measure.
-<!-- Some common performance measures that are based on the confusion matrix and  -->
-Below, we introduce some of these measures which mainly quantify the discrimination performance, i.e., the ability of a classifier to separate the two classes (see also @fig-confusion for their definition based on TP, FP, TN and FN):
+On their own, the absolute numbers in a confusion matrix can be less useful when there is class imbalance.
+Instead, several robust measures can be derived that mainly quantify the discrimination performance of a classifier, i.e., the ability of a classifier to separate the two classes (see also @fig-confusion):
 
 * **True Positive Rate (TPR)**, **Sensitivity** or **Recall**: How many of the true positives did we predict as positive?
 * **True Negative Rate (TNR)** or **Specificity**: How many of the true negatives did we predict as negative?
@@ -934,10 +589,6 @@ Below, we introduce some of these measures which mainly quantify the discriminat
 * **Negative Predictive Value (NPV)**: If we predict negative how likely is it a true negative?
 * **Accuracy (ACC)**: The proportion of correctly classified instances out of the total number of instances.
 * **F1-score**: The harmonic mean of precision and recall, which balances the trade-off between precision and recall. It is calculated as $2 \times \frac{Precision \times Recall}{Precision + Recall}$.
-
-<!-- While the classification accuracy only takes into account the TP and TN to calculate the average proportion of correctly classified instances, the confusion matrix additionally shows FP and FN and provides a more holistic picture of the classifier's performance. -->
-<!-- Note that TP and FN sum up to the total number of positive instances in the data, while FP and TN sum up to the total number of negative instances in the data. -->
-<!-- These measures are motivated by the need to evaluate binary classifiers in different applications by more than accuracy alone, as we have previously done. -->
 
 ```{r performance-049}
 #| echo: false
@@ -955,90 +606,28 @@ mlr3measures::confusion_matrix(truth = pred$truth,
   response = pred$response, positive = task$positive)
 ```
 
-If a binary classifier predicts probabilities instead of discrete classes, we could arbitrarily set a threshold to cut-off the probabilities and assign them to the positive and negative class (see @sec-thresholding).
 When it comes to classification performance, it is generally difficult to achieve a high TPR and low FPR simultaneously because there is often a trade-off between the two rates.
-Increasing the threshold for identifying the positive cases, leads to a higher number of negative predictions and fewer positive predictions.
-As a consequence, the FPR is usually better (lower), but at the cost of a worse (lower) TPR.
-For example, in the special case where the threshold is set too high and no instance is predicted as positive, the confusion matrix shows zero true positives (no instances that are actually positive and correctly classified as positive) and zero false positives (no instances that are actually negative but incorrectly classified as positive).
-Therefore, the FPR and TPR are also zero since there are zero false positives and zero true positives.
-<!-- However, the TPR is also zero since there are no true positives, which means that the model fails to identify any positive cases, even if there are positive cases in the dataset.  -->
-<!-- Consider a binary classifier that predicts whether an email is spam (positive class) or not (negative class). -->
-<!-- Increasing the threshold for identifying positive cases means that the model will require more evidence (i.e., a higher predicted probability) before classifying an email as spam.  -->
-<!-- This can result in fewer emails being classified as spam (fewer positive predictions) and more emails being classified as not spam (more negative predictions). -->
-<!-- This can increase the model's specificity (the proportion of true negatives among all negative predictions) which leads to a better (lower) FPR. -->
-<!-- However, it may also reduce the model's sensitivity and TPR (i.e., the proportion of true positives among all positive predictions). -->
-Conversely, lowering the threshold for identifying positive cases may never predict the negative class and can increase (improve) TPR, but at the cost of a worse (higher) FPR.
-For example, below we set the threshold to `0.99` and `0.01` for the `r ref("mlr_tasks_german_credit")` task to illustrate the two special cases explained above where zero positives and where zero negatives are predicted and inspect the resulting confusion matrix-based measures (some measures can not be computed due to division by 0 and therefore will produce `NaN` values):
+When a binary classifier predicts probabilities instead of discrete classes, we could set a threshold to cut-off the probabilities to change how we assign observations to the positive/negative class (see @sec-thresholding).
+Increasing the threshold for identifying the positive cases, leads to a higher number of negative predictions, fewer positive predictions, and therefore a lower (and better) FPR but a lower (and worse) TPR -- the reverse holds if we lower the threshold.
 
-```{r performance-052}
-pred$set_threshold(0.99)
-mlr3measures::confusion_matrix(pred$truth, pred$response, task$positive)
-pred$set_threshold(0.01)
-mlr3measures::confusion_matrix(pred$truth, pred$response, task$positive)
-```
+Instead of arbitrarily changing a threshold to 'game' these two numbers, a more robust way to tradeoff between TPR and FPR is to use ROC analysis, discussed next.
 
 ### ROC Analysis {#sec-roc-space}
 
-`r index("ROC")` (Receiver Operating Characteristic) analysis is widely used to evaluate binary classifiers.
-Although extensions for multiclass classifiers exist (see e.g., @hand2001simple), we will only cover the much easier binary classification case here.
-ROC analysis aims at evaluating the performance of classifiers by visualizing the aforementioned trade-off between the TPR and the FPR which can be obtained from a confusion matrix.
+`r index("ROC")` (Receiver Operating Characteristic) analysis is widely used to evaluate binary classifiers by visualizing the trade-off between the TPR and the FPR.
 
-We first consider the simple case of hard classifiers that only predict discrete classes.
-Each classifier that predicts discrete classes, will be a single point in the ROC space (see @fig-roc, panel (a)).
-The best classifier lies on the top-left corner where the TPR is 1 and the FPR is 0.
+The ROC curve is a line graph with TPR on the y-axis and the FPR on the x-axis.
+To understand the usefulness of this curve, first consider the simple case of a 'hard' classifier, which predicts discrete labels (`predict_type = "response"`)  that makes a single prediction that classifies an observations as either positive or negative.
+This classifier would be represented as a single point in the ROC space (see @fig-roc, panel (a)) as it's TPR/FPR would be static (the thresholds can never change).
+The best classifier would lie on the top-left corner where the TPR is 1 and the FPR is 0.
 Classifiers on the diagonal predict class labels randomly (possibly with different class proportions).
-For example, if each positive instance will be randomly classified with 25% as to the positive class, we get a TPR of 0.25.
-If we assign each negative instance randomly to the positive class, we get a FPR of 0.25.
-In practice, we should never obtain a classifier clearly below the diagonal.
-Swapping the predicted classes of a classifier would results in points in the ROC space being mirrored at the diagonal baseline.
-A point in the ROC space below the diagonal might indicate that the positive and negative class labels have been switched by the classifier.
-
-We now consider the case of soft classifiers that predict probabilities instead of discrete classes.
-Using different thresholds to cut-off predicted probabilities and assign them to the positive and negative class may lead to different confusion matrices.
-In this case, we can characterize the behavior of a binary classifier for different thresholds by plotting the TPR and FPR values --- this is the ROC curve.
-For example, we can use the previous `r ref("Prediction")` object, compute all possible TPR and FPR combinations if we use all predicted probabilities as possible threshold, and visualize them to manually create a ROC curve:
-
-```{r performance-053}
-#| fig-cap: "Manually constructed ROC-curve based on the `german_credit` dataset and the `classif.ranger` Random Forest learner."
-thresholds = sort(pred$prob[,1])
-
-rocvals = data.table::rbindlist(lapply(thresholds, function(t) {
-  pred$set_threshold(t)
-  data.frame(
-    threshold = t,
-    FPR = pred$score(msr("classif.fpr")),
-    TPR = pred$score(msr("classif.tpr"))
-  )
-}))
-
-head(rocvals)
-
-library(ggplot2)
-ggplot(rocvals, aes(FPR, TPR)) +
-  geom_point() +
-  geom_path(color = "darkred") +
-  geom_abline(linetype = "dashed") +
-  coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
-  labs(
-    title = NULL,
-    x = "1 - Specificity (FPR)",
-    y = "Sensitivity (TPR)"
-  ) +
-  theme_bw()
-```
-
-A natural performance measure that can be derived from the ROC curve is the area under the curve (AUC).
-The higher the AUC value, the better the performance, whereas a random classifier would result in an AUC of 0.5  (see @fig-roc, panel (b) for an illustration).
-The AUC can be interpreted as the probability that a randomly chosen positive instance is ranked higher (in the sense that it gets a higher predicted probability of belonging to the positive class) by the classification model than a randomly chosen negative instance.
-
-::: {.callout-tip}
-For multiclass classification tasks, generalizations of the AUC measure are also available. 
-See e.g. `"classif.mauc_au1p"`.
-:::
+For example, if each positive instance will be randomly classified (ignoring features) with 25% as the positive class, we would obtain a TPR of 0.25.
+If we assign each negative instance randomly to the positive class, we would have an FPR of 0.25.
+In practice, we should never obtain a classifier below the diagonal and a point in the ROC space below the diagonal might indicate that the positive and negative class labels have been switched by the classifier.
 
 ```{r performance-054, echo = FALSE}
 #| label: fig-roc
-#| fig-cap: "Panel (a): ROC space with best discrete classifier, two random guessing classifiers lying on the diagonal line (baseline), one that always predicts the positive class and one that never predicts the positive class, and three classifiers C1, C2, C3. We cannot say if C1 or C3 is better as both lie on a parallel line to the baseline. C2 is clearly dominated by C1, C3 as it is further away from the best classifier at (TPR = 1, FPR = 0). Panel (b): ROC curves of the best classifier (AUC = 1), of a random guessing classifier (AUC = 0.5), and the classifiers C1, C3, and C2."
+#| fig-cap: "Panel (a): ROC space with best discrete classifier, two random guessing classifiers lying on the diagonal line (baseline), one that always predicts the positive class and one that never predicts the positive class, and three classifiers C1, C2, C3. We cannot say if C1 or C3 is better than the other as both are better in at least one metric. C2 is clearly worse than C1 and C3, as both are better with respect to one or more metrics. Panel (b): ROC curves of the best classifier (AUC = 1), of a random guessing classifier (AUC = 0.5), and the classifiers C1, C3, and C2."
 #| fig-align: "center"
 #| fig.height: 3.5
 #| fig.width: 8
@@ -1140,19 +729,28 @@ p1 + p2 & theme(plot.margin = grid::unit(c(0, 0, 0, 0), "mm"))
 
 ```
 
-For `r mlr3` prediction objects, the ROC curve can be constructed with the previously seen `r ref("autoplot.PredictionClassif")` from `r mlr3viz`.
-The x-axis showing the FPR is labelled "1 - Specificity" by convention, whereas the y-axis shows "Sensitivity" for the TPR.
+Now consider classifiers that predict probabilities instead of discrete classes.
+Using different thresholds to cut-off predicted probabilities and assign them to the positive and negative class will lead to different confusion matrices, as seen in the previous section.
+We can characterize the behavior of a binary classifier by plotting the TPR and FPR values across different thresholds -- this is the ROC curve.
+For example, we can use the previous `r ref("Prediction")` object to compute all possible TPR and FPR combinations by thresholding the predicted probabilities across all possible thresholds, which is exactly what `mlr3viz::autoplot.PredictionClassif` will do when `type = "roc"` is selected:
 
 ```{r performance-055}
-#| fig-cap: "ROC-curve based on the `german_credit` dataset and the `classif.ranger` Random Forest learner."
+#| fig-cap: "ROC-curve based on the `german_credit` dataset and the `classif.ranger` Random Forest learner. Recall FPR = 1 - Specificity and TPR = Sensitivity."
 autoplot(pred, type = "roc")
 ```
 
-We can also plot the precision-recall (PR) curve which visualize the PPV vs. TPR.
-The main difference between ROC curves and PR curves is that the number of true-negatives are not used to produce a PR curve.
-PR curves are preferred over ROC curves for imbalanced populations.
-This is because the positive class is usually rare in imbalanced classification tasks.
-Hence, the FPR is often low even for a random classifier.
+A natural performance measure that can be derived from the ROC curve is the `r index('area under the curve (AUC)', aside = TRUE)`.
+The AUC can be interpreted as the probability that a randomly chosen positive instance has a higher predicted probability of belonging to the positive class than a randomly chosen negative instance.
+Therefore, higher values (measured between 0 and 1) indicate better performance.
+Random classifiers (such as the featureless baseline) will always have an AUC of 0.5 (see @fig-roc, panel (b)).
+
+::: {.callout-tip}
+Extensions of ROC analysis for multiclass classifiers exist (see e.g., @hand2001simple) but we only cover the more common binary classification case in this book.
+Generalizations of the AUC measure to multiclass classification are implemented in `mlr3`, see `msr("classif.mauc_au1p")`.
+:::
+
+We can also plot the `r index('precision-recall (PR) curve', aside = TRUE)` which visualizes the PPV/precision vs. TPR/recall.
+The main difference between ROC curves and PR curves is that the number of true-negatives are ignored, which can be useful in imbalanced populations where the positive class is rare and hence the FPR will be low even for random classifier.
 As a result, the ROC curve may not provide a good assessment of the classifier's performance, because it does not capture the high rate of false negatives (i.e., misclassified positive observations).
 See also @davis2006relationship for a detailed discussion about the relationship between the PRC and ROC curves.
 
@@ -1161,12 +759,11 @@ See also @davis2006relationship for a detailed discussion about the relationship
 autoplot(pred, type = "prc")
 ```
 
-Another useful way to think about the performance of a classifier is to visualize the relationship of the set threshold with the performance metric at the given threshold.
-For example, if we want to see the FPR and accuracy across all possible thresholds:
+Another useful way to think about the performance of a classifier is to visualize the relationship of a performance metric over varying thresholds, for example to see the FPR and accuracy across all possible thresholds:
 
 ```{r performance-057}
 #| layout-ncol: 2
-#| fig-subcap: 
+#| fig-subcap:
 #|   - "Threshold vs. FPR plot on `german_credit` with `classif.ranger`."
 #|   - "Threshold vs. accuracy plot on `german_credit` with `classif.ranger`."
 autoplot(pred, type = "threshold", measure = msr("classif.fpr"))
@@ -1174,14 +771,14 @@ autoplot(pred, type = "threshold", measure = msr("classif.acc"))
 ```
 
 This visualization would show us that changing the threshold from the default 0.5 to a higher value like 0.7 would greatly reduce the FPR, while reducing accuracy by only a few percentage points.
-Depending on the problem at hand, this might be perfectly desirable trade-off.
+Depending on the problem at hand, this might be a perfectly desirable trade-off.
 
-These visualizations are also available for `r ref("ResampleResult")`.
-Here, the predictions of individual resampling iterations are merged prior to calculating a ROC or PR curve (micro averaged):
+These visualizations are also available for `r ref("ResampleResult")` objects.
+In this case, the predictions of individual resampling iterations are merged prior to calculating a ROC or PR curve (micro averaged):
 
 ```{r performance-058}
 #| layout-ncol: 2
-#| fig-subcap: 
+#| fig-subcap:
 #|   - "ROC-curve across resampling iterations."
 #|   - "Precision-Recall curve across resampling iterations."
 rr = resample(
@@ -1193,11 +790,11 @@ autoplot(rr, type = "roc")
 autoplot(rr, type = "prc")
 ```
 
-We can also visualize a `r ref("BenchmarkResult")` to compare multiple learners on the same `r ref("Task")`:
+Finally, we can visualize ROC/PR curves for a `r ref("BenchmarkResult")` to compare multiple learners on the same `r ref("Task")`:
 
 ```{r performance-059}
 #| layout-ncol: 2
-#| fig-subcap: 
+#| fig-subcap:
 #|   - "ROC-curve comparing two learners."
 #|   - "Precision-Recall curve comparing two learners."
 design = benchmark_grid(
@@ -1212,34 +809,22 @@ autoplot(bmr, type = "prc")
 
 ## Conclusion
 
-In this chapter, we learned how to estimate the generalization performance of a model via resampling.
-We also learned about benchmarking to fairly compare the estimated generalization performance of different learners across multiple tasks.
-Performance calculations underpin these concepts, and we have seen some of them applied to classification tasks, with a more in-depth look at the special case of binary classification and ROC analysis.
-We also learned how to visualize confusion matrix-based performance measures with regards to different thresholds as well as resampling and benchmark results with `r mlr3viz`.
-<!-- that cut-off the predicted probabilities and assign the predictions to the positive and negative class  -->
-The discussed topics belong to the fundamental concepts of supervised machine learning.
-@sec-optimization builds on these concepts and applies them for tuning (i.e., to automatically choose the optimal hyperparameters of a learner) through nested resampling (@sec-nested-resampling).
-In @sec-special, we will also take a look at specialized tasks that require different resampling strategies.
-Finally, @tbl-api-performance provides an overview of some important `r mlr3` functions and the corresponding R6 classes that were most frequently used throughout this chapter.
+In this chapter, we learned how to estimate the generalization performance of a model via resampling strategies, from holdout to cross-validation and bootstrap, and how to automate the comparison of multiple learners in benchmark experiments.
 
+These topics are fundamental in supervised learning and will continue to be built upon throughout this book.
+In particular, @sec-optimization utilizes evaluation in automated model tuning to improve performance, and in @sec-special we will take a look at specialized tasks that require different resampling strategies.
 
-| S3 function                 | R6 Class              | Summary                                      |
+@tbl-api-performance provides an overview of the most important methods and classes discussed in this chapter.
+
+| Underlying R6 Class | Constructor (if applicable) | Important methods |
 | --------------------------- | --------------------- | -------------------------------------------- |
-| `r ref("rsmp()")`           | `r ref("Resampling")` | Assigns observations to train- and test sets |
-| `r ref("resample()")`       | `r ref("ResampleResult")` | Evaluates learners on given tasks using a resampling strategy |
-| `r ref("benchmark_grid()")` | -                     | Constructs a design grid of learners, tasks, and resamplings  |
-| `r ref("benchmark()")`      | `r ref("BenchmarkResult")` | Evaluates learners on a given design grid |
+| - | `r ref("partition()")` |  |
+| `r ref("Resampling")` | `r ref("rsmp()")` | `$instantiate()` |
+| `r ref("ResampleResult")` | `r ref("resample()")` | `$score()`/`$aggregate()`/`$predictions()` |
+| - | `r ref("benchmark_grid()")` |  |
+| `r ref("BenchmarkResult")` | `r ref("benchmark()")` | `$score()`/`$aggregate()`/`$resample_result()` |
 
-:Core S3 'sugar' functions for resampling and benchmarking in mlr3 with the underlying R6 class that are constructed when these functions are called (if applicable) and a summary of the purpose of the functions. {#tbl-api-performance}
-
-<!-- No gallery posts according to BB
-### Resources {.unnumbered .unlisted}
-
-- Learn more about advanced resampling techniques in: `r link("https://mlr-org.com/gallery/basic/2020-03-30-stratification-blocking/", "Resampling - Stratified, Blocked and Predefined")`.
-- Check out the blog post `r link("https://mlr-org.com/gallery/basic/2020-03-18-iris-mlr3-basics/", "mlr3 Basics on “Iris” - Hello World!")` to see minimal examples on using  resampling and benchmarking on the iris dataset.
-- Use resampling and benchmarking for the `r link("https://mlr-org.com/gallery/basic/2020-08-14-comparison-of-decision-boundaries/", "comparison of decision boundaries of classification learners")`.
-- Learn how to effectively pick thresholds by applying tuning and pipelines (Chapters [-@sec-optimization] and [-@sec-pipelines]) in `r link("https://mlr-org.com/gallery/optimization/2020-10-14-threshold-tuning/index.html", "this post on threshold tuning")`.
--->
+: Important classes and functions covered in this chapter with underlying `R6` class (if applicable), constructor to create an object of the class, and important class methods. {#tbl-api-performance}
 
 ## Exercises
 
@@ -1256,3 +841,7 @@ How would you improve upon this?
 You want to reproduce their results and ask them about their resampling strategy.
 They said they used a custom 3-fold cross-validation with folds assigned as `factor(task$row_ids %% 3)`.
 See if you can reproduce their results.
+
+::: {.content-visible when-format="html"}
+`r citeas(chapter)`
+:::
