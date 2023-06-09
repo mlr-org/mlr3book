@@ -225,7 +225,6 @@ As multi-objective tuning requires manual intervention to select a configuration
 Furthermore, it can also be quite difficult to compare multiple models over multiple measures.
 
 ## Multi-Fidelity Tuning via Hyperband {#sec-hyperband}
-<!-- TODO: RS NOT REVIEWED YET -->
 
 Increasingly large datasets and search spaces and costly to train models make hyperparameter optimization a time-consuming task.
 Recent HPO methods often also make use of evaluating a configuration at multiple fidelity levels.
@@ -520,94 +519,80 @@ BO is a powerful method that often results in good optimization performance, esp
 In the rest of this section we will first provide an introduction to black-box optimization with the `r bbotk` package and then introduce the building blocks of BO algorithms and examine their interplay and interaction during the optimization process before we assemble these building blocks in a ready to use black-box optimizer with `r mlr3mbo`.
 Readers who are primarily interested in how to utilize BO for hyperparameter optimization without delving deep into the underlying building blocks may want to skip to @sec-bayesian-tuning.
 Detailed introductions to black-box optimization and BO are given in @hpo_practical, @hpo_automl and @garnett_2022.
-<!-- TODO - RS REVIEWED TO HERE -->
+
+As a running example throughout this section we will optimize the sinusoidal function $f: [0, 1] \rightarrow \mathbb{R}, x \mapsto 2x + \sin(14x)$ (@fig-bayesian-optimization-sinusoidal), which is characterized by two local minima and one global minimum.
+
 ### Black-Box Optimization {#sec-black-box-optimization}
 
-The `r bbotk` (black-box optimization toolkit) package is the workhorse package for general black-box optimization within the mlr3 ecosystem.
+The `r bbotk` (black-box optimization toolkit) package is the workhorse package for general black-box optimization within the `mlr3` ecosystem.
 At the heart of the package are the R6 classes:
 
-* `r ref("OptimInstanceSingleCrit")` and `r ref("OptimInstanceMultiCrit")`, which are used to construct an optimization instance\index{optimization instance}[Optimization Instance]{.aside} which describes the optimization problem and stores the results
-* `r ref("Optimizer")` which is used to get and set optimization algorithms
+* `r ref("OptimInstanceSingleCrit")` and `r ref("OptimInstanceMultiCrit")`, which are used to construct an `r index('optimization instance', aside = TRUE)` that describes the optimization problem and stores the results
+* `r ref("Optimizer")` which is used to get and set optimization algorithms.
 
-This should sound very familiar.
-Indeed, in @sec-optimization, the classes `r ref("TuningInstanceSingleCrit")`, `r ref("TuningInstanceMultiCrit")` and `r ref("Tuner")` were already introduced, which are special cases of the `r ref("OptimInstanceSingleCrit")`, `r ref("OptimInstanceMultiCrit")` and `r ref("Optimizer")` classes.
-The latter are suited for general black-box optimization and not only HPO.
+These classes might look familiar after reading @sec-optimization, and in fact `r ref("TuningInstanceSingleCrit")` and `r ref("TuningInstanceMultiCrit")` inherit from `OptimInstanceSingle/MultiCrit` and `r ref("Tuner")` is closely based on `Optimizer`.
 
-Throughout this chapter, our running example will be to optimize the following sinusoidal function (@fig-bayesian-optimization-sinusoidal), which is characterized by two local minima and one global minimum:
-$f: [0, 1] \rightarrow \mathbb{R}, x \mapsto 2x + \sin(14x)$.
+`OptimInstanceSingleCrit` relies on an `r ref("Objective", aside = TRUE)` function that wraps the actual mapping from a domain (all possible function inputs) to a codomain (all possiple function outputs).
 
-At the core of an `r ref("OptimInstanceSingleCrit")` lies an `r ref("Objective")`\index{Objective}[Objective]{.aside} function wrapping the actual mapping from a domain to a codomain (see also @sec-defining-search-spaces).
-The domain of a function refers to the set of all possible input values for which the function is defined and can produce a valid output.
-The codomain of a function refers to the set of all possible output values that the function can produce.
-
-::: {.callout-note}
-Objective functions can be created using different classes, all of which inherit from the base `r ref("Objective")` class.
+Objective functions can be created using different classes, all of which inherit from `r ref("Objective")`.
 These classes provide different ways to define and evaluate objective functions.
-`r ref("ObjectiveRFun")`: This class wraps a custom R function that takes a list describing a single configuration as input. It is suitable when the underlying function evaluation mechanism is given by evaluating a single configuration at a time.
-`r ref("ObjectiveRFunMany")`: This class wraps a custom R function that takes a list of multiple configurations as input. It is useful when the function evaluation of multiple configurations can be parallelized.
-`r ref("ObjectiveRFunDt")`: This class wraps a custom R function that operates on a `r ref("data.table")`. It allows for efficient vectorized or batched evaluations directly on the `r ref("data.table")` object, avoiding unnecessary data type conversions.
-:::
 
-We now define the sinusoidal function as described above. This function will then be the workhorse of the `r ref("Objective")`.
+* `r ref("ObjectiveRFun")` wraps a function that takes a list describing a *single configuration* as input. It is suitable when the underlying function evaluation mechanism is given by evaluating a single configuration at a time.
+* `r ref("ObjectiveRFunMany")` wraps a function that takes a list of *multiple configurations* as input. It is useful when the function evaluation of multiple configurations can be parallelized.
+* `r ref("ObjectiveRFunDt")` wraps a function that operates on a `data.table`. It allows for efficient vectorized or batched evaluations directly on the `data.table` object, avoiding unnecessary data type conversions.
+
+To start translating our problem to code we will use the `r ref("ObjectiveRFun")` class to take a single configuration as input.
+The `Objective` requires specification of the function to optimize and its domain and codomain.
+By tagging the codomain with `"minimize"` or `"maximize"` we specify the optimization direction.
 
 ```{r}
 sinus_1D = function(xs) {
   y = 2 * xs$x * sin(14 * xs$x)
   y
 }
-```
 
-An `r ref("Objective")` always requires the specification of the domain and codomain in the form of a `r ref("ParamSet")`.
-Moreover, by tagging the codomain with `"minimize"` or `"maximize"` we specify the optimization direction:
-
-```{r}
 domain = ps(x = p_dbl(lower = 0, upper = 1))
 codomain = ps(y = p_dbl(tags = "minimize"))
 objective = ObjectiveRFun$new(sinus_1D,
   domain = domain, codomain = codomain)
 ```
 
-We can proceed to visualizing the sinusoidal function (@fig-bayesian-optimization-sinusoidal) by generating a grid of points on which we evaluate the function (in a batched manner).
-This will help us identify its local minima and global minimum:
+We can visualize are objective by generating a grid of points on which we evaluate the function (@fig-bayesian-optimization-sinusoidal), this will help us identify its local minima and global minimum.
 
 ```{r}
-xydt = generate_design_grid(domain, resolution = 1001)$data
-xydt[, y := objective$eval_dt(xydt)$y]
-xydt
-```
-
-```{r}
-#| echo: false
 #| label: fig-bayesian-optimization-sinusoidal
 #| fig-cap: Visualization of the sinusoidal function. Local minima in green. Global minimum in purple.
 #| fig-alt: Visualization of the sinusoidal function. The function is defined on a domain ranging from 0 to 1 and has a sinusoidal shape. There are two local minima, one at 0 and one at around 0.35. The global minimum is located at around 0.792.
 library(ggplot2)
 library(viridisLite)
+
+xydt = generate_design_grid(domain, resolution = 1001)$data
+xydt[, y := objective$eval_dt(xydt)$y]
 optima = data.table(x = c(0, 0.3509406, 0.7918238))
 optima[, y := objective$eval_dt(optima)$y]
 optima[, type := c("local", "local", "global")]
+
 ggplot(aes(x = x, y = y), data = xydt) +
   geom_line() +
-  geom_point(aes(x = x, y = y, colour = type), size = 2, data = optima) +
-  scale_colour_manual(values = viridis(2, end = 0.8)) +
+  geom_point(aes(x = x, y = y, pch = type, color = type), size = 4, data = optima) +
   theme_minimal() +
   theme(legend.position = "none")
 ```
 
-The global minimum is located at around `x = 0.792`.
-This value corresponds to the point of the domain with the lowest function value:
+The global minimum, `r xydt[y == min(y), x]`, corresponds to the point of the domain with the lowest function value:
 
 ```{r}
 xydt[y == min(y), ]
 ```
 
-With the objective function defined, we can proceed to optimize it using the `r ref("OptimInstanceSingleCrit")` class.
+With the objective function defined, we can proceed to optimize it using `r ref("OptimInstanceSingleCrit")`.
 This class allows us to wrap the objective function and explicitly specify a search space.
-The search space defines the set of input values we want to optimize over, and it is typically a subset or transformation of the domain.
-By default, the entire domain of the objective function is used as the search space.
-Note that in black-box optimization, it is common for the domain and therefore also the search space to have finite box constraints.
-Also, it is often useful to use transformation functions of the domain resulting in a search space that can be optimized more efficiently (see also @sec-logarithmic-transformations).
-In the following, we use a simple random search to optimize the sinusoidal function over the whole domain.
+The search space defines the set of input values we want to optimize over, and it is typically a subset or transformation of the domain, though by default the entire domain is taken as the search space.
+In black-box optimization, it is common for the domain, and hence also the search space, to have finite box constraints.
+Similarly to HPO, transformation are often used to efficiently search the space (@sec-logarithmic-transformations).
+
+In the following, we use a simple random search to optimize the sinusoidal function over the whole domain and inspect the result from the `instance` in the usual way (@sec-tuner).
+Analogously to tuners, `Optimizer`s in `r ref_pkg("bbotk")` are stored in the `r ref('mlr_optimizers')` dictionary and can be constructed with `r ref('opt()', aside = TRUE)`.
 
 ```{r, output=FALSE}
 instance = OptimInstanceSingleCrit$new(objective,
@@ -615,34 +600,20 @@ instance = OptimInstanceSingleCrit$new(objective,
   terminator = trm("evals", n_evals = 20))
 optimizer = opt("random_search", batch_size = 20)
 optimizer$optimize(instance)
+instance$result
 ```
 
-To access the best result obtained during optimization, one can use the `best()` method on the `r ref("Archive")` object:
-
-```{r}
-instance$archive$best()
-```
-
-Instead of manually constructing the optimization instance and then optimizing it, one can also utilize the `r ref("bb_optimize()")` helper function, which simplifies the optimization process.
-It internally creates an optimization instance and returns the optimization result with the instance:
+Similarly to how we can use `r ref("tune()")` to construct a tuning instance, here we can use `r ref("bb_optimize()", aside = TRUE)`:
 
 ```{r}
 instance = bb_optimize(objective, method = "random_search",
   max_evals = 20)
 ```
 
-For a list of available optimizers that can be used for black-box optimization, one can inspect the following dictionary.
-It provides various options, including Bayesian optimization via the key `mbo`, which will be introduced in this chapter.
-It is worth noting that evolutionary strategies are also available within the mlr3 ecosystem via the `r ref_pkg("miesmuschel")` package, although they are not covered in this chapter.
-
-```{r}
-as.data.table(mlr_optimizers)
-```
-
-After having introduced the general black-box optimization setup, We will now move on to introduce the basic building blocks of any Bayesian optimization algorithm.
+Now we have introduced the basic black-box optimization setup, we can introduce the building blocks of any Bayesian optimization algorithm.
 
 ### Building Blocks of Bayesian Optimization {#sec-bayesian-optimization-blocks}
-
+<!-- TODO: RS REVIEWED TO HERE -->
 ```{r, message=FALSE}
 library(mlr3mbo)
 ```
@@ -901,7 +872,7 @@ surrogate$learner
 Internally, the learner is fitted on a regression task (`r ref("mlr3::TaskRegr")`) constructed from the `r ref("bbotk::Archive")` of the `r ref("bbotk::OptimInstance")` that is to be optimized.
 Features are given by the variables of the domain, whereas the target is given by the variable of the codomain.
 
-::: {.callout-note}
+::: {.callout-tip}
 Depending on the nature of the optimization problem and choice of the loop function, multiple optimization targets must be modelled by multiple surrogates, in which case a `r ref("SurrogateLearnerCollection")` should be used instead of a `r ref("SurrogateLearner")`.
 :::
 
@@ -1070,7 +1041,7 @@ Again, note that the `r ref("loop_function")` specifies the overall behavior of 
 Here we use the `bayesopt_ego()` (`r ref("mlr_loop_functions_ego")`) loop function as introduced before, which is suitable for standard single-objective optimization.
 Moreover, note during construction of the `r ref("OptimizerMbo")` passing parameters such as `archive` to the `surrogate` is no longer required because we now work with an `r ref("OptimizerMbo")` directly instead of the building blocks.
 
-::: {.callout-note}
+::: {.callout-tip}
 Certain loop functions offer additional arguments that allow for customization, such as handling random interleaving of candidate points.
 These arguments can be provided when constructing an `r ref("OptimizerMbo")` object via the `args` parameter.
 Similarly, a result assigner, which is beyond the scope of this discussion (see @sec-noisy-bayesian-optimization), can be specified via the `result_assigner` parameter.
