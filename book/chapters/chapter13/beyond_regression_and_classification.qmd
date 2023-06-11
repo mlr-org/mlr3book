@@ -1,0 +1,928 @@
+# Beyond Regression and Classification {#sec-special}
+
+{{< include ../../common/_setup.qmd >}}
+
+`r chapter = "Beyond Regression and Classification"`
+`r authors(chapter)`
+
+So far in this book we have only considered two tasks.
+In @sec-basics we introduced deterministic regression as well as deterministic and probabilistic single-label classification (@tbl-alltasks).
+But our infrastructure also works well for many other tasks, some of which are available in extension packages (@fig-mlr3verse) and some are available by creating pipelines with `r mlr3pipelines`.
+In this chapter, we will take you through just a subset of these new tasks, focusing on the ones that have a stable API.
+As we work through this chapter we will refer to the 'building blocks' of `r mlr3`, this refers to the base classes that must be extended to create new tasks, these are `r ref("Prediction")`, `r ref("Learner")`, `r ref("Measure")`, and `r ref("Task")`.
+
+@tbl-alltasks summarizes available extension tasks, including the package(s) they are implemented in and a brief description of the task.
+
+| Task | Package | Description |
+| ---- | ------- | --------------- |
+| Deterministic regression | `r mlr3`  | Point prediction of a continuous variable. |
+| Deterministic single-label classification | `r mlr3`  | Prediction of a single class for each observation. |
+| Probabilistic single-label classification | `r mlr3`  | Prediction of the probability of an observation falling into one or more mutually exclusive categories. |
+| Cost-sensitive classification | `r mlr3` and `r mlr3pipelines`  | Classification predictions with unequal costs associated with misclassifications. |
+| Survival analysis | `r mlr3proba`  | Time-to-event predictions with possible 'censoring'. |
+| Density estimation | `r mlr3proba`  | Unsupervised estimation of probability density functions. |
+| Spatiotemporal analysis | `r mlr3spatiotempcv` and `r mlr3spatial`  | Supervised prediction of data with spatial (e.g., coordinates) and/or temporal outcomes. |
+| Cluster analysis | `r mlr3cluster`  | Unsupervised estimation of homogeneous clusters of data points. |
+
+: Table of extension tasks that can be used with `r mlr3` infrastructure. As we have a growing community of contributors, this list is far from exhaustive and many 'experimental' task implementations exist; this list just represents the tasks that have a functioning interface. {#tbl-alltasks}
+
+## Cost-Sensitive Classification {#sec-cost-sens}
+
+We begin by discussing a task that does not require any additional packages or infrastructure, only the tools we have already learned about from earlier chapters.
+In 'regular' classification, the aim is to optimize a metric (often the misclassification rate) whilst assuming all misclassification errors are deemed equally severe.
+A more general approach is `r index("cost-sensitive classification", aside = TRUE)`, in which costs caused by different kinds of errors may not be equal.
+The objective of cost-sensitive classification is to minimize the expected costs.
+As we discuss this task we will work with `r ref("mlr_tasks_german_credit")` (@sec-appendix-tasks) as a running example.
+
+Imagine you are trying to calculate if giving someone a loan of \$5K will result in a profit after one year, assuming they are expected to pay back \$6K.
+To make this calculation, you will need to be predict if the person will have good credit.
+This is a deterministic classification problem where we are predicting whether someone will be in class 'Good' or 'Bad'.
+Now we can define the potential costs associated with each prediction and the eventual truth:
+
+```{r special-002}
+costs = matrix(c(-1, 0, 5, 0), nrow = 2, dimnames =
+  list("Predicted Credit" = c("good", "bad"),
+    Truth = c("good", "bad")))
+costs
+```
+
+If the model predicts that the individual has bad credit then there is no profit or loss, the loan is not provided.
+If the model predicts that the individual has good credit and they pay the loan and interest then you make a \$1K profit, but if they default then you lose \$5K.
+Note that cost-sensitive classification is a minimization problem where we assume lower costs mean higher profits/positive outcomes, hence above we wrote the profit and loss as `-1` and `+5` respectively.
+
+### Cost-sensitive Measure
+
+We will now see how to implement a more nuanced approach to classification errors with `r ref("MeasureClassifCosts")`.
+This measure takes one argument, which is a matrix with row and column names corresponding to the class labels in the task of interest.
+Let us put our insurance example into practice, notice that we have already named the cost matrix as required for the measure:
+
+```{r special-003}
+library(mlr3verse)
+
+task = tsk("german_credit")
+
+cost_measure = msr("classif.costs", costs = costs)
+cost_measure
+
+learners = lrns(c("classif.log_reg", "classif.featureless", "classif.ranger"))
+bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
+bmr$aggregate(cost_measure)[, c(4, 7)]
+```
+
+In this experiment we find that the logistic regression learner happens to perform best as it minimizes the expected costs (and maximizes expected profits) and the featureless learner performs the worst.
+However all costs are positive, which actually means a loss is made, so let us now see if we can improve these models by using thresholding.
+
+### Thresholding
+
+As we have discussed in @sec-basics, `r index("thresholding")` is a method to fine-tune the probability at which an observation will be predicted as one class label or another.
+Currently in our running example, the models above will predict a customer has good credit (in the class 'Good') if the probability of good credit is greater than 0.5.
+However, this may not be a sensible approach as the cost of a false positive and false negative is not equal.
+In fact, a false positive results in a cost of +5 whereas a false negative only results in a cost of 0, hence we would prefer a model with a higher false negative rates and lower false positive rates.
+This is highlighted in the `"threshold"` `autoplot`:
+
+```{r special-004}
+prediction = lrn("classif.log_reg",
+  predict_type = "prob")$train(task)$predict(task)
+autoplot(prediction, type = "threshold", measure = cost_measure)
+```
+
+As expected, the optimal threshold is greater than 0.5, indicating that to maximize profits, the majority of observations should be predicted to have bad credit.
+
+To automate the process of optimizing the threshold, we can make use of `r mlr3tuning` (@sec-optimization) and `r mlr3pipelines` (@sec-pipelines) by creating a graph with `r ref("PipeOpTuneThreshold")`.
+Continuing the same example:
+
+```{r special-005}
+gr = po("learner_cv", lrn("classif.log_reg", predict_type = "prob")) %>>%
+  po("tunethreshold", measure = cost_measure)
+
+learners = list(as_learner(gr), lrn("classif.log_reg"))
+bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
+bmr$aggregate(cost_measure)[, c(4, 7)]
+```
+
+As expected, our tuned learner performs much better and now we expect a profit and not a loss.
+
+## Survival Analysis {#sec-survival}
+
+`r index("Survival analysis", aside = TRUE)` is a field of statistics concerned with trying to predict/estimate the time until an event takes place.
+This predictive problem is unique as survival models are trained and tested on data that may include 'censoring', which occurs when the event of interest does *not* take place.
+Survival analysis can be hard to explain in the abstract, so as a working example consider a marathon runner in a race.
+Here the 'survival problem' is trying to predict the time when the marathon runner finishes the race.
+However, if the event of interest does not take place (i.e., marathon runner gives up and does not finish the race), they are said to be censored.
+Instead of throwing away information about censored events, survival analysis datasets include a status variable that provides information about the 'status' of an observation.
+So in our example we might write the runner's outcome as $(4, 1)$ if they finish the race at 4 hours, otherwise if they give up at 2 hours we would write $(2, 0)$.
+
+The key to modeling in survival analysis is that we assume there exists a hypothetical time the marathon runner would have finished if they had not been censored, it is then the job of a survival learner to estimate what the true survival time would have been for a similar runner, assuming they are *not* censored (see @fig-censoring).
+Mathematically, this is represented by the hypothetical event time, $Y$, the hypothetical censoring time, $C$, the observed outcome time, $T = min(Y, C)$, the event indicator $\Delta = (T = Y)$, and as usual some features, $X$.
+Learners are trained on $(T, \Delta)$ but, critically, make predictions of $Y$ from previously unseen features.
+This means that unlike classification and regression, learners are trained on two variables, $(T, \Delta)$, which, in R, is often captured in a `r ref("survival::Surv")` object.
+Relating to our example above the runner's outcome would then be $(T = 4, \Delta = 1)$ or $(T = 2, \Delta = 0)$.
+Another example is in the code below, where we randomly generate 6 survival times and 6 event indicators, an outcome with a `+` indicates the outcome is censored, otherwise the event of interest occurred.
+
+```{r special-009}
+library(survival)
+Surv(runif(6), rbinom(6, 1, 0.5))
+```
+
+Readers familiar with survival analysis will recognize that the description above applies specifically to 'right censoring'.
+Currently, this is the only form of censoring available in the `r mlr3` universe, hence restricting our discussion to that setting.
+For a good introduction to survival analysis see @Collett2014 or for machine learning in survival analysis specifically see @MLSA.
+
+For the remainder of this section we will look at how `r mlr3proba` [@mlr3proba] extends the building blocks of `r mlr3` for survival analysis. We will begin by looking at objects used to construct machine learning tasks for survival analysis, then we will turn to the learners we have implemented to solve these tasks, before looking at measures for evaluating survival analysis predictions, and then finally we will consider how to transform prediction types.
+
+```{r special-010, echo=FALSE}
+#| fig-alt: Figure shows give horizontal lines at 1,2,3,4,5 on the y-axis and a vertical line at 8 on the x-axis. Top line (subject 5) has a circle at x=8 and a diamond at x=9, second line (subject 4) has a circle at x=1 and a diamond at x=9, subject 3 has a circle at x=4 and a diamond at x=6, subject 2 has a diamond at x=8, and subject 1 has a diamond at x=7.
+#| fig-cap: Plot illustrating different censoring types. Dead and censored subjects (y-axis) over time (x-axis). Black diamonds indicate true death times and white circles indicate censoring times. Vertical line is the study end time. Subjects 1 and 2 die in the study time. Subject 3 is censored in the study and (unknown) dies within the study time. Subject 4 is censored in the study and (unknown) dies after the study. Subject 5 dies after the end of the study. Figure and caption from @Sonabend2021b.
+#| label: fig-censoring
+library(ggplot2)
+ggplot(data.frame(x = c(1, 2, 5, 7, 10), y = 1:5), aes(x = x, y = y)) +
+  geom_blank() +
+  geom_vline(xintercept = 8) +
+  geom_segment(y = 1, yend = 1, x = 0, xend = 7) +
+  geom_segment(y = 2, yend = 2, x = 0, xend = 8) +
+  geom_segment(y = 3, yend = 3, x = 0, xend = 4) +
+  geom_segment(y = 3, yend = 3, x = 4, xend = 6, linetype = 2) +
+  geom_segment(y = 4, yend = 4, x = 0, xend = 1) +
+  geom_segment(y = 4, yend = 4, x = 1, xend = 9, linetype = 2) +
+  geom_segment(y = 5, yend = 5, x = 0, xend = 8) +
+  geom_segment(y = 5, yend = 5, x = 8, xend = 9, linetype = 2) +
+  geom_point(x = 4, y = 3, shape = 21, color = "black", fill = "white", size = 4) +
+  geom_point(x = 6, y = 3, shape = 18, size = 4) +
+  geom_point(x = 7, y = 1, shape = 18, size = 4) +
+  geom_point(x = 8, y = 2, shape = 18, size = 4) +
+  geom_point(x = 9, y = 5, shape = 18, size = 4) +
+  geom_point(x = 8, y = 5, shape = 21, size = 4, fill = "white") +
+  geom_point(x = 1, y = 4, shape = 21, size = 4, fill = "white") +
+  geom_point(x = 9, y = 4, shape = 18, size = 4) +
+  labs(y = "Subject", x = "Time") +
+  scale_x_continuous(labels = as.character(1:10), breaks = 1:10) +
+  theme_minimal() + theme(panel.grid.minor = element_blank())
+```
+
+### TaskSurv
+
+As we saw in the introduction to this section, survival algorithms require two targets for training, this means the new `r ref("TaskSurv")` object  expects two targets.
+The simplest way to create a survival task is to use `r ref("as_task_surv")`, as in the following code chunk.
+Note this has more arguments than `as_task_regr` to reflect multiple target and censoring types, `time` and `event` arguments expect strings representing column names where the 'time' and 'event' variables are stored, `type` refers to the censoring type (currently only right censoring supported so this is the default).
+Note how `r ref("as_task_surv")` coerces the target columns into a `r ref("survival::Surv")` object.
+
+```{r special-011, warning=FALSE, message=FALSE}
+library("mlr3verse")
+library("mlr3proba")
+library("survival")
+
+task = as_task_surv(survival::rats, time = "time",
+  event = "status", type = "right", id = "rats")
+
+task$head()
+```
+
+Plotting the task with `autoplot` results in a Kaplan-Meier plot which is a non-parametric estimator of the probability of survival for the average observation in the training set.
+
+```{r, warning=FALSE, message=FALSE}
+#| fig-cap: Kaplan-Meier plot of the `rats` task. x-axis is time variable and y-axis is survival function, S(T), defined by 1 - F(T) where F is the cumulative distribution function. Red crosses indicate points where censoring takes place.
+#| fig-alt: Figure shows a line plot with "Time" on the x-axis from 0 to 100 and "Survival" on the y-axis from 0.80 to 1.00. The line plot is a black line from (0, 1) to (25, 1) then starts to drop slowly and then quickly down to (100, 0.80).
+#| label: fig-autokm
+autoplot(task)
+```
+
+In the above example we used the `r ref("survival::rats")` dataset, which looks at predicting if a drug treatment was successful in preventing 150 rats from developing tumors.
+Note that the dataset (by its own admission) is not perfect and should generally be treated as 'dummy' data, which is good for examples but not real-world analysis.
+
+As well as creating your own tasks, you can load any of the tasks shipped with `r mlr3proba`:
+
+```{r special-013}
+as.data.table(mlr_tasks)[task_type == "surv"]
+```
+
+### LearnerSurv, PredictionSurv and predict types
+
+The interface for `r ref("LearnerSurv")` and `r ref("PredictionSurv")` objects is identical to the regression and classification settings discussed in @sec-basics.
+Similarly to these settings, survival learners are constructed with `"lrn"`; available learners are listed in @sec-appendix-overview-tables.
+
+`r mlr3proba` has a different predict interface to `r mlr3` as all possible types of prediction ('predict types') are returned when possible for all survival models -- i.e., if a model can compute a predict type then it is returned in `r ref("PredictionSurv")`.
+The reason for this design decision is that all these predict types can be transformed to one another and it is therefore computationally simpler to return all at once instead of rerunning models to change predict type.
+In survival analysis, the following predictions can be made:
+
+* `response` - Predicted survival time.
+* `distr` - Predicted survival distribution, either discrete or continuous.
+* `lp` - Linear predictor calculated as the fitted coefficients multiplied by the test data.
+* `crank` - Continuous risk ranking.
+
+We will go through each of these prediction types in more detail and with examples to make them less abstract.
+We will use the following setup for most of the examples.
+In this chunk we are partitioning the `r ref("survival::rats")` and training a `r index("Cox Proportional Hazards", aside = TRUE)` model (`r ref("mlr_learners_surv.coxph")`) on the training set and making predictions for the predict set.
+For this model, all predict types except `response` can be computed.
+
+```{r special-015}
+t = tsk("rats")
+split = partition(t)
+p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
+p
+```
+
+#### `predict_type = "response"`
+
+Counterintuitively for many, the `response` prediction of predicted survival times is actually the least common predict type in survival analysis.
+The likely reason for this is due to the presence of censoring.
+We rarely observe the true survival time for many observations and therefore it is unlikely any survival model can confidently make predictions for survival times.
+This is illustrated in the code below.
+
+In the example below we train and predict from a survival support vector machine (`r ref("mlr_learners_surv.svm")`), note we use `type = "regression"` to select the algorithm that optimizes survival time predictions and `gamma.mu = 1e-3` is selected arbitrarily as this is a required parameter (this parameter should usually be tuned).
+We then compare the predictions from the model to the true data.
+
+```{r special-016}
+library(mlr3extralearners)
+pred = lrn("surv.svm", type = "regression", gamma.mu = 1e-3)$
+  train(t, split$train)$predict(t, split$test)
+data.frame(pred = pred$response[1:3], truth = pred$truth[1:3])
+```
+
+As can be seen from the output, our predictions are all less than the true observed time, which means we know our model definitely underestimated the truth.
+However, because each of the true values are censored times, we have absolutely no way of knowing if these predictions are slightly bad or absolutely terrible, (i.e., the true survival times could be $105, 99, 92$ or they could be $300, 1000, 200$).
+Hence, with no realistic way to evaluate these models, survival time predictions are rarely useful.
+
+#### `predict_type = "distr"`
+
+So unlike regression in which deterministic/point predictions are most common, in survival analysis distribution predictions are much more common.
+You will therefore find that the majority of survival models in `r mlr3proba` will make distribution predictions by default.
+These predictions are implemented using the `r ref_pkg("alan-turing-institute/distr6")` package, which allows visualization and evaluation of survival curves (defined as 1 - cumulative distribution function).
+In the example below we train a Cox PH model on the `rats` dataset and then evaluate the survival function for three predictions at $t = 77$.
+
+```{r special-017}
+t = tsk("rats")
+split = partition(t)
+p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
+p$distr[1:3]$survival(77)
+```
+
+The output indicates that there is a `r paste0(round(p$distr[1:3]$survival(77)*100, 1), "%")`, chance of the first three predicted rats being alive at time 77 respectively.
+
+
+#### `predict_type = "lp"`
+
+`lp`, often written as $\eta$ in academic writing, is computationally the simplest prediction and has a natural analogue in regression modeling.
+Readers familiar with linear regression will know that when fitting a simple linear regression model, $Y = X\beta$, we are actually estimating the values for $\beta$, and the estimated `r index("linear predictor")` (lp) is then $X\hat{\beta}$, where $\hat{\beta}$ are our estimated coefficients.
+In simple survival models, the linear predictor is the same quantity (but estimated in a slightly more complicated way).
+The learner implementations in `r mlr3proba` are primarily machine-learning focused and few of these models have a simple linear form, which means that `lp` cannot be computed for most of these.
+In practice, when used for prediction, `lp` is a proxy for a relative risk/continuous ranking prediction, which is discussed next.
+
+#### `predict_type = "crank"`
+
+The final prediction type, `crank`, is the most common in survival analysis and perhaps also the most confusing.
+Academic texts will often refer to 'risk' predictions in survival analysis (hence why survival models are often known as 'risk prediction models'), without defining what 'risk' means.
+Often risk is defined as $exp(\eta)$ as this is a common quantity found in simple linear survival models.
+However, sometimes risk is defined as $exp(-\eta)$, and sometimes it can be an arbitrary quantity that does not have a meaningful interpretation.
+To prevent this confusion in `r mlr3proba`, we define the predict type `crank`, which stands for **c**ontinuous **rank**ing.
+This is best explained by example.
+
+:::{.callout-warning}
+The interpretation of 'risk' for survival predictions differs across R packages and sometimes even between models in the same package.
+In `r mlr3proba` there is one consistent interpretation of `crank`: lower values represent a lower risk of the event taking place and higher values represent higher risk.
+:::
+
+Continuing from the previous example we output the first three `crank` predictions.
+The output tells us that the second rat is at the higher risk of death (larger values represent higher risk) and the third rat is at the lowest risk of death.
+The distance between predictions also tells us that the difference in risk between the first and second rat is smaller than the difference between the second and third.
+The actual values themselves are meaningless and therefore comparing `crank` values between samples (or papers or experiments) is not meaningful.
+
+```{r special-018}
+p$crank[1:3]
+```
+
+The `crank` prediction type is informative and common in practice because it allows identifying observations at lower/higher risk to each other, which is useful for resource allocation and prioritization (e.g., which patient should be given an expensive treatment), and clinical trials (e.g., are people in a treatment arm at lower risk of disease X than people in the control arm.).
+
+### MeasureSurv
+
+Survival models in `r mlr3proba` are evaluated with `r ref("MeasureSurv")` objects, which are constructed in the usual way with `"msr"`; measures currently implemented are listed in see @sec-appendix-overview-tables.
+
+In general survival measures can be grouped into the following:
+
+1. Discrimination measures -- Quantify if a model correctly identifies if one observation is at higher risk than another. Evaluate `crank` and/or `lp` predictions.
+1. Calibration measures -- Quantify if the average prediction is close to the truth (all definitions of calibration are unfortunately vague in a survival context). Evaluate `crank` and/or `distr` predictions.
+1. Scoring rules -- Quantify if probabilistic predictions are close to true values. Evaluates `distr` predictions.
+
+```{r special-020}
+head(as.data.table(mlr_measures)[
+  task_type == "surv", c("key", "predict_type")])
+```
+
+There is a lot of debate in the literature around the 'best' survival measures to use to evaluate models, as a general rule we recommend RCLL (`r ref("mlr_measures_surv.rcll")`) to evaluate the quality of `distr` predictions, concordance index (`r ref("mlr_measures_surv.cindex")`) to evaluate a model's discrimination, and D-Calibration (`r ref("mlr_measures_surv.dcalib")`) to evaluate a model's calibration.
+
+We can now evaluate our predictions from the previous example.
+In the code below we use the recommend measures and find this model's performance seems okay as the RCLL and DCalib are relatively low 0 and the C-index is greater than 0.5.
+
+```{r}
+p$score(msrs(c("surv.rcll", "surv.cindex", "surv.dcalib")))
+```
+
+### Composition {#sec-surv-comp}
+
+Throughout `r mlr3proba` documentation we refer to "native" and "composed" predictions.
+We define a 'native' prediction as the prediction made by a model without any post-processing, whereas a 'composed' prediction is one that is returned after post-processing.
+
+#### Internal composition
+
+In `r mlr3proba` we make use of composition internally to return a `"crank"` prediction for every learner.
+This is to ensure that we can meaningfully benchmark all models according to at least one criterion.
+The package uses the following rules to create `"crank"` predictions:
+
+1. If a model returns a 'risk' prediction then `crank = risk` (we may multiply this by $-1$ to ensure the 'low value low risk' interpretation).
+1. Else if a model returns a `response` prediction then we set `crank = -response`.
+1. Else if a model returns a `lp` prediction then we set `crank = lp` (or `crank = -lp` if needed).
+1. Else if a model returns a `distr` prediction then we set `crank` as the sum of the cumulative hazard function (see @Sonabend2022 for full discussion as to why we picked this method).
+
+#### Explicit composition and pipelines
+
+At the start of this section we mentioned that it is possible to transform prediction types between each other.
+In `r mlr3proba` this is possible with 'compositor' pipelines (@sec-pipelines).
+There are a number of pipelines implemented in the package but two in particular focus on predict type transformation:
+
+1. `r ref("pipeline_crankcompositor()")` - Transforms a `"distr"` prediction to `"crank"`; and
+1. `r ref("pipeline_distrcompositor()")` - Transforms a `"lp"` prediction to `"distr"`.
+
+In practice, the second pipeline is more common as we internally use a version of the first pipeline whenever we return predictions from survival models (so only use the first pipeline to overwrite these ranking predictions), and so here we will just look at the second pipeline.
+
+In the example below we load the `rats` dataset, remove factor columns, and then partition the data into training and testing.
+We construct the `distrcompositor` pipeline around a survival GLMnet learner (`r ref("mlr_learners_surv.glmnet")`) which by default can only make predictions for `"lp"` and `"crank"`.
+In the pipeline we specify that we will estimate the baseline distribution with a `r index("Kaplan-Meier")` estimator (`estimator = "kaplan"`) and that we want to assume a proportional hazards form for our estimated distribution.
+We then train and predict in the usual way and in our output we can now see a `distr` prediction.
+
+```{r special-021, warning=FALSE}
+library(mlr3verse)
+library(mlr3extralearners)
+
+task = tsk("rats")
+task$select(c("litter", "rx"))
+split = partition(task)
+
+learner = lrn("surv.glmnet")
+
+# no distr output
+learner$train(task, split$train)$predict(task, split$test)
+
+pipe = as_learner(ppl(
+  "distrcompositor",
+  learner = learner,
+  estimator = "kaplan",
+  form = "ph"
+))
+
+# now with distr
+pipe$train(task, split$train)$predict(task, split$test)
+```
+
+Mathematically, we have done the following:
+
+1. Assume our estimated distribution will have the form $h(t) = h_0(t)exp(\eta)$ where $h$ is the hazard function and $h_0$ is the baseline hazard function.
+1. Estimate $\hat{\eta}$ prediction using GLMnet
+1. Estimate $\hat{h}_0(t)$ with the Kaplan-Meier estimator
+1. Put this all together as $h(t) = \hat{h}_0(t)exp(\hat{\eta})$
+
+For more details about prediction types and compositions we recommend @Kalbfleisch2011.
+
+
+### Putting it all together {#sec-survival-all}
+
+Finally, we will put all the above into practice in a small benchmark experiment.
+We first load the `r ref("grace")` dataset and subset to the first 500 rows.
+We then select the RCLL, D-Calibration, and C-index to evaluate predictions, setup the same pipeline we used in the previous experiment, and load a Cox PH and Kaplan-Meier estimator.
+We run our experiment with 3-fold cross-validation and aggregate the results.
+
+```{r special-022, warning=FALSE}
+library(mlr3verse)
+library(mlr3extralearners)
+
+task = tsk("grace")$filter(1:500)
+msr_txt = c("surv.rcll", "surv.cindex", "surv.dcalib")
+measures = msrs(msr_txt)
+
+pipe = as_learner(ppl(
+  "distrcompositor",
+  learner = lrn("surv.glmnet"),
+  estimator = "kaplan",
+  form = "ph"
+))
+pipe$id = "Coxnet"
+learners = c(lrns(c("surv.coxph", "surv.kaplan")), pipe)
+
+bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
+bmr$aggregate(measures)[, c("learner_id", ..msr_txt)]
+```
+
+In this small experiment, Coxnet and Cox PH have the best discrimination with $C \approx 0.82$, Cox PH has the best calibration (as DCalib is closest to 0), and Coxnet and Cox PH have similar overall predictive accuracy (with lowest RCLL).
+
+## Density Estimation {#sec-density}
+
+Density estimation is a learning task to estimate the unknown distribution from which a univariate dataset is generated, or put more simply to estimate the probability density (or mass) function for a single variable.
+As with survival analysis, density estimation is implemented in `r mlr3proba`, as both can make probability distribution predictions (hence the name "**mlr3proba**bilistic").
+Unconditional density estimation (i.e. estimation of a target without any covariates) is viewed as an unsupervised task, which means the 'truth' is never known.
+For a good overview to density estimation see @Silverman1986.
+
+The package `r mlr3proba` extends `r mlr3` with the following objects for density estimation:
+
+* `r ref("mlr3proba::TaskDens", text = "TaskDens")` to define density tasks.
+* `r ref("mlr3proba::LearnerDens", text = "LearnerDens")` as the base class for density estimators.
+* `r ref("mlr3proba::PredictionDens", text = "PredictionDens")` for density predictions.
+* `r ref("mlr3proba::MeasureDens", text = "MeasureDens")` as a specialized class for density performance measures.
+
+We will consider each in turn.
+
+### TaskDens
+
+As density estimation is an unsupervised task, there is no target for prediction.
+In the code below we construct a density task using `r ref("as_task_dens")` which takes one argument, a `data.frame` type object with exactly one column (which we will use to estimate the underlying distribution).
+
+```{r special-023}
+task = as_task_dens(data.table(x = rnorm(1000)))
+task
+```
+
+As with other tasks, we have included a couple of tasks that come shipped with `r mlr3proba`:
+
+```{r}
+as.data.table(mlr_tasks)[task_type == "dens", c(1:2, 4:5)]
+```
+
+### `LearnerDens` and `PredictionDens`
+
+Density learners can make one of three possible prediction types:
+
+1. `distr` - probability distribution
+1. `pdf` - probability density function
+1. `cdf` - cumulative distribution function
+
+All learners will return a `distr` and `pdf` prediction but only some can make `cdf` predictions.
+Again, the `distr` predict type is implemented using `r ref_pkg("alan-turing-institute/distr6")`.
+
+```{r special-024}
+#| label: fig-dens-hist
+#| fig-cap: Predicted density from the histogram learner, as expected this closely resembles the underlying N(0, 1) data.
+#| fig-alt: Image shows a line plot from (-2, 0) to (2, 0.4) in a histogram shape that closely resembles a Normal(0, 1) distribution.
+learn = lrn("dens.hist")
+p = learn$train(task, 1:900)$predict(task, 901:1000)
+x = seq.int(-2, 2, 0.01)
+ggplot(data.frame(x = x, y = p$distr$pdf(x)), aes(x = x, y = y)) +
+  geom_line() + theme_minimal()
+```
+
+The `pdf` and `cdf` predict types are simply wrappers around `distr$pdf` and `distr$cdf` respectively, which is best demonstrated by example:
+
+```{r special-025}
+learn = lrn("dens.hist")
+p = learn$train(task, 1:10)$predict(task, 11:13)
+p
+cbind(p$distr$cdf(task$data()$x[11:13]), p$cdf[1:3])
+```
+
+The reason for returning `pdf` and `cdf` in this way is to support measures that can be used to evaluate the quality of our estimations, which we will return to in the next section.
+
+### `MeasureDens`
+
+Currently the only measure implemented in `r mlr3proba` for density estimation is logloss, which is defined in the same way as in classification, $L(y) = -log(\hat{f}_Y(y))$, where $\hat{f}_Y$ is our estimated probability density function.
+Putting this together with the above we are now ready to train a density learner, estimate a distribution, and evaluate our estimation:
+
+```{r special-026}
+meas = msr("dens.logloss")
+meas
+
+p$score(meas)
+```
+
+As with any scoring rule this output cannot be interpreted by itself and is more useful in a benchmark experiment, which we will look at in the final part of this section.
+
+### Putting it all together {#sec-density-all}
+
+Finally, we conduct a small benchmark study on the `r ref("mlr_tasks_faithful")` task using some of the integrated density learners:
+
+```{r special-028, message=FALSE, warning=FALSE, results='hide'}
+library(mlr3extralearners)
+task = tsk("faithful")
+learners = lrns(c("dens.hist", "dens.pen", "dens.kde"))
+measure = msr("dens.logloss")
+bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
+bmr$aggregate(measure)
+autoplot(bmr, measure = measure)
+```
+
+The results of this experiment show that the sophisticated Penalized Density Estimator does not outperform the baseline histogram, but that the Kernel Density Estimator has at least consistently better (i.e. lower logloss) results.
+
+## Cluster Analysis {#sec-cluster}
+
+`r index("Cluster analysis", aside = TRUE)` is another unsupervised task implemented in `r mlr3`.
+The objective of cluster analysis is to group data into clusters, where each cluster contains similar observations.
+The similarity is based on specified metrics that are task and application-dependent.
+Unlike classification where we try to predict a class for each observation, in cluster analysis there is no 'true' label or class to predict.
+
+The package `r mlr3cluster` extends `r mlr3` with the following objects for cluster analysis:
+
+* `r ref("mlr3cluster::TaskClust", text = "TaskClust")` to define clustering tasks
+* `r ref("mlr3cluster::LearnerClust", text = "LearnerClust")` as base class for clustering learners
+* `r ref("mlr3cluster::PredictionClust", text = "PredictionClust")` as specialized class for `r ref("Prediction")` objects
+* `r ref("mlr3cluster::MeasureClust", text = "MeasureClust")` as specialized class for performance measures
+
+We will consider each in turn.
+
+### TaskClust
+
+Similarly to density estimation (@sec-density), there is no target for prediction and so no `truth` field in `r ref("TaskClust")`.
+Let us look at the `r ref("cluster::ruspini")` dataset often used for cluster analysis examples.
+
+```{r special-029, warning=FALSE, message=FALSE}
+library(cluster)
+head(ruspini)
+```
+
+The dataset has 75 rows and two columns and was first introduced in @Ruspini1970 to illustrate different clustering techniques.
+As we will see from the plots below, the observations form four natural clusters.
+
+In the code below we construct a cluster task using `r ref("as_task_clust")` which only takes one argument, a `data.frame` type object.
+
+```{r special-030, warning=FALSE, message=FALSE}
+library(mlr3verse)
+library(cluster)
+task = as_task_clust(ruspini)
+task
+
+autoplot(task)
+```
+
+Technically, we did not need to create a new task for ruspini dataset since it is already included in the package.
+Currently we have two clustering tasks shipped with `r mlr3cluster`:
+
+```{r special-031}
+as.data.table(mlr_tasks)[task_type == "clust", c(1:2, 4:5)]
+```
+
+### LearnerClust and PredictionClust
+
+As with density estimation, we refer to `training` and `predicting` for clustering to be consistent with the `r mlr3` interface, but strictly speaking this should be `clustering` and `assigning` (the latter we will return to shortly).
+Two `predict_types` are available for clustering learners:
+
+1. `partition` -- estimate of which cluster an observation falls into
+1. `prob` -- probability of an observation belonging to each cluster
+
+Hence, similarly to classification, prediction types of clustering learners are either deterministic (`partition`) or probabilistic (`prob`).
+
+Below we construct a C-Means clustering learner with `prob` prediction type and 3 clusters, train it on the `r ref("cluster::ruspini")` dataset and then return the cluster assignments (`$assignments`) for each observation.
+
+```{r special-032}
+learner = lrn("clust.cmeans", predict_type = "prob", centers = 3)
+learner
+
+learner$train(task)
+learner$assignments[1:6]
+```
+
+As clustering is unsupervised, it often does not make sense to use `predict` for new data however this is still possible using the `r mlr3` interface.
+
+```{r special-033, warning = FALSE, message = FALSE}
+# using different data for estimation (rare use case)
+learner$train(task, 1:30)$predict(task, 31:32)
+
+# using same data for estimation (common use case)
+prediction = learner$train(task)$predict(task)
+autoplot(prediction, task)
+```
+
+Whilst two prediction types are possible, there are some learners where 'prediction' can never make sense, for example in `r index("hierarchical clustering", aside = TRUE)`.
+In hierarchical clustering, the goal is to build a hierarchy of nested clusters by either splitting large clusters into smaller ones or merging smaller clusters into bigger ones.
+The final result is a tree or dendrogram which can change if a new data point is added.
+For consistency, `r mlr3cluster` offers `predict` method for hierarchical clusters but with a warning:
+
+```{r special-034}
+learner = lrn("clust.hclust")
+learner$train(task)
+learner$predict(task)
+autoplot(learner) + theme(axis.text = element_text(size = 3.5))
+```
+
+In this case, the `predict` method simply cuts the dendrogram into the number of clusters specified by `k` parameter of the learner.
+
+
+### MeasureClust
+
+As previously discussed, unsupervised tasks do not have ground truth data to compare to in model evaluation.
+However, we can still measure the quality of cluster assignments by quantifying how closely objects within the same cluster are related (`r index("cluster cohesion")`) as well as how distinct different clusters are from each other (`r index("cluster separation")`).
+There are a few built-in evaluation metrics available to assess the quality of clustering, see @sec-appendix-overview-tables.
+
+Two common measures are the within sum of squares (WSS) measure, `r ref("mlr_measures_clust.wss")`, and the silhouette coefficient, `r ref("mlr_measures_clust.silhouette")`.
+WSS calculates the sum of squared differences between observations and centroids, which is a quantification of cluster cohesion (smaller values indicate clusters more compact).
+The silhouette coefficient quantifies how well each point belongs to its assigned cluster versus neighboring clusters, where scores closer to `1` indicate well clustered and scores closer to `-1` indicate poorly clustered.
+Note that the silhouette measure in `r mlr3cluster` returns the mean silhouette score across all observations and when there is only a single cluster, the measure simply outputs 0.
+
+Putting this together with the above we can now score our cluster estimation (note we must pass the `task` to `$score`):
+
+```{r special-036}
+meas = msrs(c("clust.wss", "clust.silhouette"))
+
+prediction$score(meas, task = task)
+```
+
+The very high WSS and middling mean silhouette coefficient indicate that our clusters could do with a bit more work.
+Often reducing an unsupervised task to a quantitative measure may not be useful (given no ground truth) and instead visualization (discussed below) may be a more effective tool for assessing the quality of the clusters.
+
+### Visualization
+
+As clustering is an unsupervised task, visualization can be essential not just for 'evaluating' models but also for determining if our learners are performing as expected for our task. The next section will look at visualizations for supporting clustering choices and following that we will consider plots for evaluating model performance.
+
+#### Visualizing clusters
+
+It is easy to rely on clustering measures to assess the quality of clustering.
+However, this should be done with some care, by example consider cluster analysis on the following dataset.
+
+```{r special-037}
+spirals = mlbench::mlbench.spirals(n = 300, sd = 0.01)
+task = as_task_clust(as.data.frame(spirals$x))
+autoplot(task)
+```
+
+Now fitting our clustering learner.
+
+```{r special-038}
+learners = list(
+  lrn("clust.kmeans"),
+  lrn("clust.dbscan", eps = 0.1)
+)
+measures = list(msr("clust.silhouette"))
+bmr = benchmark(benchmark_grid(task, learners, rsmp("insample")))
+bmr$aggregate(measures)[, c(4, 7)]
+```
+
+We can see that K-means clustering gives us a higher average silhouette score and might assume that K-means learner with 2 centroids is a a better choice than DBSCAN method.
+However, now take a look at the cluster assignment plots.
+
+```{r special-039, message=FALSE, warning=FALSE}
+prediction_kmeans = bmr$resample_results$resample_result[[1]]$prediction()
+prediction_dbscan = bmr$resample_results$resample_result[[2]]$prediction()
+autoplot(prediction_kmeans, task)
+autoplot(prediction_dbscan, task)
+```
+
+The two learners arrived at different results -- the K-means algorithm assigned points that are part of the same line into two different clusters whereas DBSCAN assigned each line to its own cluster.
+Which one of these approaches is correct?
+The answer is it depends on your specific task and the goal of cluster analysis.
+If we had only relied on the silhouette score, then the details of how exactly the clustering was done would have been masked and we would not be able to decide which method was appropriate for the task.
+
+#### PCA and Silhouette plots
+
+The two most important plots implemented in `r mlr3viz` to support evaluation of cluster learners are `r index("principal components analysis")` (PCA) and silhouette plots.
+
+PCA is a commonly used dimension reduction method in ML to reduce the number of variables in a dataset or to visualize the most important 'components', which are linear transformations of the dataset features.
+Components are considered more important if they have higher variance (and therefore more predictive power).
+In the context of clustering, by plotting observations against the first two components, and then coloring them by cluster, we could visualize our high dimensional dataset and we would expect to see observations in distinct groups.
+
+Since our running example only has two features, PCA does not make sense to visualize the data.
+So we will use a task based on the `USArrests` dataset instead.
+By plotting the result of PCA, we see that our model has separated observations into two clusters along the first two principal components.
+
+```{r special-040, message=FALSE, warning=FALSE}
+task = mlr_tasks$get("usarrests")
+learner = lrn("clust.kmeans")
+prediction = learner$train(task)$predict(task)
+autoplot(prediction, task, type = "pca")
+```
+
+Silhouette plots visually assess the quality of the estimated clusters by visualizing if observations in a cluster are well-placed both individually and as a group.
+The plots include a dotted line which visualizes the average silhouette coefficient across all data points and each data point’s silhouette value is represented by a bar colored by cluster.
+In our particular case, the average silhouette index is `r round(msr("clust.silhouette")$score(prediction, task), 2)`.
+If the average silhouette value for a given cluster is below the average silhouette coefficient line then this implies that the cluster is not well defined.
+
+Continuing with our new example, we find that a lot of observations are actually below the average line and close to zero, and therefore the quality of our cluster assignments is not very good, meaning that many observations are likely assigned to the wrong cluster.
+
+```{r special-041, message=FALSE, warning=FALSE}
+autoplot(prediction, task, type = "sil")
+```
+
+### Putting it all together {#sec-cluster-all}
+
+Finally, we conduct a small benchmark study using the `ruspini` data and with a few integrated cluster learners:
+
+```{r special-042, message=FALSE, warning=FALSE}
+task = tsk("ruspini")
+learners = list(
+  lrn("clust.featureless"),
+  lrn("clust.kmeans", centers = 4L),
+  lrn("clust.cmeans", centers = 3L)
+)
+measures = list(msr("clust.wss"), msr("clust.silhouette"))
+bmr = benchmark(benchmark_grid(task, learners, rsmp("insample")))
+bmr$aggregate(measures)[, c(4, 7, 8)]
+```
+
+The experiment shows that using the K-means algorithm with four centers has the best cluster cohesion (lowest within sum of squares) and the best average silhouette score.
+
+## Spatial Analysis {#sec-spatiotemporal}
+
+The final task we will discuss in this book is `r index("spatial analysis", aside = TRUE)`.
+Spatial analysis can be a subset of any other machine learning task (e.g., regression or classification) and is defined by the presence of spatial information in a dataset, usually stored as coordinates that are often named "x" and "y" or "lat" and "lon" (for 'latitude' and 'longitude' respectively.)
+
+Spatial analysis is its own task as spatial data must be handled carefully due to the complexity of 'autocorrelation'.
+Where `r index("correlation")` is defined as a statistical association *between two* variables, `r index("autocorrelation", aside = TRUE)` is a statistical association *within one* variable.
+In machine learning terms, in a dataset with features and observations, correlation occurs when two or more features are statistically associated in some way, whereas autocorrelation occurs when two or more observations are statistically associated across one feature.
+Autocorrelation therefore violates one of the fundamental assumptions of ML that all observations in a dataset are independent, which results in lower confidence about the quality of a trained ML model and the resulting performance estimates [@hastie2001].
+
+Autocorrelation is present in spatial data as there is implicit information encoded in coordinates, such as whether two observations (e.g., cities, countries, continents) are close together or far apart.
+For example, say we are predicting the number of cases of a disease two months after outbreak in Germany.
+Outbreaks radiate outwards from an epicenter and therefore countries closer to Germany will have higher numbers of cases, and countries further away will have lower numbers (@fig-autocorrelation, bottom).
+Thus, looking at the data spatially shows clear signs of autocorrelation across nearby observations.
+Note in this example the autocorrelation is radial but in practice this will not always be the case.
+
+```{r special-043, warning=FALSE, echo=FALSE, message=FALSE}
+#| label: fig-autocorrelation
+#| fig-cap: Heatmaps where darker countries indicate higher number of cases and lighter countries indicate lower number of cases of imaginary Disease X with epicenter in Germany. The top map imagines a world in which there is no spatial autocorrelation and the number of cases of a disease is randomly distributed. The bottom map shows a more accurate world in which the number of cases radiate outwards from the epicenter (Germany).
+#| fig-alt: Image shows two separate maps of Europe. Top map has a random distribution of colors from light pink to very dark red. Bottom map shows darkest color (dark red) at Germany with increasing lightness as the countries are increasingly further away.
+
+library(dplyr)
+library(patchwork)
+
+m = map_data("world")
+m = m[m$region == "Germany", ]
+x1 = mean(m$lon)
+x2 = mean(m$lat)
+m = map_data("world")
+m = m %>% dplyr::filter(long > -15, long < 40, lat > 36, lat <  60)
+m$dist = (-sqrt((m$lon - x1)^2 + (m$lat - x2)^2)) * 10e5
+if (min(m$dist) < 0) {
+  m$dist = m$dist - min(m$dist)
+}
+m$rand = runif(nrow(m), min(m$dist), max(m$dist))
+cou = m %>% group_by(region) %>% summarize(long = mean(long), lat = mean(lat))
+
+p = ggplot(data = m) +
+  scale_fill_gradient2(low = "white", mid = "lightpink", high = "black", midpoint = mean(m$dist)) +
+  theme_minimal() +
+  xlim(-10, 25) + ylim(37, 58)
+
+t = geom_text(aes(label = region, x = long, y = lat), data = cou, size = 2)
+
+p1 = p + geom_map(map = m, aes(long, lat, map_id = region, fill = rand)) + t +
+  theme(legend.position = "n")
+
+p2 = p + geom_map(map = m, aes(long, lat, map_id = region, fill = dist)) + t +
+  labs(fill = "Cases")
+
+p1 / p2 & patchwork::plot_layout(guides = "collect")
+```
+
+Unlike other tasks we have looked at in this chapter, there is no underlying difference to the implemented learners or measures.
+Instead we provide additional resampling methods in `r mlr3spatiotempcv` to account for the similarity in the train and test sets during resampling that originates from spatiotemporal autocorrelation.
+
+Throughout this section we will use the `r ref("mlr3spatiotempcv::ecuador")` dataset and task as a working example.
+
+### `TaskClassifST` and `TaskRegrST`
+
+To make use of spatial resampling methods, we have implemented two extensions of `r ref("TaskClassif")` and `r ref("TaskRegr")` to accommodate spatial data, `r ref("TaskClassifST")` and `r ref("TaskRegrST")` respectively.
+Below we only show classification examples but regression follows trivially.
+
+```{r special-044, message=FALSE, warning=FALSE}
+library(mlr3spatial)
+library(mlr3spatiotempcv)
+
+# create task from `data.frame`
+task = as_task_classif_st(ecuador, id = "ecuador_task",
+  target = "slides", positive = "TRUE",
+  coordinate_names = c("x", "y"), crs = "32717")
+
+# or create task from 'sf' object
+data_sf = sf::st_as_sf(ecuador, coords = c("x", "y"), crs = "32717")
+task = as_task_classif_st(data_sf, target = "slides", positive = "TRUE")
+task
+```
+
+Once a task is created, you can train and predict as normal.
+
+```{r special-045}
+lrn("classif.rpart")$train(task)$predict(task)
+```
+
+However as discussed above, it is best to use the specialized resampling methods to achieve bias-reduced estimates of model performance.
+
+### Spatiotemporal Cross-Validation {#spatiotemp-cv}
+
+Before we look at the spatial resampling methods implemented in `r mlr3spatiotempcv` we will first show what can go wrong if non-spatial resampling methods are used for spatial data.
+Below we benchmark a decision tree on the `r ref("mlr_tasks_ecuador")` task using two different repeated cross-validation resampling methods, the first ("NSpCV" (non-spatial cross-validation)) is a non-spatial resampling method from `r mlr3`, the second ("SpCV" (spatial cross-validation)) is from `r mlr3spatiotempcv` and is optimized for spatial data.
+The example highlights how "NSpCV" makes it appear as if the decision tree is performing better than it is with significantly higher estimated performance, however, this is an overconfident prediction due to the autocorrelation in the data.
+
+```{r special-046, warning=FALSE,message=FALSE}
+learner = lrn("classif.rpart", predict_type = "prob")
+rsmp_nsp = rsmp("repeated_cv", folds = 3, repeats = 2, id = "NSpCV")
+rsmp_sp = rsmp("repeated_spcv_coords", folds = 3, repeats = 2, id = "SpCV")
+
+design = benchmark_grid(task, learner, c(rsmp_nsp, rsmp_sp))
+bmr = benchmark(design)
+bmr$aggregate(msr("classif.acc"))[, c(5, 7)]
+```
+
+In the above example, applying non-spatial resampling results in train and test sets that are very similar due to the underlying spatial autocorrelation.
+Hence there is little difference from testing a model on the same data it was trained on, which should be avoided for an honest performance result (see @sec-basics).
+In contrast, the spatial method has accommodated for autocorrelation and the test data is therefore less correlated (though still some association will remain) with the training data.
+Visually this can be seen using built-in `r ref("autoplot")` methods.
+In @fig-sprsmp we visualize how the task is partitioned according to the spatial resampling method (@fig-sprsmp, top) and non-spatial resampling method (@fig-sprsmp, bottom).
+There is a clear separation in space for the respective partitions when using the spatial resampling whereas the train and test splits overlap a lot (and are therefore more correlated) using the non-spatial method.
+
+```{r special-047}
+#| fig-cap: Scatterplots show separation of train (blue) and test (orange) data for the first three (left to right) folds of the first repetition of the cross-validation. The top row is spatial resampling where train and test data are clearly separated. The bottom row is non-spatial resampling where there is overlap in train and test data.
+#| fig-alt: Six scatter plots are shown with y-axes from 4 degrees South to 3.97 degrees South and x-axes from 79.08 degrees West to 79.06 degrees West. The top row of plots show a very clear separation with no overlap between blue and orange datapoints, whereas the bottom low shows significant overlap.
+#| label: fig-sprsmp
+
+library(patchwork)
+autoplot(rsmp_sp, task, fold_id = c(1:3), size = 0.7) /
+  autoplot(rsmp_nsp, task, fold_id = c(1:3), size = 0.7) &
+  scale_y_continuous(breaks = seq(-3.97, -4, -0.01)) &
+  scale_x_continuous(breaks = seq(-79.06, -79.08, -0.02))
+```
+
+Now we have seen why spatial resampling matters we can take a look at what methods are available in `r mlr3spatiotempcv`.
+The resampling methods we have added can be categorized into:
+
+* Blocking -- Create rectangular blocks in 2D or 3D space
+* Buffering -- Create buffering zones to remove observations between train and test sets
+* Spatiotemporal clustering -- Clusters based on coordinates (and/or time-points)
+* Feature space clustering -- Clusters based on feature space and not necessarily spatiotemporal
+* Custom (partitioning) -- Grouped by factor variables
+
+The choice of method may depend on specific characteristics of the dataset and there is no easy rule to pick one method over another, full details of different methods can be found in @Schratz2021 -- the paper deliberately avoids recommending one method over another as the 'optimal' choice is highly dependent on the predictive task, autocorrelation in the data, and the spatial structure of the sampling design.
+The documentation for each of the implemented methods includes details of each method as well as references to original publications.
+
+:::{.callout-tip}
+## Spatio*temporal* resampling
+
+We have focused on spatial analysis but referred to "spatiotemporal" and "spatiotemp".
+The spatial-only resampling methods discussed in this section can be extended to temporal analysis (or spatial and temporal analysis combined) by setting the `"time"` `col_role` in the task (@sec-performance) -- this is an advanced topic that may be added in future editions of this book.
+See the `r mlr3spatiotempcv` visualization `r link("https://mlr3spatiotempcv.mlr-org.com/articles/spatiotemp-viz.html", "vignette")` for specific details about 3D spatiotemporal visualization.
+:::
+
+### Spatial Prediction {#sec-spatial-prediction}
+
+Until now we have looked at resampling to accommodate spatiotemporal *features*, but what if you want to make spatiotemporal *predictions*?
+In this case the goal is to make classification or regression predictions at the a pixel level, i.e., for an area, defined by the geometric resolution, of a raster image.
+
+To enable these predictions we have created a new function, `r ref("predict_spatial")`, to allow spatial predictions using any of the following spatial data classes:
+
+* `stars` (from package `r ref_pkg("stars")`)
+* `SpatRaster` (from package `r ref_pkg("terra")`)
+* `RasterLayer` (from package `r ref_pkg("raster")`)
+* `RasterStack` (from package `r ref_pkg("raster")`)
+
+To use a raster image for prediction, it must be wrapped in `r ref("TaskUnsupervised")`.
+In the example below we load the `leipzig_points` dataset for training and coerce this to a spatiotemporal task with `r ref("as_task_classif_st")`, and we load the `leipzig_raster` raster image and coerce this to an unsupervised task.
+Both files are included as example data in `r mlr3spatial`.
+
+```{r special-048, warning=FALSE, message=FALSE}
+library(sf)
+
+# load sample points
+leipzig_vector = sf::read_sf(system.file("extdata",
+  "leipzig_points.gpkg", package = "mlr3spatial"),
+  stringsAsFactors = TRUE)
+# create training data
+tsk_leipzig = as_task_classif_st(leipzig_vector, target = "land_cover")
+
+# load raster image
+leipzig_raster = terra::rast(system.file("extdata", "leipzig_raster.tif",
+  package = "mlr3spatial"))
+# create testing data
+tsk_predict = as_task_unsupervised(leipzig_raster)
+```
+
+Now we can continue as normal to train and predict with a classification learner, in this case a random forest.
+
+```{r special-049}
+lrn = lrn("classif.ranger")$train(tsk_leipzig)
+pred = predict_spatial(tsk_predict, lrn, format = "terra")
+pred
+```
+
+In this example we specified creation of a `terra` object, which can be visualized with in-built plotting methods.
+
+```{r special-050, message = FALSE, cache.lazy=FALSE, cache=FALSE}
+library(terra, exclude = "resample")
+plot(pred, col = c("#440154FF", "#443A83FF", "#31688EFF",
+  "#21908CFF", "#35B779FF", "#8FD744FF", "#FDE725FF"))
+```
+
+## Conclusion
+
+In this chapter, we explored going beyond deterministic regression and classification to see how functions in `r mlr3` can be used to implement other machine learning tasks.
+Cost-sensitive classification extends the 'normal' classification setting by assuming the cost associated with false negatives and false positives are unequal.
+Running cost-sensitive classification experiments is possible using only features in `r mlr3`.
+Survival analysis, available in `r mlr3proba`, can be thought of as a regression problem when the outcome may be censored, which means it may never be observed within a given time frame.
+The final task in `r mlr3proba` is density estimation, the unsupervised task concerned with estimating univariate probability distributions.
+Using `r mlr3cluster`, you can perform cluster analysis on observations, which involves grouping observations together according to similarities in their variables.
+Finally, with `r mlr3spatial` and `r mlr3spatiotempcv`, it is possible to perform spatial analysis to make predictions using co-ordinates as features and to make spatial predictions.
+The `r mlr3` interface is highly extensible, which means future machine learning tasks can (and will) be added to our universe and we will add these to this chapter of the book in future editions.
+
+## Exercises
+
+We will run `set.seed(11)` before each of our solutions so you can reproduce our results.
+
+1. Run a benchmark experiment on the `german_credit` task with algorithms: `featureless`, `log_reg`, `ranger`. Tune the `featureless` model using `tunetreshold` and `learner_cv`. Use 2-fold CV and evaluate with `msr("classif.costs", costs = costs)` where you should make the parameter `costs` so that the cost of a true positive is -10, the cost of a true negative is -1, the cost of a false positive is 2, and the cost of a false negative is 3. Are your results surprising?
+2. Train and predict a survival forest using `rfsrc` (from `mlr3extralearners`). Run this experiment using `task = tsk("rats"); split = partition(task)`. Evaluate your model with the RCLL measure.
+3. Estimate the density of the `tsk("precip")` data using `logspline` (from `mlr3extralearners`). Run this experiment using `task = tsk("precip"); split = partition(task)`. Evaluate your model with the logloss measure.
+4. Run a benchmark clustering experiment on the `wine` dataset without a label column. Compare the performance of `k-means` learner with `k` equal to 2, 3 and 4 using the silhouette measure. Use insample resampling technique. What value of `k` would you choose based on the silhouette scores?
+5. Run a (spatially) unbiased classification benchmark experiment on the `ecuador` task with a featureless learner and xgboost, evaluate with the binary Brier score.
+
+::: {.content-visible when-format="html"}
+`r citeas(chapter)`
+:::

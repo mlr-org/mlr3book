@@ -1,0 +1,598 @@
+# Model Interpretation {#sec-interpretation}
+
+{{< include ../../common/_setup.qmd >}}
+
+`r chapter = "Model Interpretation"`
+`r authors(chapter)`
+
+The increasing availability of data and software frameworks to create predictive models has allowed the widespread adoption of machine learning in many applications.
+However, high predictive performance of such models often comes at the cost of `r index("interpretability")`:
+Many trained models by default do not provide further insights into the model and are often too complex to be understood by humans such that questions like ''What are the most important features and how do they influence a prediction?'' cannot be directly answered.
+This lack of explanations hurts trust and creates barriers to adapt predictive models, especially in critical areas with decisions affecting human life, such as credit scoring or medical applications.
+
+<!-- TODO: Not sure if the interpretation goals below are too broad as we do not mention HOW and with which IML methods they can be addressed? -->
+Interpretation methods are valuable from multiple perspectives:
+
+1. To gain global insights into a model, e.g., to identify which features were overall most important.
+2. To improve the model after flaws were identified (in the data or model), e.g., whether the model unexpectedly relies on a certain feature.
+3. To understand and control individual predictions, e.g., to identify how a given prediction
+changes when changing the input.
+1. For justification purposes or to assess fairness, e.g., to inspect whether the model adversely affects certain subpopulations or individuals. This point is not subject of this chapter, but will be discussed in detail in @sec-fairness.
+
+In this chapter, we focus on some important methods from the field of interpretable ML that can be applied to `mlr3` objects `r index("post-hoc")`, i.e. after the model has been trained, and are `r index("model-agnostic")`, i.e. applicable to any model without any restriction to a specific model class.
+We will focus on methods implemented in the following three packages, all three of which interface with `mlr3`:
+
+-   `r ref_pkg("iml")` presented in @sec-iml,
+-   `r ref_pkg("counterfactuals")`presented in @sec-counterfactuals that implements counterfactual explanation methods, and
+-   `r ref_pkg("DALEX")` presented in @sec-dalex.
+
+The `r ref_pkg("iml")` and `r ref_pkg("DALEX")` packages offer similar functionality but differ in design choices in that `r ref_pkg("iml")` makes use of the `R6` class system whereas `r ref_pkg("DALEX")` is based on the S3 class system.
+`r ref_pkg("counterfactuals")` also makes use of `R6`.
+In contrast to `r ref_pkg("iml")` and `r ref_pkg("counterfactuals")`, `r ref_pkg("DALEX")` focuses on comparing multiple predictive models, usually of different types, on the same plot, which is a model comparison-oriented approach, often referred to as Rashomon perspective.
+We will only provide a brief overview to the methods discussed below, we recommend @Molnar2022 as a comprehensive introductory book about interpretable ML.
+
+As a running example throughout this chapter, we will consider a random forest fit on half the features in the `german_credit` task:
+
+```{r interpretation-003}
+library(mlr3verse)
+task = tsk("german_credit")$select(
+  cols = c("duration", "amount", "age", "status", "savings", "purpose",
+  "credit_history", "property", "employment_duration", "other_debtors"))
+split = partition(task)
+learner = lrn("classif.ranger", predict_type = "prob")
+learner$train(task, row_ids = split$train)
+```
+
+::: {.callout-tip}
+For the same reasons as performance evaluation (@sec-performance), performance-based interpretation methods should be applied on an independent test set.
+For prediction-based methods that do not require performance estimation such as ICE/PD (@sec-feature-effects) or Shapley values (@sec-shapley), the differences in interpretation between training and test data are less pronounced [@Molnar2022pitfalls].
+:::
+
+## The `iml` Package {#sec-iml}
+
+The `r ref_pkg("iml")` package [@Molnar2018] implements a variety of model-agnostic interpretation methods for a unified interface to the implemented methods and facilitates the analysis and interpretation of ML models.
+In theory, `r ref_pkg("iml")` supports ML models (for classification or regression) fitted by *any* R package, and in particular all `mlr3` models are supported by wrapping learners in an `r ref("iml::Predictor")` object, which unifies the input-output behavior of the trained models.
+This object contains the prediction model as well as the data used for analyzing the model and producing the desired explanation.
+We construct the `r ref("iml::Predictor")` object using our trained learner and heldout test data:
+
+```{r iml-Predictor}
+library(iml)
+credit_x = task$data(rows = split$test, cols = task$feature_names)
+credit_y = task$data(rows = split$test, cols = task$target_names)
+predictor = Predictor$new(learner, data = credit_x, y = credit_y)
+```
+
+With our `Predictor` setup we can now consider different model interpretation methods.
+
+### `r index('Feature Importance')` {#sec-feat-importance}
+
+When deploying a model in practice, it is often of interest which features are contributing the most towards the *predictive performance* of the model.
+On the one hand, this is useful to better understand the problem at hand and the relationship between the features and the target to be predicted.
+On the other hand, this can also be useful to identify irrelevant features and potentially remove those using feature importance methods as the basis for feature filtering (see @sec-fs-filter).
+In the context of this book, we use the term `r index("feature importance", aside = TRUE)` to describe global methods that calculate a single score per feature reflecting the importance regarding a given quantity of interest, e.g., model performance, thus allowing features to be ranked.
+
+One of the most popular feature importance methods is `r index('permutation feature importance', aside = TRUE)` (PFI), originally introduced by @breiman2001random for random forests and adapted by @Fisher2019pfi as a model-agnostic feature importance measure (originally termed, 'model reliance').
+Feature permutation is the process of randomly shuffling observed values for a single feature in a dataset.
+This removes the original dependency structure of the feature with the target variable and all other features while maintaining the marginal distribution of the feature.
+The PFI measures the change in the model performance before (original model performance) and after (permuted model performance) permuting a feature, therefore if a feature is not important then permuting that feature should not affect the model performance and conversely the higher the change in model performance the more important a feature is deemed.
+It is generally recommended to repeat the permutation process and aggregate performance change over repetitions to decrease randomness in results.
+
+PFI is run in `r ref_pkg("iml")` by constructing an object of class `r ref("iml::FeatureImp")` and specifying the performance measure, below we use classification error.
+By default, the permutation is repeated 5 times (this can be changed with `n.repetitions` when calling `$new()`) and in each repetition the importance value corresponding to the change in the classification error is calculated.
+The `$plot()` method shows the median of the 5 resulting importance values (as a point) and the boundaries of the error bar in the plot refer to the 5% and 95% quantiles of the importance values.
+
+```{r iml-007}
+#| fig-height: 3
+#| label: fig-iml-pfi
+#| fig-cap: Permutation feature importance (PFI). Points indicate the median and bars the 5% and 95% quantiles of the PFI over 5 repetitions of the permutation process.
+#| fig-alt: "x-axis says 'Feature Importance (loss: ce)' and ranges from just below 1.00 to just above 1.20. y-axis lists the features in the text. Plot shows 10 error bars with solid black circles in the middle and horizontal black lines on each row. Top row is 'status' with a CE of around 1.16 (1.15-1.21)."
+importance = FeatureImp$new(predictor, loss = "ce")
+importance$plot()
+```
+
+The plot automatically ranks features from most (largest median performance change) to least (smallest median performance change) important, in @fig-iml-pfi `r importance$results$feature[1]` is the most important feature, if we permute the `r importance$results$feature[1]` column in the data the classification error of our model increases by a factor of around `r round(importance$results$importance[1],2)`.
+By default, `r ref("iml::FeatureImp")` calculates the ratio of the model performance before and after permutation as an importance value, instead the difference of the performance measures can be returned by passing `compare = "difference"` when calling `$new()`.
+
+### Feature Effects {#sec-feature-effects}
+
+`r index("Feature effect")` methods describe how or to what extent a feature contributes towards the *model predictions* by analyzing how the predictions change when changing a feature.
+These methods can be distinguished between local and global feature effect methods.
+`r index('Global feature effect methods')` refer to how a prediction changes *on average* when a feature is changed.
+In contrast, `r index('local feature effect methods')` address the question of how a *single* prediction of a given observation changes when a feature value is changed.
+To a certain extent, local feature effect methods can reveal interactions in the model that become visible when the local effects are heterogeneous, i.e., if changes in the local effect are different across the observations.
+
+`r index('Partial dependence (PD) plots', aside = TRUE)` [@Friedman2001pdp] can be used to visualize global feature effects by visualizing how model predictions change on average when varying the feature values of a given feature of interest.
+`r index('Individual conditional expectation (ICE) curves', aside = TRUE)` [@Goldstein2015ice] (a.k.a. Ceteris Paribus Effects \index{ceteris paribus|see{Individual conditional expectation (ICE) curves}}) are a local feature effects method that display how the prediction of a *single* observation changes when varying a feature of interest while all other features stay constant.
+@Goldstein2015ice demonstrated that the PD plot is the average of ICE curves.
+ICE curves are constructed by taking a single observation and feature of interest, and then replacing the feature's value by another value and plotting the new prediction, this is then repeated for many feature values (e.g., across an equidistant grid of the feature's value range).
+The x-axis of an ICE curve visualizes the set of replacement feature values and the y-axis is the model prediction.
+Each ICE curve is a local explanation that assesses the feature effect of a single observation on the model prediction.
+An ICE plot contains one ICE curve (line) per observation.
+If the ICE curves are heterogeneous, i.e., not parallel, then the model may have estimated an interaction involving the considered feature.
+
+::: {.callout-tip}
+Feature effects are very similar to regression coefficients $\beta$ in linear models which offer interpretations such as
+''if you increase this feature by one unit, your prediction increases on average by $\beta$ if all other features stay constant''.
+However, feature effects cannot only convey linear effects but also more complex ones (similar to splines in generalized additive models) and can be applied to any type of predictive model.
+:::
+
+Let us put this into practice by considering how the feature `amount` influences the predictions in the `german_credit` task.
+Below we initialize an object of class `r ref("iml::FeatureEffect")` by passing the feature name of interest and the feature effect method, we use `"pdp+ice"` to indicate that we want to visualize ICE curves with a PD plot (average of the ICE curves).
+We generally recommend not plotting PD plots alone as this could hide heterogeneous effects and interactions but instead plotting PD and ICE curves together.
+Again, we use `$plot()` to visualize the results (@fig-iml-pdice).
+
+```{r iml-pdp}
+#| fig-height: 3
+#| label: fig-iml-pdice
+#| fig-cap: Partial dependence (PD) plot (yellow) and individual conditional expectation (ICE) curves (black) that show how the credit amount affects the predicted credit risk.
+#| fig-alt: "Two plots are visualized side-by-side. The x-axis for both says 'amount' and ranges from 0 to around 16000. The y-axis for both says 'Predicted credit_risk' and ranges from 0 to 1. The left plot is captioned 'good' and shows many thin black curves that are roughly parallel and slowly decrease from 0-10000 and then are roughly flat until the end of the plot. The right plot is captioned 'bad' and shows many thin black curves that are roughly parallel and slowly increase from 0-10000 and then are roughly flat until the end of the plot."
+
+effect = FeatureEffect$new(predictor,
+  feature = "amount", method = "pdp+ice")
+effect$plot()
+```
+
+The predicted class labels for the binary classification `german_credit` task are plotted separately.
+The plot shows that if the `amount` is smaller than roughly 10,000 then on average there is a high chance that the predicted creditworthiness will be `good`.
+
+### Surrogate Models
+
+Interpretable models such as decision trees or linear models can be used as `r index("surrogate models")` to approximate or mimic a (often very complex) black-box model.
+Inspecting the surrogate model can provide insights into the behavior of a black-box model.
+For example, the (learned) model structure of a decision tree, or the (learned) parameters (coefficients) of a linear model can be easily interpreted and provide information on how the features formed the prediction.
+
+We differentiate between local surrogate models, which approximate a model locally around a specific data point of interest, and global surrogate models that approximate the model across the entire input space [@Ribeiro2016lime;@Molnar2022].
+The features used to train a surrogate model are usually the same features used to train the black-box model or at least data with the same distribution to ensure a representative input space.
+However, the target used to train the surrogate is the predictions obtained from the black-box model.
+
+#### Global Surrogate Model
+
+Initializing the `r ref("iml::TreeSurrogate")` class fits a conditional inference tree (`r ref("partykit::ctree()")`) surrogate model to the predictions from our trained model.
+This class extracts the decision rules created by the tree surrogate and the `$plot()` method visualizes the distribution of the predicted outcomes from each terminal node (@fig-iml-surro).
+
+```{r iml-globalsurrogate,message=FALSE}
+treesurrogate = TreeSurrogate$new(predictor, maxdepth = 2L)
+```
+
+In this example we passed `maxdepth = 2` to the constructor to build a tree with two binary splits yielding 4 terminal nodes.
+Before inspecting this model we need to first check whether the surrogate model approximates the prediction model accurately, which we can assess by comparing the predictions of the tree surrogate and the predictions of the black-box model.
+For example, we could quantify the number of matching predictions and measure the accuracy of the surrogate in predicting the predictions of the black-box random forest:
+
+```{r iml-crosstable}
+pred_surrogate = treesurrogate$predict(credit_x, type = "class")
+pred_rf = learner$predict_newdata(credit_x)$response
+prop.table(table(pred_rf, pred_surrogate$.class))
+mean(pred_rf == pred_surrogate$.class)
+```
+
+This shows an accuracy of around `r round(mean(pred_rf == pred_surrogate$.class)*100)`% in predictions from the surrogate compared to the black-box model, which is good enough for us to now use our surrogate for further interpretation, for example by plotting the splits in the terminal node:
+
+```{r iml-globalsurrogate-plot,message=FALSE}
+#| fig-cap: Distribution of the predicted outcomes for each terminal node identified by the tree surrogate. The top two nodes consist of applications with a positive balance in the account (`status`is either `"0 <= ... < 200 DM"`, `"... >= 200 DM"` or `"salary for at least 1 year"`) and either a duration of less or equal than 30 months (top left), or more than 30 months (top right). The bottom nodes contain applicants that either have no checking account or a negative balance (`status`) and either a duration of less than or equal to 24 months (bottom left) or more than 24 months (bottom right).
+#| fig-alt: Four barplots with 'count' on the y-axis and 'class' on the x-axis. Top left shows only 'good' credit predictions. Top right shows about 25 'good' predictions and almost no 'bad' credit predictions. Bottom left shows 100 'good' predictions and about 40 'bad' predictions. Bottom right shows about 27 'bad' predictions and around 10 'good' ones.
+#| label: fig-iml-surro
+treesurrogate = TreeSurrogate$new(predictor, maxdepth = 2L)
+treesurrogate$plot()
+```
+
+Or we could access the trained tree surrogate via the `$tree` field of the `r ref("iml::TreeSurrogate")` object and then have access to all methods in `r ref_pkg("partykit")`:
+
+```{r iml-globalsurrogate-tree}
+partykit::print.party(treesurrogate$tree)
+```
+
+Since the surrogate model only uses the predictions of the black-box model (here, the random forest model) and not the real outcomes of the underlying data, the conclusions drawn from the surrogate model do not apply generally, but only to the black-box model (if the approximation of the surrogate model is accurate enough).
+
+#### Local Surrogate Model
+
+In general, it can be very difficult to accurately approximate the black-box model with an interpretable surrogate in the entire feature space.
+Therefore `r index('local surrogate models')` focus on a small area in the feature space surrounding a point of interest.
+Local surrogate models are constructed as follows:
+
+1.  Obtain predictions from the black-box model for a given data set.
+2.  Weight the observations in this data set by their proximity to our point of interest.
+3.  Fit an interpretable, surrogate model on the weighted data set using the predictions of the black-box model as the target.
+4.  Explain the prediction of our point of interest with the surrogate model.
+
+To illustrate this using the `r ref_pkg("iml")` package, we will select a random data point to explain.
+As we are dealing with people, we will name our observation "Steve" and first look at the black-box predictions:
+
+```{r steve,  asis='results'}
+steve = credit_x[249, ]
+predictor$predict(steve)
+```
+
+The model predicts the class '`r names(which.max(predictor$predict(steve)))`' with `r round(max(predictor$predict(steve))*100, 1)`%  probability:
+We can now use `r ref("iml::LocalModel")` to fit a locally weighted linear regression model that explains why Steve was classified as having '`r names(which.max(predictor$predict(steve)))`' creditworthiness.
+The underlying surrogate model is L1-penalized such that only a pre-defined number of features per class, `k` (default is 3), will have a non-zero coefficient and as such are the $k$ most influential features, below we set `k = 2`.
+We can also set the parameter `gower.power` which specifies the size of the neighborhood for the local model (default is `gower.power = 1`), the smaller the value the more the model will focus on points closer to the point of interest, below we set `gower.power = 0.01`.
+If the prediction of the local model and the prediction of the black box model greatly differ then you might want to experiment with changing the `k` and `gower.power` parameters.
+
+```{r iml-localsurrogate,message=FALSE,warning=FALSE}
+#| fig-cap: Effect size of the two most important features (status and duration). Effect of status on the predicted value is positive, whereas duration is negative. Plot title indicates good agreement between the actual and surrogate prediction.
+#| fig-alt: "x-axis says 'effect' and ranges from -0.1 to 0.2. Plot shows two horizontal bars, top is 'status' and ranges from 0 to 0.2, bottom is 'duration' and ranges from -0.1 to 0. Title says 'Actual prediction: 0.78, LocalModel prediction: 0.79'."
+#| label: fig-iml-localsurro
+predictor$class = "good" # explain the 'good' class
+localsurrogate = LocalModel$new(predictor, steve, gower.power = 0.01, k = 2)
+localsurrogate$plot()
+```
+
+The output tell us that the two most influential features for Steve's predictions were 'duration' and 'status', and that 'status' increased the predictive value whereas 'duration' decreased it.
+We can also see good agreement between the global and local predictions.
+
+This implementation is very closely related Local Interpretable Model-agnostic Explanations (LIME) [@Ribeiro2016lime]\index{LIME}, the differences are outlined in the documentation of `r ref("iml::LocalModel")`.
+
+### Shapley Values {#sec-shapley}
+`r index("Shapley values")` were originally developed in the context of cooperative game theory to study how the payout of a game can be fairly distributed among the players that form a team.
+This concept has been adapted for use in ML as a local interpretation method to explain the contributions of each input feature to the final model prediction of a single observation [@Trumbelj2013Shapley].
+In the context of ML, the cooperative game played by a set of players refers to the process of predicting by a set of features a single observation whose prediction we want to explain.
+Hence, the features are considered to be the players and the payout, which should be fairly distributed among features, refers to the difference between the individual observation's prediction and the mean prediction.
+
+Shapley values estimate how much each input feature contributed to the final prediction for a single observation (after subtracting the mean prediction).
+By assigning a value to each feature, we can gain insights into which features were the most important ones for the considered observation.
+Compared to the penalized linear model as a local surrogate model, Shapley values guarantee that the prediction is fairly distributed among the features.
+
+::: {.callout-warning}
+Shapley values are frequently **misinterpreted** as the difference between the predicted value after removing the feature from model training.
+The Shapley value of a feature is calculated by considering all possible subsets of features and computing the difference in the model prediction with and without the feature of interest included.
+Hence, it refers to the average marginal contribution of a feature to the difference between the actual prediction and the mean prediction, given the current set of features.
+:::
+
+Shapley values can be calculated by passing the `Predictor` and the observation of interest to `r ref("iml::Shapley")`:
+
+```{r iml-006}
+#| fig-height: 3
+#| fig-cap: Shapley values for Steve. The actual prediction (0.78) displays the prediction of the model for the observation we are interested in, the average prediction (0.70) displays the average prediction over the given test data set. Each horizontal bar is the Shapley value (phi) for the given feature.
+#| fig-alt: 10 bar plots of Shapley values, one for each feature. x-axis says 'phi' and ranges from -0.05 to 0.05. The strongest positive contribution is from 'status', 'other_debtors' has the smallest value, and 'purpose' is the strongest negative contribution.
+#| label: fig-iml-shapley
+shapley = Shapley$new(predictor, x.interest = steve)
+shapley$plot()
+```
+
+The Shapley values (`phi`) of the features show us how to fairly distribute the difference of Steve's probability of being creditworthy to the data set's average probability among the given features.
+The status variable has the most positive effect on the probability of being creditworthy, with an increase in the predicted probability of over 5%.
+In contrast, the 'purpose' variable leads to a decrease in predicted probability of more than 5%.
+
+## The `counterfactuals` Package {#sec-counterfactuals}
+
+Counterfactual explanations try to identify the smallest possible changes to the input features of a given observation that would lead to a different prediction [@Wachter2017].
+In other words, a counterfactual explanation provides an answer to the question: "What changes in the current feature values are necessary to achieve a different prediction?".
+
+Counterfactual explanations can have many applications in different areas such as healthcare, finance, and criminal justice, where it may be important to understand how small changes in input features could affect the model's prediction.
+For example, a counterfactual explanation could be used to suggest lifestyle changes to a patient to reduce their risk of developing a particular disease, or to suggest actions that would increase the chance of a credit being approved.
+For our `german_credit` example we might consider what changes in features would change a 'bad' credit prediction to a 'good' one (@fig-counterfactuals-ill).
+
+<!-- source to figure: https://docs.google.com/presentation/d/1H-g90sKhvkhvQzLdEwRj-8B7rGkxWSbs7Wj_Nzvl3eU/edit?usp=sharing -->
+```{r interpretation-counterfactuals-fig, echo=FALSE}
+#| label: fig-counterfactuals-ill
+#| out-width: 50%
+#| fig-cap: Illustration of a counterfactual explanation. The brown dot displays a counterfactual for a given point (blue dot) which proposed decreasing the credit amount and duration such that the prediction changes from bad to good.
+#| fig-alt: Figure shows a rectangle where bottom left triangle is light blue and labelled 'good' and top right triangle is brown and labelled 'bad'. There is a dot in the 'bad' area and a dot in the 'good' area and an arrow pointing from the 'bad dot' to the 'good dot'. The x-axis is labelled 'duration' and the y-axis is labelled 'amount'.
+knitr::include_graphics("Figures/counterfactuals.png")
+```
+
+There are a few different methods for generating counterfactuals, here we will only discuss two.
+The simplest method is the `r index('What-If', aside = TRUE)` approach [@Wexler2019] where, for a given prediction to explain, the counterfactual is the closest data point in the data set with the desired prediction.
+Another method is the `r index('multi-objective counterfactuals', aside = TRUE)` method (MOC) introduced by @Dandl2020, which can generate multiple counterfactuals that are not equal to observations in a given dataset but are artificially generated data points.
+The generation of counterfactuals is based on an optimization problem that aims for counterfactuals that
+
+1) have the desired prediction;
+2) are close to the observation of interest;
+3) only require changes in a few features; and
+4) originate from the same distribution as the observations in the given dataset.
+
+All four objectives are optimized simultaneously via a multi-objective optimization method.
+
+Counterfactual explanations are available in the `r ref_pkg("counterfactuals")` package, which depends on `r ref("iml::Predictor")` objects as inputs.
+
+### What-If Method
+<!-- TODO: ADD DESCRIPTION ABOUT INFINITE CFS AND CHOICE IS ARBITRARY -->
+Continuing our previous example, we saw that the random forest classifies Steve as having `r predictor$class` credit with a predicted probability of `r round(max(predictor$predict(steve))*100, 1)`%.
+We can use the What-If method to understand how the features need to change for this predicted probability to increase to 80%.
+We initialize a `r ref("counterfactuals::WhatIfClassif")`  object with our `Predictor` and state that we only want to find one counterfactual (`n_counterfactuals = 1L`).
+The `$find_counterfactuals()` method generates a counterfactual of class  `r ref("counterfactuals::Counterfactuals")`, which assumes a 0.8 threshold for landing in the `good` class.
+
+```{r interpretation-whatif}
+library(counterfactuals)
+whatif = WhatIfClassif$new(predictor, n_counterfactuals = 1L)
+cfe = whatif$find_counterfactuals(steve,
+  desired_class = "good", desired_prob = c(0.8, 1))
+data.frame(cfe$evaluate(show_diff = TRUE))
+```
+
+The `$evaluate(show_diff = TRUE)` method tells us how features need to be changed to generate our desired class.
+For example we can see that Steve would have to be 14 years younger and the duration of credit would have to be reduced by 9 months.
+
+### MOC method
+
+Calling the MOC method is similar to the What-If method but instead we construct a `r ref("counterfactuals::MOCClassif()")` object.
+We set the `epsilon` parameter to 0 to penalize counterfactuals in the optimization process with predictions outside the desired range.
+With MOC, we can also prohibit changes in specific features, via the `fixed_features` argument, below we restrict changes in the 'age' variable.
+For illustrative purposes, we let the multi-objective optimizer only run for 30 generations.
+
+```{r interpretation-mocmulti,message=FALSE}
+library("counterfactuals")
+moc = MOCClassif$new(predictor, epsilon = 0, n_generations = 30L,
+  fixed_features = "age")
+cfe_multi = moc$find_counterfactuals(steve,
+  desired_class = "good", desired_prob = c(0.8, 1))
+```
+
+The multi-objective approach does not guarantee that all counterfactuals have the desired prediction so we use `$subset_to_valid()` to restrict counterfactuals to those we are interested in:
+```{r interpretation-mocmulti-subset}
+cfe_multi$subset_to_valid()
+cfe_multi
+```
+
+This method generated `r nrow(cfe_multi$data)` counterfactuals but as these are artificially generated they are not necessarily equal to actual observations in the underlying data set.
+For a concise overview of the required feature changes, we can use the `plot_freq_of_feature_changes()` method, which visualizes the frequency of feature changes across all returned counterfactuals.
+
+```{r interpretation-mocfreq}
+#| fig-height: 3.5
+#| fig-cap: Relative frequency of feature changes from most to least frequent.
+#| fig-alt: Barplots of the relative frequency of feature changes of the counterfactuals found by MOC. x-axis says 'relative frequency' and ranges from 0 to just over 0.6. Changed features were 'purpose' (in 60% of the counterfactuals), 'employment_duration' (20%), 'savings' (10%) and 'credit_history' (10%).
+#| label: fig-cf-mocfreq
+cfe_multi$plot_freq_of_feature_changes()
+```
+
+We can see that only 'purpose', 'employment_duration', 'savings', and 'credit_history' were changed in the counterfactuals, with 'purpose' being changed most frequently.
+To see *how* the features were changed, we can visualize the counterfactuals for two features on a 2-dimensional ICE plot.
+
+```{r interpretation-mocsurface}
+#| fig-height: 3.5
+#| fig-cap: Two-dimensional surface plot for the 'purpose' and 'employment_duration' variables, higher predictions are darker. The colors and contour lines indicate the predicted value of the model when 'purpose' and 'employment_duration' differ while all other features are set to the true (Steve's) values. The white point displays the true prediction (Steve), and the black points are the counterfactuals that only propose changes in the two features.
+#| fig-alt: Surface plot that is primarily light blue in top left and gets darker as it increases towards bottom right. y-axis is the employement duration variable and x-axis is the 'purpose' variable. There is a white dot at 'employment_duration = 1 <= ... < 4 yrs' and 'purpose = retraining'. Two black dots are in a straight line above the white dot and five black dots are in a roughly straight line to the left of the white dot.
+#| label: fig-cf-mocsurface
+
+cfe_multi$plot_surface(feature_names = c("purpose", "employment_duration")) +
+    theme(axis.text.x = element_text(angle = 15, hjust = .7))
+```
+
+## The `DALEX` Package {#sec-dalex}
+
+The `r ref_pkg("DALEX")` [@Biecek2018] package implements a similar set of methods as the `r ref_pkg("iml")` package presented above, but the architecture of `r ref_pkg("DALEX")` is oriented towards model comparison.
+The logic behind working with this package assumes that the process of exploring models is an iterative process, and in successive iterations we want to compare different perspectives, including perspectives presented/learned by different models.
+This logic is commonly referred to as the `r index('Rashomon perspective')`, first described in "Statistical Modeling: The Two Cultures" paper [@Breiman2001] and more extensively developed and formalized as interactive explanatory model analysis [@Baniecki2023].
+
+You can use the `r ref_pkg("DALEX")` package with any number of models built with the `r ref_pkg("mlr3")` package as well as with other frameworks in R.
+As we have already explored the methodology behind most of the methods discussed in this section, we will just focus on the implementations of these methods in `r ref_pkg("DALEX")` using the `german_credit` running example.
+
+Once you become familiar with the philosophy of working with the `r ref_pkg("DALEX")` package, you can also use other packages from this family such as `r ref_pkg("fairmodels")` [@Wisniewski2022] for detection and mitigation of biases, `r ref_pkg("modelStudio")` [@Baniecki2019] for interactive model exploration, `r ref_pkg("modelDown")` [@Romaszko2019] for the automatic generation of IML model documentation in the form of a report, `r ref_pkg("survex")` [@Krzyzinski2023] for the explanation of survival models, or `r ref_pkg("treeshap")` for the analysis of tree-based models.
+
+The analysis of a model is usually an interactive process starting with evaluating a model based on one or more performance metrics, known as a 'shallow analysis'.
+In a series of subsequent steps, one can systematically deepen understanding of the model by exploring the importance of single variables or pairs of variables to an in-depth analysis of the relationship between selected variables to the model outcome.
+See @Bucker2022 for a broader discussion of what the model exploration process looks like.
+
+This `r index('explanatory model analysis', aside = TRUE)` (EMA) process can focus on a single observation, in which case we speak of local model analysis, or for a set of observations, in which case we speak of global model analysis.
+Below, we will present these two scenarios in separate subsections. See @fig-dalex-fig-plot-01 for an overview of key functions that will be discussed. An in-depth description of this methodology can be found in @biecek_burzykowski_2021.
+
+
+```{r interpretation-012, echo=FALSE}
+#| label: fig-dalex-fig-plot-01
+#| out-width: 92%
+#| fig-cap: Taxonomy of methods for model exploration presented in this section. The left side shows global analysis methods and the right shows local analysis methods. Methods increase in analysis complexity from top to bottom.
+#| fig-alt: "Title says 'Explanatory Model Analysis', just below that in code font says 'DALEX::explain()'. Far left side is an arrow pointing upwards labelled 'Shallow' and one pointing down labelled 'Deep'. To the right of these arrows is the text 'Global Analysis' with an arrow pointing down to 'Model Performance, AUC, RMSE; DALEX::model_performance()', which has an arrow pointing down to 'Feature Importance, VIP; DALEX::model_parts()', which has an arrow pointing down to 'Feature Profiles, PD, ALE; DALEX::model_profile()'. To the right of 'Global Analysis' is the text 'Local Analysis', which has an arrow pointing to 'Model Predict; DALEX::predict()', which has an arrow pointing down to 'Feature Attributions, SHAP, BD; DALEX::predict_parts()', which has an arrow pointing down to 'Feature Profiles, Ceteris Paribus; DALEX::predict_profile()'."
+knitr::include_graphics("Figures/DALEX_ema_process.png")
+```
+
+As with `r ref_pkg("iml")`, `r ref_pkg("DALEX")` also implements a wrapper that enables a unified interface to its functionality.
+For models created with the `r mlr3` package, we would use `r ref("DALEXtra::explain_mlr3()")`, which creates an S3 `explainer` object, which is a list containing at least: the model object, the dataset that will be used for calculation of explanations, the predict function, the function that calculates residuals, name/label of the model name and other additional information about the model.
+
+```{r interpretation-019, eval=FALSE}
+library(DALEX)
+library(DALEXtra)
+
+ranger_exp = DALEXtra::explain_mlr3(learner,
+  data = credit_x,
+  y = as.numeric(credit_y$credit_risk == "bad"),
+  label = "Ranger Credit",
+  colorize = FALSE)
+
+ranger_exp
+```
+```{r, results='hide', echo=FALSE, include=FALSE}
+library(DALEX)
+library(DALEXtra)
+
+ranger_exp = DALEXtra::explain_mlr3(learner,
+  data = credit_x,
+  y = as.numeric(credit_y$credit_risk == "bad"),
+  label = "Ranger Credit",
+  colorize = FALSE)
+
+ranger_exp
+```
+```{r, echo=FALSE}
+ranger_exp
+```
+
+### Global EMA {#sec-interpretability-dataset-level}
+
+Global EMA aims to understand how a model behaves on average for a set of observations.
+In the `r ref_pkg("DALEX")` package, functions for global level analysis are prefixed with `model_`.
+
+#### Model Performance
+
+The model exploration process starts (@fig-dalex-fig-plot-01) by evaluating the performance of a model.
+The `r ref("DALEX::model_performance")` detects the task type and selects the most appropriate measure, as we are using binary classification the function automatically suggests recall, precision, F1-score, accuracy, and AUC; similarly the default plotting method is selected based on the task type, below ROC is selected.
+
+
+```{r interpretation-020a}
+#| fig-height: 6
+#| fig-width: 5
+#| label: fig-dalex-roc
+#| out-width: 60%
+#| fig-cap: Graphical summary of model performance using the Receiver Operator Curve (@sec-roc).
+#| fig-alt: ROC curve with 'True positive rate' on the y-axis and 'False positive rate' on the x-axis, curve shows reasonably good model fit as it sits comfortably in the upper left diagonal.
+
+perf_credit = model_performance(ranger_exp)
+perf_credit
+
+old_theme = set_theme_dalex("ema")
+plot(perf_credit, geom = "roc")
+```
+
+::: {.callout-tip}
+Various visual summaries may be selected with the `geom` argument.
+For the credit risk task, the LIFT curve is a popular graphical summary.
+:::
+
+Feature importance methods can be calculated with `r ref("DALEX::model_parts()")` and then plotted.
+
+```{r interpretation-021}
+#| fig-height: 4
+#| fig-width: 8
+#| out-width: 90%
+#| fig-cap: Graphical summary of permutation importance of features. Each bar starts at the loss value for the original data and ends at the loss value for the data after permutation of a specific feature. The longer the bar, the larger the change in the loss function after permutation of the particular feature and therefore the more important the feature. This plot shows that 'status' is the most important feature and 'age' is the least important.
+#| fig-alt: Feature importance plot. x-axis label is 'One minus AUC loss after permutations', y-axis labels are features. Horizontal bars range from 0.24 to 0.35.
+#| label: fig-dalex-featimp
+
+ranger_effect = model_parts(ranger_exp)
+head(ranger_effect)
+
+plot(ranger_effect, show_boxplots = FALSE)
+```
+
+::: {.callout-tip}
+The `type` argument in the `model_parts` function allows you to specify how the importance of the features is to be calculated, by the difference of the loss functions (`type = "difference"`), by the quotient (`type = "ratio"`), or without any transformation (`type = "raw"`).
+:::
+
+Feature effects can be calculated with `r ref("DALEX::model_profile()")` and by default are plotted as PD plots.
+
+```{r interpretation-024, warning=FALSE}
+#| fig-height: 5
+#| fig-width: 8
+#| out-width: 90%
+#| label: fig-dalex-pdp
+#| fig-cap: Graphical summary of the model's partial dependence profile for three selected variables (age, amount, duration). The jumps in the response function is characteristic of a random forest model.
+#| fig-alt: Left plot is PD plot of 'age' against 'average prediction', between ages 20-40 the prediction dips from 0.4 to 0.3 then increases up to 0.35 from 40-60. Middle plot is PD plot of 'amount', between amounts 0-5000 the prediction dips from 0.4 to 0.2 then increases up to above 0.5 to the end. Right plot is PD plot of 'duration', between duration 0-40 the prediction linearly increases from 0.2 to 0.45 then stays flat.
+
+ranger_profiles = model_profile(ranger_exp)
+ranger_profiles
+
+plot(ranger_profiles) +
+  theme(legend.position = "top") +
+  ggtitle("Partial Dependence for Ranger Credit model","")
+```
+
+From the figure above, we can see that the random forest model has learned a non-monotonic relationship for the features `amount` and `age.`
+
+::: {.callout-tip}
+The `type` argument of the `r ref("DALEX::model_profile()")` function also allows *marginal profiles* (with `type = "conditional"`) and *accumulated local profiles* (with `type = "accumulated"`) to be calculated.
+:::
+
+
+### Local EMA {#sec-interpretability-instance-level}
+
+Local EMA aims to understand how a model behaves for a single observation.
+In the `r ref_pkg("DALEX")` package, functions for local analysis are prefixed with `predict_`.
+We will carry out the following examples using Steve again.
+
+#### Model Prediction
+
+Local analysis starts with the calculation of a model prediction (@fig-dalex-fig-plot-01).
+
+```{r interpretation-025}
+predict(ranger_exp, steve)
+```
+
+As a next step we might consider break-down plots, which decompose the model’s prediction into contributions that can be attributed to different explanatory variables (see the *Break-down Plots for Additive Attributions* chapter in @biecek_burzykowski_2021 for more on this method).
+These are calculated with `r ref("DALEX::predict_parts()")`:
+
+```{r interpretation-027}
+#| fig-height: 4.5
+#| fig-width: 8
+#| out-width: 90%
+#| fig-cap: Graphical summary of local attributions of features calculated by the break-down method. Positive attributions are shown in green and negative attributions in red. The violet bar corresponds to the model prediction for the explained observation and the dashed line corresponds to the average model prediction.
+#| fig-alt: On the x-axis are numbers from 0.0 to 0.4, and y-axis is variables from the dataset. There are five bars in red with negative number labels and thee bars in green with positive number labels. A dashed vertical lines runs through x=0.3 and there is a violet bar with text '0.223'.
+#| label: fig-dalex-breakdown
+
+plot(predict_parts(ranger_exp, new_observation = steve))
+```
+
+Looking at the plots above, we can read that the biggest contributors to the final prediction were for Steve the features `credit_history` and `status`.
+
+::: {.callout-tip}
+The `order` argument allows you to indicate the selected order of the features. This is a useful option when the features have some relative conditional importance (e.g. pregnancy and sex).
+:::
+
+The `r ref("DALEX::predict_parts()")` function can also be used to plot Shapley values with the SHAP algorithm (@Lundberg2019) by setting `type = "shap"`:
+
+```{r interpretation-028}
+#| fig-height: 4.5
+#| fig-width: 8
+#| out-width: 90%
+#| fig-cap: Graphical summary of local attributions of features calculated by the shap method. Positive attributions are shown in green and negative attributions in red. The most important feature here is the 'status' variable and least is 'other_debtors'.
+#| fig-alt: x-axis says 'contribution' and ranges from -0.1 to 0.05, y-axis is feature names. Plots show five red bars with negative contributions and five green bars making positive contributions. Longest bar is for 'status' and shortest for 'other_debtors'.
+#| label: fig-dalex-shaps
+
+plot(predict_parts(ranger_exp, new_observation = steve,
+  type = "shap"), show_boxplots = FALSE)
+```
+
+The results for Break Down and SHAP methods are generally similar. Differences will emerge if there are many complex interactions in the model.
+
+::: {.callout-tip}
+Shapley values can take a long time to compute.
+This process can be sped up at the expense of accuracy.
+The parameters `B` and `N` can be used to tune this trade-off, where `N` is the number of observations on which conditional expectation values are estimated (500 by default) and `B` is the number of random paths used to calculate Shapley values (25 by default).
+:::
+
+Finally, we can plot ICE curves using `r ref("DALEX::predict_profile()")`:
+
+```{r interpretation-029, warning=FALSE}
+#| fig-height: 5
+#| fig-width: 8
+#| out-width: 90%
+#| label: fig-dalex-ice
+#| fig-cap: Individual conditional explanations (aka Ceteris Paribus) plots for 10 rows in the credit data (including Steve) for three selected variables (age, amount, duration).
+#| fig-alt: Plots are very similar to the PD plots from earlier except with 10 lines plotted. y-axis is 'prediction' ranging from 0.1 to 0.5. Left plot is titled 'age' and shows a dip in prediction value then increase between 20,30,70. Middle plot is titled 'amount' and shows a fairly linear increase in prediction value from 0.2 to 0.5. Right plot is titled 'duration' and show an increase in prediction value from 0.2-0.35 and then is flat. There is fairly good agreement between plotted curves.
+
+plot(predict_profile(ranger_exp,  credit_x[240:250, ]))
+```
+
+## Conclusions
+
+In this chapter, we learned how to gain post-hoc insights into a model trained with `mlr3` by using the most popular approaches from the field of interpretable machine learning.
+The methods are all model-agnostic such that they do not depend on specific model classes.
+We utilized three different packages: `r ref_pkg("iml")`, `r ref_pkg("counterfactuals")` and `r ref_pkg("DALEX")`. `iml` and `DALEX` offer a wide range of (partly) overlapping methods, while the `counterfactuals` package focuses solely on counterfactual methods.
+We demonstrated on the `german_credit` task how these packages offer an in-depth analysis of a random forest model fitted with `r ref_pkg("mlr3")`.
+As we conclude the chapter we will first note some limitations in the methods discussed above to help guide your own post-hoc analyses.
+
+If features are correlated, the insights from the interpretation methods should be treated with caution. Changing the feature values of an observation without taking the correlation with other features into account leads to unrealistic combinations of the feature values.
+Since such feature combinations are also unlikely part of the training data, the model will likely extrapolate in these areas [@Molnar2022pitfalls;@Hooker2019PleaseSP].
+This distorts the interpretation of methods that are based on changing single feature values such as PFI, PD plots, and Shapley values.
+Alternative methods can help in these cases: conditional feature importance instead of PFI [@Strobl2008;@Watson2021], accumulated local effect plots instead of PD plots [@Apley2020], and the KernelSHAP method instead of Shapley values [@Lundberg2019].
+
+The explanations derived from an interpretation method can also be ambiguous.
+A method can deliver multiple equally plausible but potentially contradicting explanations.
+This phenomenon is also called the Rashomon effect [@Breiman2001].
+Differing hyperparameters can be one reason, for example, local surrogate models react very sensitively to changes in the underlying weighting scheme of observations.
+Even with fixed hyperparameters, the underlying data set or the initial seed can lead to disparate explanations [@Molnar2022pitfalls].
+
+The `german_credit` task is low-dimensional with a limited number of observations.
+Applying interpretation methods off-the-shelf to higher dimensional datasets is often not feasible due to the enormous computational costs.
+That is why in previous years more efficient methods were proposed, e.g., Shapley value computations based on kernel-based estimators (SHAP).
+Another challenge is that the high-dimensional IML output generated for high-dimensional datasets can overwhelm users.
+If the features can be meaningfully grouped, grouped versions of the methods, e.g. the grouped feature importance proposed by @Au2022, can be applied.
+
+
+## Exercises
+
+Model explanation allows us to confront our expert knowledge related to the problem with relations learned by the model. The following tasks are based on predictions of the value of football players based on data from the FIFA game. It is a graceful example, as most people have some intuition about how a footballer's age or skill can affect their value. The latest FIFA statistics can be downloaded from `r link("https://www.kaggle.com/")`, but also one can use the 2020 data available in the `DALEX` packages (see the `DALEX::fifa` data set). The following exercises can be performed in both the `iml` and `DALEX` packages, we provide solutions for both.
+
+1.  Prepare an `mlr3` regression task for the `fifa` data. Select only features describing the age and skills of footballers. Train a predictive model of your own choice on this task, e.g. `regr.ranger`, to predict the value of a footballer.
+
+2.  Use the permutation importance method to calculate feature importance ranking. Which feature is the most important? Do you find the results surprising?
+
+3.  Use the partial dependence plot/profile to draw the global behavior of the model for this feature. Is it aligned with your expectations?
+
+4. Choose one of the football players, for example, a well-known striker (e.g., Robert Lewandowski) or a well-known goalkeeper (e.g., Manuel Neuer). The following tasks are worth repeating for several different choices.
+
+5.  For the selected footballer, calculate and plot the Shapley values. Which feature is locally the most important and has the strongest influence on the valuation of the footballer?
+
+6.  For the selected footballer, calculate the ceteris paribus profiles / individual conditional expectation curves to draw the local behavior of the model for this feature. Is it different from the global behavior?
+
+::: {.content-visible when-format="html"}
+`r citeas(chapter)`
+:::
