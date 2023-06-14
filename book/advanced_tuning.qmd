@@ -27,20 +27,20 @@ For example when learners do not converge, run out of memory, or terminate with 
 As a common example, learners can fail if there are factor levels present in the test data that were not in the training data, models fail in this case as there have been no weights/coefficients trained for these new factor levels:
 
 ```{r, error = TRUE, warning = FALSE}
-task_bh = tsk("boston_housing")
-cv10 = rsmp("cv", folds = 10)
-msr_rmse = msr("regr.rmse")
+task_pim = tsk("pima")
+cv3 = rsmp("cv", folds = 3)
+msr_ce = msr("classif.ce")
 rnd_srch = tnr("random_search")
-learner = lrn("regr.lm", df = to_tune(1, 2))
+learner = lrn("classif.xgboost", eta = to_tune(1e-4, 1))
 
-instance = tune(
-  tuner = rnd_srch,
-  task = task_bh,
-  learner = learner,
-  resampling = cv10,
-  measures = msr_rmse,
-  term_evals = 10
-)
+tune(rnd_srch, task_pim, learner, cv3, msr_ce, 10)
+```
+```{r, echo = FALSE}
+task_pim = tsk("pima")
+cv3 = rsmp("cv", folds = 3)
+msr_ce = msr("classif.ce")
+rnd_srch = tnr("random_search")
+learner = lrn("classif.xgboost", eta = to_tune(1e-4, 1))
 ```
 
 In the above example, we can see the tuning process breaks and we lose all information about the HPO process as the `instance` cannot be saved.
@@ -66,25 +66,18 @@ Now if either an error occurs, or the model timeout threshold is reached, then i
 Unfortunately, if predictions are not made, then our HPO experiment will still fail as for any resampling iteration with errors, the result will be `NA`, and so are unable to aggregate results across resampling iterations.
 Therefore it is essential to also select a fallback learner (@sec-fallback), which is a learner that will be fitted if the learner of interest fails.
 A common approach is to use a featureless baseline, `classif/regr.featureless`.
-Below we set `regr.featureless`, which always predicts the mean `response`, by passing this learner to the `$fallback` field.
+Below we set `classif.featureless`, which always predicts the majority class, by passing this learner to the `$fallback` field.
 
 ```{r optimization-037}
-learner$fallback = lrn("regr.featureless")
+learner$fallback = lrn("classif.featureless")
 ```
 
 We can now run our experiment and see errors that occurred during tuning in the archive.
 
 ```{r optimization-038}
-instance = tune(
-  tuner = rnd_srch,
-  task = task_bh,
-  learner = learner,
-  resampling = cv10,
-  measures = msr_rmse,
-  term_evals = 10
-)
+instance = tune(rnd_srch, task_pim, learner, cv3, msr_ce, 10)
 
-as.data.table(instance$archive)[, .(df, regr.rmse, errors)]
+as.data.table(instance$archive)[, .(df, classif.ce, errors)]
 
 # Reading the error in the first resample result
 instance$archive$resample_result(1)$errors
@@ -599,12 +592,12 @@ optimizer = opt("random_search", batch_size = 20)
 optimizer$optimize(instance)
 ```
 
-Similarly to how we can use `r ref("tune()")` to construct a tuning instance, here we can use `r ref("bb_optimize()", aside = TRUE)`:
+Similarly to how we can use `r ref("tune()")` to construct a tuning instance, here we can use `r ref("bb_optimize()", aside = TRUE)`, which returns a list with elements `"par"` (best found parameters), `"val"` (optimal outcome), and `"instance"` (the tuning instance); `"par"` and `"val"` are the equivalent to the `instance$result`:
 
 ```{r}
-instance = bb_optimize(objective, method = "random_search",
+optimal = bb_optimize(objective, method = "random_search",
   max_evals = 20)
-instance$result
+optimal$instance$result
 ```
 
 Now we have introduced the basic black-box optimization setup, we can introduce the building blocks of any Bayesian optimization algorithm.
@@ -796,7 +789,7 @@ We can see that the expected improvement is high in regions where the mean predi
 xydt = generate_design_grid(domain, resolution = 1001)$data
 # evaluate our sinusoidal function
 xydt[, y := objective$eval_dt(xydt)$y]
-# evluate expected improvement
+# evaluate expected improvement
 xydt[, ei :=  acq_function$eval_dt(xydt[, "x"])]
 # make predictions from our data
 xydt[, c("mean", "se") :=  surrogate$predict(xydt[, "x"])]
@@ -827,7 +820,7 @@ Assuming a purely numeric search space, the utilization of gradient information 
 However, even when employing a Gaussian process as surrogate model, allowing for the calculation of gradients of the acquisition function with respect to the input variables, the issue of vanishing gradients in the mean and standard deviation predictions concerning the input variables presents a significant challenge [@garnett_2022].
 Consequently, in most cases, the optimization problem of the acquisition function can be regarded as a black box optimization problem itself, but a much cheaper one than the original.
 
-`AcqOptimizer` objects are constructed with `r ref("mlr3mbo::acqo()", aside = TRUE)`, which takes as input a `r ref('botk::Optimizer')`, a `r ref("bbotk::Terminator")`, and the acquisition function.
+`AcqOptimizer` objects are constructed with `r ref("mlr3mbo::acqo()", aside = TRUE)`, which takes as input a `r ref('bbotk::Optimizer')`, a `r ref("bbotk::Terminator")`, and the acquisition function.
 Optimizers are stored in the `ref("mlr_optimizers")` dictionary and can be constructed with the sugar function `r ref('opt()', aside = TRUE)`.
 The terminators are the same as those introduced in @sec-terminator.
 
@@ -852,6 +845,7 @@ Before demonstrating this class we will first take a step back and introduce the
 #### Using and Building Loop Functions {#sec-bayesian-optimization-loop}
 
 The `r ref("loop_function", index = TRUE)` determines the behavior of the BO algorithm on a global level, i.e., how the subroutine should look like that is performed at each iteration to generate new candidates for evaluation.
+Loop functions are relatively simple functions that take as input the classes that we have just discussed and define the BO loop.
 Loop functions are stored in the `r ref("mlr_loop_functions")` dictionary.
 As these are `S3` (not `R6`) classes, they can be simply loaded by just referencing the `key` (i.e., there is no constructor required).
 
@@ -859,7 +853,6 @@ As these are `S3` (not `R6`) classes, they can be simply loaded by just referenc
 as.data.table(mlr_loop_functions)[, .(key, label, instance)]
 ```
 
-Loop functions are relatively simple functions that take as input the classes that we have just discussed and define the BO loop.
 You could pick and use one of the loop functions included in the dictionary above, or you can write your own for finer control over the BO process.
 For example, a common choice of loop function is the Efficient Global Optimization (EGO) algorithm [@jones_1998] (`r ref('bayesopt_ego()')`), a simplified version of this code is shown at the end of this section to help demonstrate the algorithm and its purpose.
 In short, the code sets up the relevant components discussed above and then loops the steps above:  1) update the surrogate model 2) update the acquisition function 3) optimize the acquisition function to yield a new candidate 4) evaluate the candidate and add it to the archive.
@@ -984,16 +977,11 @@ tuner = tnr("mbo",
 
 lrn_svm = lrn("classif.svm", kernel = "radial", type = "C-classification",
   cost  = to_tune(1e-5, 1e5, logscale = TRUE),
-  gamma = to_tune(1e-5, 1e5, logscale = TRUE))
-
-instance = tune(
-  tuner,
-  task = tsk("sonar"),
-  lrn_svm,
-  resampling = rsmp("cv", folds = 3),
-  measure = msr("classif.ce"),
-  term_evals = 25
+  gamma = to_tune(1e-5, 1e5, logscale = TRUE)
 )
+
+instance = tune(tuner, tsk("sonar"), lrn_svm, rsmp("cv", folds = 3),
+  msr("classif.ce"), 25)
 ```
 
 Multi-objective tuning is also possible with BO with algorithms using many different design choices, for example whether they use a scalarization approach of objectives and only rely on a single surrogate model, or fit a surrogate model for each objective.
@@ -1017,14 +1005,8 @@ lrn_rpart = lrn("classif.rpart",
   maxdepth = to_tune(1, 30)
 )
 
-instance = tune(
-  tuner,
-  task = tsk("sonar"),
-  lrn_svm,
-  resampling = rsmp("cv", folds = 3),
-  measure = msrs(c("classif.tpr", "classif.fpr")),
-  term_evals = 25
-)
+instance = tune(tuner, tsk("sonar"), lrn_svm, rsmp("cv", folds = 3),
+  msrs(c("classif.tpr", "classif.fpr")), 25)
 ```
 
 ```{r, echo = FALSE}
@@ -1080,7 +1062,7 @@ Noisy objectives can be treated in different ways:
 2. An acquisition function can be used that respects noisiness
 3. The final best point(s) after optimization (i.e., the `$result` field of the instance) can be chosen in a way to reflect noisiness
 
-In the first case, instead of using an interpolating Gaussian process, we could instead use Gaussian process regression that estimates the measurement error by setting `nuggest.estim = TRUE`:
+In the first case, instead of using an interpolating Gaussian process, we could instead use Gaussian process regression that estimates the measurement error by setting `nugget.estim = TRUE`:
 
 ```{r, output=FALSE}
 srlrn(lrn("regr.km", nugget.estim = TRUE))
@@ -1115,7 +1097,7 @@ As a result of defaults existing for all building blocks, users can perform BO w
 To see an up-to-date overview of these defaults, take a look at the help page `r ref('mbo_defaults')`.
 We will finish this section with some practical considerations to think about when using BO.
 
-#### Error handling {.unnumbered .unlisted}
+#### Error Handling {.unnumbered .unlisted}
 
 In the context of BO, there is plenty of room for potential failure of building blocks which could break the whole process.
 For example, if two points in the training data are too close to each other, fitting the Gaussian process surrogate model can fail.
@@ -1130,7 +1112,7 @@ In the worst-case scenario, if all iterations errored, the BO algorithm will sim
 Ideally, fallback learners (@sec-encapsulation-fallback) could also be used, which will be employed before proposing the next candidate randomly.
 The value of the acquisition function is also always logged into the archive of the optimization instance so inspecting this is a good idea to ensure the algorithm behaved as expected and that the acquisition function column is populated as expected (`instance$archive$data`).
 
-#### Surrogate models {.unnumbered .unlisted}
+#### Surrogate Models {.unnumbered .unlisted}
 
 In practice, users may prefer a more robust BO variant over a potentially better performing but unstable variant.
 Even if the `catch_errors` parameters are turned on and are never triggered, that does not guarantee that the BO algorithm ran as intended.
@@ -1163,7 +1145,7 @@ At the time of publishing, terminators based on acquisition functions have not b
 The standard behavior of most BO algorithms is to sequentially propose a single candidate that should be evaluated next.
 Users may want to use parallelization to compute candidates more efficiently.
 If you are using BO for HPO, then the most efficient method is to parallelize the nested resampling, see @sec-nested-resampling-parallelization.
-Alternatively, if the loop function supports candidates being proposed in batches (e.g., `bayesopt_parego()`) then the `q` argument to the loop function can be set to propose `q` candiates in each iteration that will be evaluated in parallel.
+Alternatively, if the loop function supports candidates being proposed in batches (e.g., `bayesopt_parego()`) then the `q` argument to the loop function can be set to propose `q` candidates in each iteration that will be evaluated in parallel.
 
 ## Conclusion
 
@@ -1181,7 +1163,7 @@ In the next chapter we will look at feature selection and see how `r mlr3filters
 | --------------------------- | --------------------- | -------------------------------------------- |
 | `r ref("Learner")` | `r ref("lrn")`| `$encapsulate`/`$fallback` |
 | `r ref("TunerHyperband")` | `tnr("hyperband")`| - |
-| `r ref("bbotk::Objective")` | `r ref("srlrn()")`|  |
+| `r ref("bbotk::Objective")` | - |  |
 | `r ref("mlr3mbo::SurrogateLearner")` | `r ref("mlr3mbo::srlrn()")`|  |
 | `r ref("mlr3mbo::AcqFunction")` | `r ref("mlr3mbo::acqf()")` |  |
 | `r ref("mlr3mbo::AcqOptimizer")` | `r ref("mlr3mbo::acqo()")` |  |
