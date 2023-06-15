@@ -217,46 +217,46 @@ Furthermore, it can also be quite difficult to compare multiple models over mult
 
 ## Multi-Fidelity Tuning via Hyperband {#sec-hyperband}
 
-Increasingly large datasets and search spaces and costly to train models make HPO a time-consuming task.
-Recent hyperparameter optimization methods often also make use of evaluating a configuration at multiple fidelity levels.
-For example, a neural network can be trained for an increasing number of epochs, gradient boosting can be performed for an increasing number of boosting iterations and training data can always be subsampled to a smaller fraction of all available data.
-The general idea of *multi-fidelity* hyperparameter optimization is that the performance of a model obtained by using computationally cheap lower fidelity evaluation (few numbers of epochs or boosting iterations, only using a small sample of all available data for training) is predictive of the performance of the model obtained using computationally expensive full model evaluation and this concept can be leveraged to make HPO more efficient (e.g., only continuing to evaluate those configurations on higher fidelities that appear to be promising with respect to their performance).
-The fidelity parameter is part of the search space and controls the trade-off between the runtime and preciseness of the performance approximation.
+Increasingly large datasets and search spaces and increasingly complex models make hyperparameter optimization a time-consuming task.
+To tackle this, some HPO methods make use of evaluating a configuration at multiple fidelity levels.
+`r index('Multi-fidelity HPO', aside = TRUE)` is motivated by the idea that the performance of a lower-fidelity model is predictive of the full-fidelity model, which can be used to make HPO more efficient (as we will soon see with Hyperband).
 
-A popular multi-fidelity hyperparameter optimization algorithm is *Hyperband* [@li_2018].
+To unpick what these terms mean and to motivate multi-fidelity tuning, say that we think a gradient boosting algorithm with 1000 rounds will be a very good fit to our training data however we are concerned this model will take too long to run.
+Therefore, we want to predict the performance of this model using a less complex model that is quicker to train by setting a smaller number of rounds.
+In this example, the hyperparameter controlling the number of rounds is a `r index('fidelity parameter', aside = TRUE)`, as it controls the tradeoff between model performance and complexity.
+The different configurations of this parameter are known as `r index('fidelity levels', aside = TRUE)`.
+We refer to the model with 1000 rounds as the model at `r index('full-fidelity', aside = TRUE)` and we want to approximate this model's performance using model's at different fidelity levels.
+Lower fidelity levels result in `r index('low-fidelity models', aside = TRUE)` that are lower complexity and quicker to train but may poorly predict the full-fidelity model's performance.
+On the other hand, higher fidelity levels result in `r index('high-fidelity models', aside = TRUE)` that are higher complexity and slower to train but may better predict the full-fidelity model's performance.
+
+Other common model's that have fidelity parameters include neural networks (number of epochs) and random forests (number of trees).
+The proportion of data to sample before running any algorithm can also be viewed as a fidelity parameter, we will return to this in @sec-hyperband-example-svm
+
+### Hyperband and Successive Halving
+
+A popular multi-fidelity HPO algorithm is *Hyperband* [@li_2018].
 After having evaluated randomly sampled configurations on low fidelities, Hyperband iteratively allocates more resources to promising configurations and terminates low-performing ones.
-In the following example, we will optimize XGBoost and use the number of boosting iterations as the fidelity parameter.
-This means Hyperband will allocate increasingly more boosting iterations to well-performing hyperparameter configurations.
-Increasing the number of boosting iterations increases the time to train a model but generally also the performance.
-It is therefore a suitable fidelity parameter.
-However, as already mentioned, Hyperband is not limited to machine learning algorithms that are trained iteratively.
-In the second example, we will tune an SVM and use the size of the training data as the fidelity parameter.
-Some prior knowledge about pipelines (@sec-pipelines) is beneficial but not necessary to fully understand the examples.
-In the following, the terms fidelity and budget are often used interchangeably.
-
-### Hyperband Tuner {#sec-hyperband-tuner}
-
-Hyperband [@li_2018] builds upon the Successive Halving algorithm by @jamieson_2016.
-Successive Halving is initialized with the number of starting configurations $n$, the proportion of configurations discarded in each stage $\eta$, and the minimum $r{_{min}}$ and maximum $r{_{max}}$ budget of a single evaluation.
+Hyperband builds upon the Successive Halving algorithm by @jamieson_2016.
+Successive Halving is initialized with the number of starting configurations $n$, the proportion of configurations discarded in each stage $\eta$, and the minimum, $r{_{min}}$, and maximum, $r{_{max}}$, budget (fidelity) of a single evaluation.
 The algorithm starts by sampling $n$ random configurations and allocating the minimum budget $r{_{min}}$ to them.
 The configurations are evaluated and $\frac{1}{\eta}$ of the worst-performing configurations are discarded.
-The remaining configurations are promoted to the next stage and evaluated on a larger budget.
+The remaining configurations are promoted to the next stage, or 'bracket', and evaluated on a larger budget.
 This continues until one or more configurations are evaluated on the maximum budget $r{_{max}}$ and the best-performing configuration is selected.
 The total number of stages is calculated so that each stage consumes approximately the same overall budget.
-Successive Halving has the disadvantage that is not clear whether we should choose a large $n$ and try many configurations on a small budget or choose a small $n$ and train more configurations on the full budget.
+A big disadvantage of this method is that it is unclear if it is better to start with many configurations (large $n$) and a small budget or less configurations (small $n$) but a larger budget.
 
-Hyperband solves this problem by running Successive Halving with different numbers of stating configurations starting on different budget levels.
-The algorithm is initialized with the same parameters as Successive Halving except for $n$.
-Each run of Successive Halving is called a bracket and starts with a different budget $r{_{0}}$.
-A smaller starting budget means that more configurations can be evaluated.
-The most exploratory bracket is allocated the minimum budget $r{_{min}}$.
-The next bracket increases the starting budget by a factor of $\eta$.
-In each bracket, the starting budget increases further until the last bracket $s = 0$ essentially performs a random search with the full budget $r{_{max}}$.
-The number of brackets $s{_{max}} + 1$ is calculated with $s{_{max}} = {\log_\eta \frac{r{_{max}} }{r{_{min}}}}$.
-Under the condition that $r{_{0}}$ increases by $\eta$ with each bracket, $r{_{min}}$ sometimes has to be adjusted slightly in order not to use more than $r{_{max}}$ resources in the last bracket.
-The number of configurations in the base stages is calculated so that each bracket uses approximately the same amount of budget.
-@tbl-hyperband shows a full run of the Hyperband algorithm.
-The bracket $s = 3$ is the most exploratory bracket and $s = 0$ essentially performs a random search using the full budget.
+Hyperband solves this problem by running Successive Halving with different numbers of starting configurations, each at different budget levels.
+The algorithm is initialized with the same $\eta$, $r{_{min}}$, and $r{_{max}}$ parameters (but not $n$).
+Each bracket starts with a different budget, $r{_{0}}$, where smaller values mean that more configurations can be evaluated and so the most exploratory bracket (i.e., most number of stages) is allocated the minimum budget $r{_{min}}$.
+In each bracket, the starting budget increases by a factor of $\eta$ until the last bracket ($s = 0$) essentially performs a random search with the full budget $r{_{max}}$ -- the minimum budget, $r{_{min}}$, may have to be adjusted so the last bracket does not exceed $r{_{max}}$.
+The total number of brackets, $s{_{max}} + 1$, is calculated as $s{_{max}} = {\log_\eta \frac{r{_{max}} }{r{_{min}}}}$.
+The number of configurations are calculated so that each bracket uses approximately the same amount of budget.
+The optimal hyperparameter configuration in each bracket is the configuration with the best performance in the final stage.
+The optimal hyperparameter configuration at the end of tuning is the configuration with the best performance across all brackets.
+
+An example Hyperband schedule is given in @tbl-hyperband where $s = 3$ is the most exploratory bracket and $s = 0$ essentially performs a random search using the full budget.
+@tbl-hyperband-eg demonstrates how this schedule may look if we were to tune 20 different hyperparameter configurations; note that each entry in the table is a unique ID referring to a possible configuration of multiple hyperparameters to tune.
+
 
 +-----+-------------------+-------------------+-------------------+-------------------+
 |     | $s = 3$           | $s = 2$           | $s = 1$           | $s = 0$           |
@@ -272,28 +272,35 @@ The bracket $s = 3$ is the most exploratory bracket and $s = 0$ essentially perf
 | 3   | 1       | 8       |         |         |         |         |         |         |
 +-----+---------+---------+---------+---------+---------+---------+---------+---------+
 
-: Hyperband schedule with the number of configurations $n_{i}$ and resources $r_{i}$ for each bracket $s$ and stage $i$, when $\eta = 2$ , $r{_{min}} = 1$ and $r{_{max}} = 8$ {#tbl-hyperband}
+: Hyperband schedule with the number of configurations, $n_{i}$, and resources, $r_{i}$, for each bracket, $s$, and stage, $i$, when $\eta = 2$, $r{_{min}} = 1$ and $r{_{max}} = 8$. {#tbl-hyperband}
 
-### Example XGBoost {#sec-hyperband-example-xgboost}
+|     | $s = 3$ | $s = 2$ | $s = 1$ | $s = 0$ |
+|---- | ---------------- | ---------------- | ---------------- | ---------------- |
+| $i = 0$   | $\{1, 2, 3, 4, 5, 6, 7, 8\}$ | $\{9, 10, 11, 12, 13, 14\}$ |  $\{15, 16, 17, 18\}$ | $\{19, 20, 21, 22\}$ |
+| $i = 1$   | $\{1, 2, 7, 8\}$ | $\{9, 14, 15\}$ | $\{20, 21\}$ |
+| $i = 2$   | $\{1, 8\}$ | $\{15\}$ | |
+| $i = 3$   | $\{1\}$ |  |  |  |
+| $HPC^*_s$   | $\{1\}$ | $\{15\}$ | $\{21\}$ | $\{22\}$ |
+| $HPC^*$   | $\{15\}$ |
 
-In this practical example, we will optimize the hyperparameters of XGBoost on the `spam` dataset.
-We begin by constructing the learner.
+: Hyperparameter configurations in each stage and bracket from schedule in @tbl-hyperband. Entries are unique identifiers for tested hyperparameter configurations (HPCs) (all HPCs are assigned unique identifiers although theoretically  multiple HPCs could contain the same values). $HPC^*_s$ is the optimal hyperparameter configuration in bracket $s$ and $HPC^*$ is the optimal hyperparameter configuration across all brackets. {#tbl-hyperband-eg}
+
+### mlr3hyperband
+
+The Successive Halving and Hyperband algorithms are implemented in `r mlr3hyperband` as `tnr("successive_halving")` and `tnr("hyperband")` respectively; in this section we will only showcase the Hyperband method.
+
+By example we will optimize XGBoost on the `spam` dataset and use the number of boosting iterations as the fidelity parameter, this is a suitable choice as increasing iterations increase model training time but generally also improves performance.
+Hyperband will allocate increasingly more boosting iterations to well-performing hyperparameter configurations.
+
+We will load the learner and define the search space.
+The `nrounds` parameter controls the number of boosting iterations.
+We specify a range from 16 ($r{_{min}}$) to 128 ($r{_{max}}$) boosting iterations and tag the parameter with `"budget"`to identify it as a fidelity parameter.
+For the other hyperparameters, we take the search space for XGBoost from @hpo_practical, which usually works well for a wide range of datasets.
 
 ```{r optimization-062}
 library(mlr3hyperband)
 
 learner = lrn("classif.xgboost")
-```
-
-As the next step we define the search space.
-The `nrounds` parameter controls the number of boosting iterations.
-We specify a range from 16 to 128 boosting iterations.
-This is used as $r{_{min}}$ and $r{_{max}}$ within Hyperband.
-We need to tag the parameter with `"budget"`to identify it as a fidelity parameter.
-For the other hyperparameters, we take the search space for XGBoost from @hpo_practical.
-This search space usually work well for a wide range of datasets.
-
-```{r optimization-063}
 learner$param_set$set_values(
   nrounds           = to_tune(p_int(16, 128, tags = "budget")),
   eta               = to_tune(1e-4, 1, logscale = TRUE),
@@ -306,8 +313,11 @@ learner$param_set$set_values(
 )
 ```
 
-We proceed to construct the tuning instance.
-Note that we use `trm("none")` because Hyperband terminates itself after all brackets have been evaluated.
+We now construct the tuning instance and tuner.
+We use `trm("none")` because Hyperband terminates itself after all brackets have been evaluated.
+We also set `eta = 2` and control the number of repetitions of with `repetitions = 1`.
+Note that setting `repetition = Inf` can be useful if you want a terminator to stop the optimization, for example based on runtime.
+The `r ref("mlr3hyperband::hyperband_schedule()")` function can be used to display the schedule across the given fidelity levels and budget increase factor.
 
 ```{r optimization-064}
 instance = ti(
@@ -317,172 +327,22 @@ instance = ti(
   measures = msr("classif.ce"),
   terminator = trm("none")
 )
-```
 
-We then construct the Hyperband tuner and specify `eta = 2`.
-In general, Hyperband can start all over from the beginning once the last bracket is evaluated.
-We control the number of Hyperband runs with the `repetition` argument.
-The setting `repetition = Inf` is useful when a terminator should stop the optimization, for example based on runtime.
-
-```{r optimization-065}
 tuner = tnr("hyperband", eta = 2, repetitions = 1)
-```
 
-Using `eta = 2` and 16 to 128 boosting iterations results in the following schedule.
-This only prints a data table with the schedule and does not modify the tuner.
-
-```{r optimization-066}
 hyperband_schedule(r_min = 16, r_max = 128, eta = 2)
 ```
 
-We can now proceed with the tuning:
+Finally we can then tune as normal and print the result and archive.
+Note that the archive resulting from a Hyperband run contains the additional columns `bracket` and `stage`.
 
-```{r optimization-067}
-#| output: false
+```{r optimization-067, message = FALSE}
 tuner$optimize(instance)
-```
 
-The result is the configuration with the best performance.
-
-```{r optimization-068}
 instance$result[, .(classif.ce, nrounds)]
-```
 
-Note that the archive resulting of a Hyperband run contains the additional columns `bracket` and `stage`:
-
-```{r optimization-069}
 as.data.table(instance$archive)[,
   .(bracket, stage, classif.ce, eta, max_depth, colsample_bytree)]
-```
-
-### Example Support Vector Machine {#sec-hyperband-example-svm}
-
-In this example, we will optimize the hyperparameters of an SVM on the `sonar` dataset.
-We begin by constructing the learner and setting `type` to `"C-classification"`.
-
-```{r optimization-070}
-learner = lrn("classif.svm", id = "svm", type = "C-classification")
-```
-
-The `r mlr3pipelines` package features a `r ref("PipeOp")` for subsampling data.
-This will be helpful when using the size of the training data as a fidelity parameter.
-
-```{r optimization-071}
-po("subsample")
-```
-
-This pipeline operator controls the size of the training dataset with the `frac` parameter.
-We connect the `po("subsample")`  with the learner and get a `r ref("GraphLearner")`.
-
-```{r optimization-072}
-graph_learner = as_learner(
-  po("subsample") %>>%
-  learner
-)
-```
-
-The graph learner subsamples and then fits an SVM machine on the data subset.
-The parameter set of the graph learner is a combination of the parameter sets of the pipeline operator and learner.
-
-```{r optimization-073}
-as.data.table(graph_learner$param_set)[, .(id, lower, upper, levels)]
-```
-
-Next, we create the search space.
-We have to prefix the hyperparameters with the id of the pipeline operators, because this reflects the way how they are represented in the parameter set of the graph learner.
-The `subsample.frac` is the fidelity parameter that must be tagged with `"budget"` in the search space.
-In the following, the dataset size is increased from 3.7% to 100%.
-For the other hyperparameters, we take the search space for SVMs from @binder2020.
-This search space usually work well for a wide range of datasets.
-
-```{r optimization-074}
-graph_learner$param_set$set_values(
-  subsample.frac  = to_tune(p_dbl(3^-3, 1, tags = "budget")),
-  svm.kernel      = to_tune(c("linear", "polynomial", "radial")),
-  svm.cost        = to_tune(1e-4, 1e3, logscale = TRUE),
-  svm.gamma       = to_tune(1e-4, 1e3, logscale = TRUE),
-  svm.tolerance   = to_tune(1e-4, 2, logscale = TRUE),
-  svm.degree      = to_tune(2, 5)
-)
-```
-
-Support vector machines can often crash during training or take an extensive time to train given certain hyperparameters.
-We therefore set a timeout of 30 seconds and specify a fallback learner (@sec-encapsulation-fallback) to handle these cases.
-
-```{r optimization-075}
-graph_learner$encapsulate = c(train = "evaluate", predict = "evaluate")
-graph_learner$timeout = c(train = 30, predict = 30)
-graph_learner$fallback = lrn("classif.featureless")
-```
-
-Let us create the tuning instance.
-Again, we use `trm("none")` because Hyperband controls the termination itself.
-
-```{r optimization-076}
-instance = ti(
-  task = tsk("sonar"),
-  learner = graph_learner,
-  resampling = rsmp("cv", folds = 3),
-  measures = msr("classif.ce"),
-  terminator = trm("none")
-)
-```
-
-We create the tuner and set `eta = 3`.
-
-```{r optimization-077}
-tuner = tnr("hyperband", eta = 3)
-```
-
-Using `eta = 3` and a lower bound of 3.7% for the dataset size results in the following Hyperband schedule.
-
-```{r optimization-078}
-hyperband_schedule(r_min = 3^-3, r_max = 1, eta = 3)
-```
-
-We can now start the tuning.
-
-```{r optimization-079}
-#| output: false
-tuner$optimize(instance)
-```
-
-We observe that the best model is an SVM with a polynomial kernel.
-
-```{r optimization-080}
-instance$result[, .(classif.ce, subsample.frac, svm.kernel)]
-```
-
-The archive contains all evaluated configurations.
-We can proceed to further investigate the 8 configurations that were evaluated on the full dataset.
-The configuration with the best classification error on the full dataset was sampled in the second bracket.
-The classification error was estimated to be 30% on 33% of the dataset and decreased to 14% on the full dataset (see bright purple line in @fig-hyperband).
-
-```{r optimization-081, eval=FALSE}
-#| echo: false
-#| label: fig-hyperband
-#| fig-cap: "Optimization paths of the 8 configurations evaluated on the complete dataset."
-#| fig-alt: "Image showing the performance of 8 configurations evaluated on different training dataset sizes. The classification error decreases on larger training set sizes."
-library(ggplot2)
-
-data = as.data.table(instance$archive)[, i := factor(.GRP), by = "svm.cost"]
-top = data[subsample.frac == 1, i]
-data = data[list(top), , on = "i"]
-
-ggplot(data, aes(x = subsample.frac, y = classif.ce, group = i)) +
-  geom_vline(xintercept = 0.037, color = "grey85") +
-  geom_vline(xintercept = 0.111, color = "grey85") +
-  geom_vline(xintercept = 0.333, color = "grey85") +
-  geom_vline(xintercept = 1, color = "grey85") +
-  geom_line(aes(color=i), show.legend = FALSE) +
-  geom_point(aes(color=i), size = 3, show.legend = FALSE, position=position_jitter(height = 0.003, width = 0)) +
-  scale_x_continuous(breaks = c(0.034, 0.11, 0.33, 1), labels = function(x) paste0(as.character(x *100), "%")) +
-  scale_color_viridis_d(alpha = 0.8) +
-  xlab("Training dataset Size") +
-  ylab("Classification Error") +
-  theme_minimal() +
-  theme(panel.grid.major.x = element_blank(),
-        panel.grid.minor.x = element_blank())
 ```
 
 ## Bayesian Optimization {#sec-bayesian-optimization}
