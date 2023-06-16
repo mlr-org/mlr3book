@@ -159,9 +159,11 @@ toproper = function(str) {
 #' @title Add term to index if non-NULL
 #' @param main Text to show in book
 #' @param index Index entry if different from `main
+#' @param aside If TRUE prints in margin
 #' @param code If TRUE tells function to wrap in ``
+#' @param lower If TRUE makes non-code index entry lower case (required by publisher)
 #' @export
-index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
+index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE) {
 
   stopifnot(!(is.null(main) && is.null(index)))
 
@@ -174,11 +176,13 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
   }
 
   if (is.null(index)) {
-    index = if (code) main else toproper(main)
-  }
-
-  if (code) {
-    index = gsub("([\\$\\_])", "\\\\\\1", index)
+    if (code) {
+      index = gsub("([\\$\\_])", "\\\\\\1", main)
+    } else if (lower) {
+      index = tolower(main)
+    } else {
+      index = main
+    }
   }
 
   out = sprintf("%s\\index{%s}", out, index)
