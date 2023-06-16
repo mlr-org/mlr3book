@@ -27,20 +27,18 @@ For example when learners do not converge, run out of memory, or terminate with 
 As a common example, learners can fail if there are factor levels present in the test data that were not in the training data, models fail in this case as there have been no weights/coefficients trained for these new factor levels:
 
 ```{r, error = TRUE, warning = FALSE}
-task_pim = tsk("pima")
-cv3 = rsmp("cv", folds = 3)
+task_pen = tsk("penguins")
+# create custom resampling with new factors in test data
+cvcust = rsmp("custom")
+cvcust$instantiate(task_pen,
+  list(which(task_pen$data()$island != "Biscoe")),
+  list(which(task_pen$data()$island == "Biscoe"))
+)
 msr_ce = msr("classif.ce")
 rnd_srch = tnr("random_search")
-learner = lrn("classif.xgboost", eta = to_tune(1e-4, 1))
+learner = lrn("classif.gbm", n.trees = to_tune(50, 100))
 
-tune(rnd_srch, task_pim, learner, cv3, msr_ce, 10)
-```
-```{r, echo = FALSE}
-task_pim = tsk("pima")
-cv3 = rsmp("cv", folds = 3)
-msr_ce = msr("classif.ce")
-rnd_srch = tnr("random_search")
-learner = lrn("classif.xgboost", eta = to_tune(1e-4, 1))
+tune(rnd_srch, task_pen, learner, cvcust, msr_ce, 10)
 ```
 
 In the above example, we can see the tuning process breaks and we lose all information about the hyperparameter optimization process as the `instance` cannot be saved.
@@ -75,7 +73,7 @@ learner$fallback = lrn("classif.featureless")
 We can now run our experiment and see errors that occurred during tuning in the archive.
 
 ```{r optimization-038}
-instance = tune(rnd_srch, task_pim, learner, cv3, msr_ce, 10)
+instance = tune(rnd_srch, task_pen, learner, cvcust, msr_ce, 10)
 
 as.data.table(instance$archive)[, .(df, classif.ce, errors)]
 
@@ -353,136 +351,6 @@ Note that the archive resulting of a Hyperband run contains the additional colum
 ```{r optimization-069}
 as.data.table(instance$archive)[,
   .(bracket, stage, classif.ce, eta, max_depth, colsample_bytree)]
-```
-
-### Example Support Vector Machine {#sec-hyperband-example-svm}
-
-In this example, we will optimize the hyperparameters of an SVM on the `sonar` dataset.
-We begin by constructing the learner and setting `type` to `"C-classification"`.
-
-```{r optimization-070}
-learner = lrn("classif.svm", id = "svm", type = "C-classification")
-```
-
-The `r mlr3pipelines` package features a `r ref("PipeOp")` for subsampling data.
-This will be helpful when using the size of the training data as a fidelity parameter.
-
-```{r optimization-071}
-po("subsample")
-```
-
-This pipeline operator controls the size of the training dataset with the `frac` parameter.
-We connect the `po("subsample")`  with the learner and get a `r ref("GraphLearner")`.
-
-```{r optimization-072}
-graph_learner = as_learner(
-  po("subsample") %>>%
-  learner
-)
-```
-
-The graph learner subsamples and then fits an SVM machine on the data subset.
-The parameter set of the graph learner is a combination of the parameter sets of the pipeline operator and learner.
-
-```{r optimization-073}
-as.data.table(graph_learner$param_set)[, .(id, lower, upper, levels)]
-```
-
-Next, we create the search space.
-We have to prefix the hyperparameters with the id of the pipeline operators, because this reflects the way how they are represented in the parameter set of the graph learner.
-The `subsample.frac` is the fidelity parameter that must be tagged with `"budget"` in the search space.
-In the following, the dataset size is increased from 3.7% to 100%.
-For the other hyperparameters, we take the search space for SVMs from @binder2020.
-This search space usually work well for a wide range of datasets.
-
-```{r optimization-074}
-graph_learner$param_set$set_values(
-  subsample.frac  = to_tune(p_dbl(3^-3, 1, tags = "budget")),
-  svm.kernel      = to_tune(c("linear", "polynomial", "radial")),
-  svm.cost        = to_tune(1e-4, 1e3, logscale = TRUE),
-  svm.gamma       = to_tune(1e-4, 1e3, logscale = TRUE),
-  svm.tolerance   = to_tune(1e-4, 2, logscale = TRUE),
-  svm.degree      = to_tune(2, 5)
-)
-```
-
-Support vector machines can often crash during training or take an extensive time to train given certain hyperparameters.
-We therefore set a timeout of 30 seconds and specify a fallback learner (@sec-encapsulation-fallback) to handle these cases.
-
-```{r optimization-075}
-graph_learner$encapsulate = c(train = "evaluate", predict = "evaluate")
-graph_learner$timeout = c(train = 30, predict = 30)
-graph_learner$fallback = lrn("classif.featureless")
-```
-
-Let us create the tuning instance.
-Again, we use `trm("none")` because Hyperband controls the termination itself.
-
-```{r optimization-076}
-instance = ti(
-  task = tsk("sonar"),
-  learner = graph_learner,
-  resampling = rsmp("cv", folds = 3),
-  measures = msr("classif.ce"),
-  terminator = trm("none")
-)
-```
-
-We create the tuner and set `eta = 3`.
-
-```{r optimization-077}
-tuner = tnr("hyperband", eta = 3)
-```
-
-Using `eta = 3` and a lower bound of 3.7% for the dataset size results in the following Hyperband schedule.
-
-```{r optimization-078}
-hyperband_schedule(r_min = 3^-3, r_max = 1, eta = 3)
-```
-
-We can now start the tuning.
-
-```{r optimization-079}
-#| output: false
-tuner$optimize(instance)
-```
-
-We observe that the best model is an SVM with a polynomial kernel.
-
-```{r optimization-080}
-instance$result[, .(classif.ce, subsample.frac, svm.kernel)]
-```
-
-The archive contains all evaluated configurations.
-We can proceed to further investigate the 8 configurations that were evaluated on the full dataset.
-The configuration with the best classification error on the full dataset was sampled in the second bracket.
-The classification error was estimated to be 30% on 33% of the dataset and decreased to 14% on the full dataset (see bright purple line in @fig-hyperband).
-
-```{r optimization-081, eval=FALSE}
-#| echo: false
-#| label: fig-hyperband
-#| fig-cap: "Optimization paths of the 8 configurations evaluated on the complete dataset."
-#| fig-alt: "Image showing the performance of 8 configurations evaluated on different training dataset sizes. The classification error decreases on larger training set sizes."
-library(ggplot2)
-
-data = as.data.table(instance$archive)[, i := factor(.GRP), by = "svm.cost"]
-top = data[subsample.frac == 1, i]
-data = data[list(top), , on = "i"]
-
-ggplot(data, aes(x = subsample.frac, y = classif.ce, group = i)) +
-  geom_vline(xintercept = 0.037, color = "grey85") +
-  geom_vline(xintercept = 0.111, color = "grey85") +
-  geom_vline(xintercept = 0.333, color = "grey85") +
-  geom_vline(xintercept = 1, color = "grey85") +
-  geom_line(aes(color=i), show.legend = FALSE) +
-  geom_point(aes(color=i), size = 3, show.legend = FALSE, position=position_jitter(height = 0.003, width = 0)) +
-  scale_x_continuous(breaks = c(0.034, 0.11, 0.33, 1), labels = function(x) paste0(as.character(x *100), "%")) +
-  scale_color_viridis_d(alpha = 0.8) +
-  xlab("Training dataset Size") +
-  ylab("Classification Error") +
-  theme_minimal() +
-  theme(panel.grid.major.x = element_blank(),
-        panel.grid.minor.x = element_blank())
 ```
 
 ## Bayesian Optimization {#sec-bayesian-optimization}
