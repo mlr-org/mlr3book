@@ -175,15 +175,11 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
     out = main
   }
 
-  if (is.null(index)) {
-    if (code) {
-      index = gsub("([\\$\\_])", "\\\\\\1", main)
-    } else if (lower) {
-      index = tolower(main)
-    } else {
-      index = main
-    }
-  }
+  if (code) lower = FALSE
+
+  if (is.null(index)) index = ifelse(lower, tolower(main), main)
+
+  index = gsub("([\\$\\_])", "\\\\\\1", main)
 
   out = sprintf("%s\\index{%s}", out, index)
 
