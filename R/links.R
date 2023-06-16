@@ -165,7 +165,8 @@ toproper = function(str) {
 #' @param see If non-NULL index entry to 'see'
 #' @param parent If non-NULL index parent entry
 #' @export
-index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE, see = NULL, parent = NULL) {
+index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE, see = NULL,
+  parent = NULL) {
 
   stopifnot(!(is.null(main) && is.null(index)))
 
@@ -183,13 +184,25 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
 
   index = gsub("([\\$\\_])", "\\\\\\1", main)
 
+  if (code) index = sprintf("\\texttt{%s}", index)
+
   if (!is.null(parent) && !is.null(see)) stop("not worth the effort, do it manually")
 
   if (!is.null(parent)) {
+    if (code) {
+      parent = sprintf("\\texttt{%s}", parent)
+    } else if (lower) {
+      parent = tolower(parent)
+    }
     index = sprintf("%s!%s", parent, index)
   }
 
   if (!is.null(see)) {
+    if (code) {
+      see = sprintf("\\texttt{%s}", see)
+    } else if (lower) {
+      see = tolower(see)
+    }
     index = sprintf("%s|see{%s}", index, see)
   }
 
