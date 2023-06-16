@@ -162,8 +162,10 @@ toproper = function(str) {
 #' @param aside If TRUE prints in margin
 #' @param code If TRUE tells function to wrap in ``
 #' @param lower If TRUE makes non-code index entry lower case (required by publisher)
+#' @param see If non-NULL index entry to 'see'
+#' @param parent If non-NULL index parent entry
 #' @export
-index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE) {
+index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE, see = NULL, parent = NULL) {
 
   stopifnot(!(is.null(main) && is.null(index)))
 
@@ -180,6 +182,16 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   if (is.null(index)) index = ifelse(lower, tolower(main), main)
 
   index = gsub("([\\$\\_])", "\\\\\\1", main)
+
+  if (!is.null(parent) && !is.null(see)) stop("not worth the effort, do it manually")
+
+  if (!is.null(parent)) {
+    index = sprintf("%s!%s", parent, index)
+  }
+
+  if (!is.null(see)) {
+    index = sprintf("%s|see{%s}", index, see)
+  }
 
   out = sprintf("%s\\index{%s}", out, index)
 
