@@ -182,7 +182,7 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
 
   if (is.null(index)) index = ifelse(lower, tolower(main), main)
 
-  index = gsub("([\\$\\_])", "\\\\\\1", main)
+  index = gsub("([\\$\\_])", "\\\\\\1", index)
 
   if (code) index = sprintf("\\texttt{%s}", index)
 
