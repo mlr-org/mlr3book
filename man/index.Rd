@@ -4,7 +4,7 @@
 \alias{index}
 \title{Add term to index if non-NULL}
 \usage{
-index(main = NULL, index = NULL, aside = FALSE, code = FALSE)
+index(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE)
 }
 \arguments{
 \item{main}{Text to show in book}
@@ -12,6 +12,8 @@ index(main = NULL, index = NULL, aside = FALSE, code = FALSE)
 \item{index}{Index entry if different from `main}
 
 \item{code}{If TRUE tells function to wrap in ``}
+
+\item{lower}{If TRUE makes non-code index entry lower case (required by publisher)}
 }
 \description{
 Add term to index if non-NULL

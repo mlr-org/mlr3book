@@ -670,7 +670,7 @@ as.data.table(instance$result)[,
 Once again, the best configuration is a KNN learner with the Yeo-Johnson transform.
 In practice `"proxy"` offers complete flexibility and may be more useful for more complicated use-cases, whereas `ppl("branch")` is more efficient in more straightforward scenarios.
 
-### Putting Everything Together with Hyperband {#sec-hyperband-example-svm}
+### Putting Everything Together 1: Hyperband {#sec-hyperband-example-svm}
 
 {{< include _optional.qmd >}}
 
@@ -726,7 +726,59 @@ instance = tune(
 unlist(instance$result$x_domain[[1]][2:3])
 ```
 
-<!-- TODO: ADD FEATURE SELECTION EXAMPLES THAT USE GRAPHS AND TUNING -->
+### Putting Everything Together 2: Feature Selection {#sec-pipelines-featsel}
+
+{{< include _optional.qmd >}}
+
+In @sec-fs-filter-based we learnt about filter-based `r index('feature selection')` and how we can manually run a filter and then extract the selected features, often using an arbitrary choice of thresholds.
+Now that we have covered pipelines and tuning, we will briefly return to feature selection to demonstrate how to automate filter-based feature selection by making use of `po("filter")`.
+`po("filter")` includes the `filter` hyperparameter which takes a `r ref("Filter")` object to be used as the filter method as well as a choice of parameters for different methods of selecting features:
+
+* `filter.nfeat` -- Number of features to select
+* `filter.frac` -- Fraction of features to select
+* `filter.cutoff` -- Minimum value of filter such that features with filter values greater than or equal to the cutoff are kept
+* `filter.permuted` -- Random permutation of features added to task before applying the filter and all features before the `permuted`-th permuted features are kept
+
+Below we use the information gain filter and select the top three features:
+
+```{r feature-selection-012}
+library(mlr3filters)
+library(mlr3fselect)
+
+task_pen = tsk("penguins")
+
+# combine filter (keep top 3 features) with learner
+graph = po("filter", filter = flt("information_gain"), filter.nfeat = 3) %>>%
+  po("learner", lrn("classif.rpart"))
+
+po("filter", filter = flt("information_gain"), filter.nfeat = 3)$
+  train(list(task_pen))[[1]]$feature_names
+```
+
+Choosing `3` as the cutoff was fairly arbitrary but by tuning a graph we can optimize this cutoff:
+
+```{r feature-selection-013}
+po_filter = po("filter", filter = flt("information_gain"),
+  filter.nfeat = to_tune(1, task_pen$ncol))
+graph = as_learner(po_filter %>>% po("learner", lrn("classif.rpart")))
+
+instance = tune(tnr("random_search"), task_pen, graph, rsmp("holdout"),
+  term_evals = 10)
+instance$result
+```
+
+In this example `r instance$result$information_gain.filter.nfeat` is the optimal number of features.
+It can be especially useful in feature selection to visualize the tuning results as there may be cases where the optimal result is only marginally better than a result with less features (which would lead to a model that is quicker to train and possibly easier to interpret).
+
+```{r feature-selection-016}
+#| label: fig-tunefilter
+#| fig-cap: Model performance with different numbers of features, selected by an information gain filter.
+#| fig-alt: Plot showing model performance in filter-based feature selection, showing that adding a second and third feature to the model improves performance, while adding more feature achieves no further performance gain.
+autoplot(instance)
+```
+
+Now we can see that three variables may be equally as good in this case so we could consider going forward by selecting three features and not four as suggested by `instance$result`.
+
 
 ## Conclusion
 
