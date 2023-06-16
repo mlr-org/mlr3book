@@ -1,187 +1,126 @@
----
-author:
-  - name: Florian Pfisterer
-    orcid: 0000-0001-8867-762X
-    email:
-    affiliations:
-      - name: Ludwig-Maximilians-Universität München
-abstract: TBD
----
-
-```{r special-001, include = FALSE}
-set.seed(8)
-```
-
-# Fairness 
+# Algorithmic Fairness
 
 {{< include _setup.qmd >}}
 
-## Fairness {#sec-fairness}
+`r chapter = "Algorithmic Fairness"`
+`r authors(chapter)`
 
-```{r special-048, include = FALSE, cache = FALSE}
-library("mlr3fairness")
-library("ggplot2")
-```
+In this chapter, we will explore `r index('algorithmic fairness')`\index{fairness|see{Algorithmic Fairness}} in automated decision making and how we can build fair and unbiased (or at least less biased) predictive models.
+Methods to help audit and resolve bias in `mlr3` models are implemented in `r mlr3fairness`.
+We will begin by first discussing some of the theory behind algorithmic fairness and then show how this is implemented in `r mlr3fairness`.
 
-In this chapter, we will explore fairness in automated decision making and how we can build better systems when it comes to systems that make (automated) decisions about human individuals.
-Such systems range from domains such as banking (credit-scoring) and hiring (applicant scoring) to systems that assist doctors with medical decisions.
-Methods to help with auditing for or building better models can be found in the `r mlr3fairness` package.
-This chapter heavily borrows from the paper accompanying the pacakge [@mlr3fairness], the interested reader is referred to this manuscript for a more in-depth introduction. 
-
-Automated decision-making systems based on data-driven models are becoming increasingly common, and studies have found that they often outperform human experts in making decisions, especially in high-stakes scenarios, leading to more efficient and accurate predictions.
-However, without proper auditing, these models can result in negative consequences for individuals, especially those from underprivileged groups.
+Automated decision-making systems based on data-driven models are becoming increasingly common but without proper auditing, these models may result in negative consequences for individuals, especially those from underprivileged groups.
 The proliferation of such systems in everyday life has made it important to address the potential for biases in these models.
-For instance, historical biases and sampling biases in the data used to train these models can lead to replication of such biases in the future, as well as inadequate representation of unprivileged populations, leading to models that perform well in some groups but worse on others.
-Biases in the measurement of labels and data, as well as feedback loops, are other sources of biases that need to be addressed.
+As a real-world example, historical and sampling biases have led to better quality medical data for patients from White ethnic groups when compared with other ethnic groups.
+If a model is trained primarily on data from White patients, then it is possible the model may appear 'good' with respect to a performance metric (e.g., classification error) when in fact the model could simultaneously be making good predictions for White patients while making bad or even harmful predictions for other patients [@Huang2022].
 As ML-driven systems are used for highly influential decisions, it is vital to develop capabilities to analyze and assess these models not only with respect to their robustness and predictive performance but also with respect to potential biases.
 
-### What is bias?
+As we work through this chapter we will use the `"adult_train"` and `"adult_test"` datasets from `r mlr3fairness`, which contain a subset of the `Adult` data set [@uci].
+This is a binary classification task to predict if an individual earns more than $50,000 per year and is useful for demonstrating biases in data.
 
-With bias in the context of fairness, we usually refer to disparities in how a model treats individuals or groups.
-In order to understand this better, we will first discuss, which disparities we might want to consider in this context.
-Then we can discuss how to detect and quantify those disparities in machine learning models, and finally how they can be translated to so-called *fairness metrics*.
+```{r special-051}
+library(mlr3fairness)
+train_task = tsk("adult_train")
+train_task
+```
 
-#### Notions of fairness
+## Bias and Fairness
 
-In this chapter, we will concentrate on a subset of bias definitions, so-called *group fairness*.
-As a scenario, we might for example imagine that we develop a system that makes decisions about whether a patient should be considered for some new treatment.
-Our goal might now be, that those decisions are *fair* across groups defined by a *sensitive attribute*, which could e.g., be gender, race or age.
-We will now present two different perspectives on fairness presented in [@fairmlbook;@wachter20].
+In the context of fairness, `r index('bias', aside = TRUE)` refers to disparities in how a model treats individuals or groups.
+In this chapter, we will concentrate on a subset of bias definitions, those concerning `r index('group fairness', aside = TRUE)`.
+By example, in the adult dataset it can be clearly seen that adults in the group 'Male' are significantly more likely to earn a salary greater than $50K per year when compared to the group 'Female'.
 
-The first group of fairness notions, *bias preserving* fairness notions, also called **Separation**, requires that the prediction made by the model is independent of the sensitive attribute given the true label.
-In other words, the model should make roughly the same amount of errors (or correct predictions) in each group.
-Several metrics fall under this category, such as "Equalized Odds", which requires the same true positive and false positive rates across all groups.
+```{r}
+sex_salary = table(train_task$data(cols = c("sex", "target")))
+round(proportions(sex_salary), 2)
+chisq.test(sex_salary)
+```
 
-The second group, *bias transforming* fairness notions, also called **Independence**, only requires that the prediction made by the model is independent of the sensitive attribute.
-This group includes the concept of "Demographic Parity", which requires that the proportion of positive predictions is equal across all groups.
+In this example we would refer to the 'sex' variable as a `r index('sensitive attribute', aside = TRUE)`.
+The goal of group fairness is then to ascertain if decisions are fair across groups defined by a sensitive attribute.
+The sensitive attribute in a task is set with the `"pta"` (**p**ro**t**ected **a**ttribute) column role (@sec-row-col-roles).
 
-Which fairness notion should be chosen now depends on the decision our model should make and it's societal context.
-It is important to note that these metrics condense a large variety of societal issues into a single number, and they are therefore limited in their ability to identify biases that may exist in the data. Similarly, those metrics do not easily translate to legal principles. For example, if societal biases lead to disparities in an observed quantity (such as SAT scores) for individuals with the same underlying ability, these metrics may not identify existing biases.
-These metrics often naturally extend to more complex scenarios, such as multi-class classification, regression, or survival analysis.
+```{r special-049, eval = FALSE}
+train_task$set_col_roles("sex", add_to = "pta")
+```
 
-Additional fairness notions beyond statistical group fairness include individual fairness, which assesses fairness at an individual level based on the principle of treating similar cases similarly and different cases differently, and causal fairness notions which incorporate causal relationships in the data and propose metrics based on a directed acyclic graph [@fairmlbook;@mitchell21].
+If more than one sensitive attribute is specified, then fairness will be based on observations at the intersections of the specified groups.
+In this chapter we will only focus on group fairness, however one could also consider auditing individual fairness\index{fairness!individual}, which assesses fairness at an individual level, and causal fairness\index{fairness!causal}, which incorporate causal relationships in the data and propose metrics based on a directed acyclic graph [@fairmlbook;@mitchell21].
+Whilst we will only focus on metrics for binary classification here, most metrics discussed naturally extend to more complex scenarios, such as multi-class classification, regression, or survival analysis [@Mehrabi2021; @Sonabend2022a].
 
-#### Choosing fairness notions
+## Group Fairness Notions
 
-Selecting a fairness notion requires careful consideration of the contexts in which the model will be used.
-Bias preserving metrics, such as equalized odds and equality of opportunity, require that errors made by a model are equal across groups, but might not account for  bias in the labels.
-Bias transforming methods on the other hand do not depend on labels and can help detect biases arising from different base rates across populations, but enforcing them might induce a shift in the data distribution, possibly leading to feedback loops.
+When considering group fairness, it is necessary to decide which notion of group fairness we are concerned with before choosing an appropriate fairness metric to measure algorithmic bias.
 
-The exact metric now depends on the decision that our model should make: Depending on whether the decision is, e.g., punitive instead of assistive, we might want to focus on false positive or false discovery rates instead of true positives. In addition, we need to consider the legal and moral principles we aim to encode with the selected fairness metric.
+Model predictions are said to be `r index('bias transforming', aside = TRUE)`, or to satisfy independence\index{independence|see{bias transforming}}, if the predictions made by the model are independent of the sensitive attribute.
+This group includes the concept of "`r index('Demographic Parity')`", which tests if the the proportion of positive predictions (`r index('PPV')`) is equal across all groups.
+Bias transforming methods (i.e., those that test for independence) do not depend on labels and can help detect biases arising from different base rates across populations.
 
+A model is said to be `r index('bias preserving', aside = TRUE)`, or to satisfy separation\index{separation|see{bias preserving}}, if the predictions made by the model are independent of the sensitive attribute *given the true label*.
+In other words, the model should make roughly the same amount of right/wrong predictions in each group.
+Several metrics fall under this category, such as "`r index('equalized odds')`", which tests if the `r index('TPR')` and `r index('FPR')` is equal across groups.
+Bias preserving metrics (which test for separation) test if errors made by a model are equal across groups but might not account for bias in the labels (e.g., if outcomes in the real-world may be biased such as different rates of arrest for people from different ethnic groups).
 
-#### Translating notions of fairness into code.
+Choosing a fairness notion will depend on the model purpose and its societal context.
+For example, if a model is being used to predict if a person is guilty of something then we might want to focus on false positive or false discovery rates instead of true positives.
+In addition, in some cases you may need to consider the legal and moral principles we aim to encode with the selected fairness metric.
+Whichever metric is chosen, we are essentially condensing systemic biases and prejudices into a few numbers, and all metrics are limited with none being able to identify all biases that may exist in the data.
+For example, if societal biases lead to disparities in an observed quantity (such as school exam scores) for individuals with the same underlying ability, these metrics may not identify existing biases.
 
-In order to translate the independence requirements stated above into a fairness metric, we investigate differences between groups. In the following, we will denote the sensitive group with *A* and for simplicity assume it is binary and can only take two values, 0 and 1.
-As an example, for a metric $M$, e.g., the true positive rate (TPR), we calculate the difference in the metric across the two groups:
+To see these notions in practice, let $A$ be a binary sensitive group taking values 0 and 1 and let $M$ be a fairness metric.
+Then to measure independence we would simply calculate the difference between these values and test if the result is less than some threshold, $\epsilon$.
 
 $$
-\Delta_{M} = M_{A=0} - M_{A=1}.
+|\Delta_{M}| = |M_{A=0} - M_{A=1}| < \epsilon
 $$
 
-To provide an example, denoting ${P}\left(\hat{Y} = 1 \mid A = \star, Y = 1\right)$ with $TPR_{A=\star}$, we calculate the difference in TPR between the two groups:
-$$
-\Delta_{TPR} = TPR_{A=0} - TPR_{A=1}.
-$$
-When $\Delta_{TPR}$ now significantly deviates from $0$, the prediction $\hat{Y}$ violates the requirement for *equality of opportunity* formulated above.
+If we used TPR as our metric $M$ then if $|\Delta_{M}| > \epsilon$ (e.g., $\epsilon = 0.05$) then we would conclude predictions from our model violate the equality of opportunity metric and do not satisfy separation.
+If we chose accuracy or PPV for $M$ then we would have concluded that the model predictions do not satisfy independence.
 
-It is important to note that in practice, we might not be able to perfectly satisfy a given metric, e.g., due to stochasticity in data and labels.
-Instead, to provide a binary conclusion regarding fairness, a model could be considered fair if $|\Delta_{TPR}| < \epsilon$ for a given threshold $\epsilon > 0$, e.g., $\epsilon = 0.05$.
-This allows for small deviations from perfect fairness due to variance in the estimation of $TPR_{A=\star}$ or additional sources of bias.
-
-This approach allows us to construct a fairness `r ref("Measure")` from arbitrary metrics, by supplying a `base_measure`:
+In `r mlr3fairness` we can construct a fairness metric from any `Measure` by constructing `msr("fairness")` and passing our metric of choice to `base_measure` as well as the possible range the metric can take (i.e., the range in differences possible based on the base measure):
 
 ```{r special-0491}
-library("mlr3fairness")
-msr("fairness",
+fair_tpr = msr("fairness",
   base_measure = msr("classif.tpr"),
   range = c(0, 1)
 )
+fair_tpr
 ```
 
-For convenience, we have implemented a variety of `r ref("Measure")`s that is made available when the  `r mlr3fairness` package is loaded.
-Fairness measures can then be constructed via `msr()` like any other measure in `r mlr3`.
+We have implemented several `Measure`s in `r mlr3fairness` that simplify this step for you, these are named as `fairness.<base_measure>`, for example for TPR: `msr("fairness.tpr")` would run the same code as above.
 
-:::{.callout-tip}
-Implemented fairness metrics can be constructed using the prefix `"fairness."` and the name of base measure, e.g. `"tpr"`. Simply calling `msr()` without any arguments will return a list of all available measures including fairness metrics.
-:::
+## Auditing a Model For Bias
 
-#### Example: The adult dataset
-
-In the following chunk, we retrieve the binary classification task with id `"adult_train"` from the package.
-It contains a part of the `Adult` data set [@uci].
-
-The task is to predict whether an individual earns more than $50.000 per year.
-The column `"sex"` is already set as a binary sensitive attribute with levels `"Female"` and `"Male"`.
-
-```{r special-051}
-library("mlr3fairness")
-task = tsk("adult_train")
-print(task)
-```
-
-#### Setting a sensitive attribute
-
-For a given task, we can select one or multiple sensitive attributes.
-In `r mlr3`, the sensitive attribute is identified via the column role `pta` (short for protected attribute) and can be set as follows:
-
-```{r special-049, eval = FALSE}
-task$set_col_roles("sex", add_to = "pta")
-```
-
-This example sets the `"sex"` column of our task as a sensitive attribute.
-This information is then automatically passed on when the task is used, e.g., when computing fairness metrics.
-If more than one sensitive attribute is specified, metrics will be computed based on intersecting groups formed by the columns.
-
-#### Auditing a model for bias
-
-We can now fit any `r ref("Learner")` on this task and score the resulting `r ref("Prediction")`.
+With our sensitive attribute set and the fairness metric selected, we can now train a `r ref("Learner")` and test for bias, below we use a random forest and the absolute difference in true positive rates across groups 'Male' and 'Female':
 
 ```{r special-052}
-learner = lrn("classif.rpart", predict_type = "prob")
-idx = partition(task)
-learner$train(task, idx$train)
-prediction = learner$predict(task, idx$test)
+test_task = tsk("adult_test")
+lrn_rpart = lrn("classif.rpart", predict_type = "prob")
+prediction = lrn_rpart$train(train_task)$predict(test_task)
+prediction$score(fair_tpr, test_task)
 ```
 
-We then employ a fairness measure, here the discrepancy in accuracy between groups:
+With an $\epsilon$ value of $0.05$ we would conclude that there is bias present in our model, however this value of $\epsilon$ is arbitrary and should be decided based on context.
+As well as using fairness metrics to evaluate a single model, they can also be used in larger benchmark experiments to compare bias across multiple models.
 
-```{r special-053}
-measure = msr("fairness.tpr")
-prediction$score(measure, task = task)
-```
-
-This now reports the difference in accuracy between the two groups identified by the `pta` column role in the task.
-To determine whether the result is fair, we need to consider the decision's context, e.g. what real-world quantities this disparity encodes.
-On a technical level, we can similarly use the metric to score a `ResamplingResult` or `BenchmarkResult` for the comparison of multiple algorithms. 
-
-#### Visualizing differences
-
-Visualizations can help better understand discrepancies between groups or differences between models.
-For an in-depth dive into visualizations, please consider the [Visualization vignette](https://mlr3fairness.mlr-org.com/articles/visualization-vignette.html).
-
-To showcase available visualizations, we will again use the `adult` dataset [@uci] and train a random forest on it.
-
-```{r special-057}
-task = tsk("adult_train")
-learner = lrn("classif.ranger", predict_type = "prob")
-learner$train(task)
-prd = learner$predict(tsk("adult_test"))
-```
+As well as utilizing fairness metrics, visualizations can also help better understand discrepancies between groups or differences between models.
+`r ref("fairness_prediction_density()")` plots the sub-group densities across group levels and `r ref("compare_metrics()")` scores predictions across multiple metrics:
 
 ```{r special-058, message=FALSE, warning=FALSE}
-#| fig-cap: Fairness prediction density plot (left) showing the density of predictions for the positive class splitted into "Male" and "Female" individuals. The metrics comparison plot (right) depicts the model's scores across the specified metrics using bars.
-#| fig-alt: Two panel plot including two overlapping densities with a concentration on the right for the model's prediction of the positive class labeled "Male" and "Female". Both densities are relatively equal. The second panel shows three bar charts for the three metrics ("fairness.fpr", "fairness.tpr", "fairness.eod") with bars at roughly 0.035, 0.002, 0.018 for the three metrics respectively.
+#| fig-cap: Fairness prediction density plot (left) showing the density of predictions for the positive class split by "Male" and "Female" individuals. The metrics comparison barplot (right) displays the model's scores across the specified metrics.
+#| fig-alt: "Two panel plot. Left: Density plot showing that 'Female' observations are more likely to be predicted as having a salary less than $50K than 'Male' observations. Right: Three bar charts for the metrics 'fairness.fpr', 'fairness.tpr', 'fairness.eod' with bars at roughly 0.08, 0.06, and 0.07 respectively."
 #| label: fig-fairness
 library(patchwork)
-p1 = fairness_prediction_density(prediction, task = task)
-p2 = compare_metrics(prediction, 
+library(ggplot2)
+
+p1 = fairness_prediction_density(prediction, task = test_task)
+p2 = compare_metrics(prediction,
   msrs(c("fairness.fpr", "fairness.tpr", "fairness.eod")),
-  task = task
+  task = test_task
 )
 
-(p1 + xlab("") + p2) * 
-  theme_bw() *
+(p1 + p2) *
+  theme_minimal() *
   scale_fill_viridis_d(end = 0.8, alpha = 0.8) *
   theme(
     axis.text.x = element_text(angle = 15, hjust = .7),
@@ -189,104 +128,120 @@ p2 = compare_metrics(prediction,
   )
 ```
 
-In this example, we can for example see a difference in the prediction density between `Male` and `Female` individuals predicting the positive outcome. This might indicate the presence of a small bias.
-This can also be observed from the different metrics, where small discrepancies in the fairness metric (around 0.05) are observed.
+In this example, we can see the model is more likely to predict 'Female' observations as being more likely to have a lower salary.
+This could be due to systemic prejudices seen in the data, i.e., female adults are more likely to have lower salaries due to societal biases, or could be due to bias introduced by the algorithm.
+However, the right plot indicates that all fairness metrics exceed 0.05, thus supporting the argument that the algorithm may have introduced further bias (with same caveat about the 0.05 threshold).
 
-### Fair Machine Learning
+## Fair Machine Learning
 
-If we now detect that our model is unfair, a natural next step might be to try and mitigate such biases.
-The `r mlr3fairness` package comes with several options to adress biases in models, which broadly fall into three categories:
-Data pre-processing, employing fair models, or adapting model predictions. An overview is for example provided by @caton-arxiv20a.
-Those methods often slightly decrease predictive performance and we might therefore want to try out which of the existing approaches balances predictive performance and fairness.
+If we detect that our model is unfair, then a natural next step is to mitigate such biases.
+The `r mlr3fairness` package comes with several options to address biases in models, which broadly fall into three categories [@caton-arxiv20a]:
 
-Pre- and postprocessing schemes can be connected to learners with the help of `r mlr3pipelines`.
-If you are not familiar with pipelines, you can familiarize yourself with them in @sec-pipelines.
+1. `r index('Preprocessing')` data -- The underlying data is preprocessed (@sec-preprocessing) in some way to address bias in the data before it is passed to the `Learner`;
+2. Employing fair models -- Some algorithms can incorporate fairness considerations directly, for example generalized linear model with fairness constraints (`"classif.fairzlrm"`).
+3. Postprocessing model predictions -- Heuristics/algorithms are applied to the predictions to mitigate biases present in the predictions
+
+All methods often slightly decrease predictive performance and it can therefore be useful to try all approaches to empirically see which balance predictive performance and fairness.
+In general, all biases should be addressed at their root cause (or as close to it) as possible as any other intervention will be suboptimal.
+
+Pre- and postprocessing schemes can be integrated using `r mlr3pipelines` (@sec-pipelines).
 We provide two examples below, first preprocessing to balance observation weights with `po("reweighing_wts")` and second post-processing predictions using `po("EOd")`. The latter enforces the equalized odds fairness definition by stochastically flipping specific predictions.
 
-```{r special-054, eval = TRUE}
-library("mlr3pipelines")
-library("mlr3learners")
-l1 = po("reweighing_wts") %>>% lrn("classif.rpart")
-l2 = po("learner_cv", lrn("classif.rpart")) %>>%
-  po("EOd")
+```{r special-054, warning=FALSE, message=FALSE}
+# load learners
+lrn_rpart = lrn("classif.rpart", predict_type = "prob")
+lrn_rpart$id = "rpart"
+l1 = as_learner(po("reweighing_wts") %>>% lrn("classif.rpart"))
+l1$id = "reweight"
+
+l2 = as_learner(po("learner_cv", lrn("classif.rpart")) %>>%
+  po("EOd"))
+l2$id = "EOd"
+
+# preprocess by collapsing factors
+l3 = as_learner(po("collapsefactors") %>>% lrn("classif.fairzlrm"))
+l3$id = "fairzlrm"
+
+# load task and subset by rows and columns
+task = tsk("adult_train")
+task$set_col_roles("sex", "pta")$
+  filter(sample(task$nrow, 500))$
+  select(setdiff(task$feature_names, "education_num"))
+
+# run experiment
+lrns = list(lrn_rpart, l1, l2, l3)
+bmr = benchmark(benchmark_grid(task, lrns, rsmp("cv", folds = 5)))
+meas = msrs(c("classif.acc", "fairness.eod", "fairness.tpr"))
+bmr$aggregate(meas)[,
+  .(learner_id, classif.acc, fairness.equalized_odds, fairness.tpr)]
 ```
 
-Similarly, `r mlr3fairness` also comes with learners that incorporate fairness considerations directly, e.g. a generalized linear model with fairness constraints is available as `"classif.fairzlrm"`.
+We can now study the result using built-in plot functions, below we use `r ref("fairness_accuracy_tradeoff()")` which plots measures across cross-validation results and aggregated over all folds, we use this to compare classification accuracy (default accuracy measure for the function) and equalized odds (`msr("fairness.eod")`).
 
-:::{.callout-note}
-Algorithmic interventions can often enforce fairness in suboptimal ways.
-It is therefore important to try and address biases at their root cause instead of relying solely on algorithmic interventions.
-:::
-
-We are now ready to compare the two pipelines constructed above using the `benchmark()`function.
-
-```{r special-0541, eval = TRUE}
-lrns = list(lrn("classif.rpart"), l1, l2)
-grd = benchmark_grid(task, lrns, rsmp("cv", folds = 2L))
-bmr = benchmark(grd)
-bmr$aggregate(msrs(c("classif.acc", "fairness.eod")))
+```{r special-0542}
+#| fig-cap: Comparison of learners with respect to classification accuracy (x-axis) and equalized odds (y-axis) across (dots) and aggregated over (crosses) folds.
+#| fig-alt: "Scatterplot with dots and crosses. x-axis is 'classif.acc' between 0.75 and 0.89, y-axis is 'fairness.equalized_odds' between 0 and 0.4. Plot results described in below text."
+#| label: fig-fairness-tradeoff
+fairness_accuracy_tradeoff(bmr, fairness_measure = msr("fairness.eod"),
+  accuracy_measure = msr("classif.ce")) +
+  ggplot2::scale_color_viridis_d("Learner") +
+  ggplot2::theme_minimal()
 ```
 
-We can now study the result using built-in plot functions, e.g. the `fairness_accuracy_tradeoff` function.
+In this small experiment, the reweighting method has the worst equalized odds and all others perform the same with respect to this metric.
+The 'fair' algorithm has the worst classification accuracy, then the `EOd` post-processing strategy and then the decision tree -- so in this case we could not improve the algorithmic fairness.
+<!-- FIXME: WOULD BE NICE (but not essential) IF WE COULD CHANGE EXAMPLE SO WE CAN IMPROVE IT -->
 
-```{r special-0542, eval = TRUE}
-fairness_accuracy_tradeoff(bmr, msr("fairness.eod")) +
-scale_color_viridis_d("Learner") +
-theme_minimal()
-```
+As well as manually computing and analyzing fairness metrics, one could also make use of `r mlr3tuning` (@sec-optimization) to automate the process with respect to one or more metrics (@sec-multi-metrics-tuning).
 
-This depicts the results of the cross-validation folds along with their aggregate.
-Employing the `EOd` post-processing strategy improves the model for the  (equalized odds difference) metric at the cost of some accuracy. Employing the reweighing strategy however seems to have a negligible effet.
+## Conclusion
 
-Combining `r mlr3fairness` with `r mlr3pipelines` and `r mlr3tuning` allows for tuning over complex pipelines and e.g. simultaneously optimizing for performance and fairness. We describe this in more detail in the `r mlr3fairness` paper [@mlr3fairness].
-
-### Documentation
-
-Because fairness aspects can not always be investigated based on fairness metrics, it is important to document data collection and the resulting data as well as models resulting from this data.
-Informing auditors about those aspects of a deployed model can lead to better assessment of a model's fairness.
-Questionnaires for ML models and data sets have been previously proposed in literature and are easily availble from `r mlr3fairness`.
-They can be obtained from  automated report templates using R markdown for data sets and ML models.
-In addition, we provide a template for a *fairness report* which includes many fairness metrics and visualizations to provide a good starting point for generating a fairness report inspired by the [Aequitas Toolkit](https://dssg.github.io/aequitas/).
-A preview for the different reports can be obtained from the [Reports vignette](https://mlr3fairness.mlr-org.com/articles/reports-vignette.html).
-
-The functions below create a template for creating a data sheet or a model card that can help with documenting machine learning. Running the function creates the markdown templates in a specified folder, here the `"docs"` folder.
-The user can then further customize the reports by answering included questions or adding visualizations and other information.
-
-```{r special-056, eval = FALSE}
-report_datasheet("docs/sheet")
-report_modelcard("docs/card")
-```
-
-### Fairness: Concluding remarks
-
-The functionality introduced above has the goal to help users investigating their models for potential biases and to potentially mitigate them. Deciding whether a model is fair however requires additional investigation, such as deciding what the measured quantities actually mean for an individual in the real world and what other biases might exist in the data that might lead to discrepancies in how e.g. covariates or the label are measured.
-
-:::{.callout-note}
+The functionality introduced above is intended to help users investigate their models for biases and to potentially mitigate them.
 Fairness metrics can not be used to prove or guarantee fairness.
-They serve as a diagnostic tool to detect disparities and as a basis for model selection and making fair decisions in practice. However, fairness metrics are reduction of complex societal processes into mathematical objectives and require abstraction steps, which can invalidate the metric. Additionally, practitioners should look beyond the model and consider the data used for training and the process of data and label acquisition.
-Fairness metrics should therefore be used for exploratory purposes only, and practitioners should not solely rely on them to make decisions about employing an ML model or assessing whether a system is fair.
-:::
+Deciding whether a model is fair requires additional investigation, such as deciding what the measured quantities actually represent for an individual in the real world and what other biases might exist in the data that could lead to discrepancies in how e.g. covariates or the label are measured.
 
-We hope, that pairing the functionality available in `r mlr3fairness` with additional exploratory data analysis, a solid understanding of the societal context in which the decision is made and integrating additional tools, e.g. from interpretability might help to mitigate or diminish unfairness in systems deployed in the future.
+The simplicity of fairness metrics mean they should only be used for exploratory purposes only, and practitioners should not solely rely on them to make decisions about employing an machine learning model or assessing whether a system is fair.
+Instead, practitioners should look beyond the model and consider the data used for training and the process of data and label acquisition.
+To help in this process, it is important to provide robust documentation for data collection methods, the resulting data, and the models resulting from this data.
+Informing auditors about those aspects of a deployed model can lead to better assessment of a model's fairness.
+Questionnaires for machine learning models and data sets have been previously proposed in literature and are available in `r mlr3fairness` from automated report templates (`r ref("report_modelcard()")` and `r ref("report_datasheet()")`) using R markdown for data sets and machine learning models.
+In addition, we provide a template for a `r index('fairness report', aside = TRUE)`, `r ref("report_fairness()", aside = TRUE)` which includes many fairness metrics and visualizations to provide a good starting point for generating a fairness report inspired by the Aequitas Toolkit [@2018aequitas].
 
+We hope that pairing the functionality available in `r mlr3fairness` with additional exploratory data analysis, a solid understanding of the societal context in which the decision is made and integrating additional tools (e.g. interpretability methods seen in @sec-interpretation) might help to mitigate or diminish unfairness in systems deployed in the future.
+@tbl-api-fair provides an overview of the most important methods and classes discussed in this chapter.
+
+| Underlying R6 Class | Constructor (if applicable) | Important methods |
+| --------------------------- | --------------------- | -------------------------------------------- |
+| `r ref("MeasureFairness")` | `msr("fairness", ...)` | |
+|  | `r ref("fairness_prediction_density()")` | |
+|  | `r ref("compare_metrics()")` | |
+| `r ref("PipeOpReweighingWeights")` | `po("reweighing_wts")` | |
+| `r ref("PipeOpEOd")` | `po("EOd")` | |
+|  | `r ref("fairness_accuracy_tradeoff()")` | |
+|  | `r ref("report_fairness()")` | |
+
+: Important classes and functions covered in this chapter with underlying `R6` class (if applicable), constructor to create an object of the class, and important class methods. {#tbl-basics-fair}
 
 ## Exercises
 
 Trying to achieve fairness is often tricky, especially in the context of complex fairness metrics or when multiple protected attributes exist.
 In the following task, we try to re-use the `"adult_train"` data from above but optimize for different fairness metrics.
 
-1. Load the `"adult_train"` task and try to build a first model. 
+1. Load the `"adult_train"` task and try to build a first model.
   Train a simple model and evaluate it on the `"adult_test"` task that is also available with `mlr3fairness`.
 
-2. Assume our goal is to achieve parity in *false omission rates*. 
-  Construct a fairness metric that encodes this and againg evaluate your model.
+2. Assume our goal is to achieve parity in *false omission rates*.
+  Construct a fairness metric that encodes this and evaluate your model.
   In order to get a deeper understanding, look at the `groupwise_metrics` function to obtain performance in each group.
 
-3. Now try to improve your model, e.g. by employing pipelines that use pre- or post-processing methods for fairness. 
+1. Improve your model by employing pipelines that use pre- or post-processing methods for fairness.
   Evaluate your model along the two metrics and visualize the resulting metrics.
   Compare the different models using an appropriate visualization.
 
-4. Now we want to add a second sensitive attribute to your dataset, in this case `"race"`. 
-  Add the information to your task and evaluate for the initial model again. What changes? 
+1. Add `"race"` as a second sensitive attribute to your dataset.
+  Add the information to your task and evaluate the initial model again. What changes?
   Again study the `groupwise_metrics`.
-  
+
+::: {.content-visible when-format="html"}
+`r citeas(chapter)`
+:::
