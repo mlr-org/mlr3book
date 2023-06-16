@@ -4,14 +4,12 @@
 \alias{ref}
 \title{Hyperlink to Function Reference}
 \usage{
-ref(topic, text = NULL, format = "markdown", index = FALSE, aside = FALSE)
+ref(topic, text = NULL, index = FALSE, aside = FALSE)
 }
 \arguments{
 \item{topic}{Name of the topic to link against.}
 
 \item{text}{Text to use for the link. Defaults to the topic name.}
-
-\item{format}{Either markdown or HTML.}
 
 \item{index}{If \code{TRUE} calls \code{index}}
 
