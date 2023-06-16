@@ -10,7 +10,7 @@ Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](ht
 
 - [HTML](https://mlr3book.mlr-org.com)
 
-- [PDF](https://mlr3book.mlr-org.com/Flexible-and-Robust-Machine-Learning-Using-mlr3-in-R.pdf)
+- [PDF](https://mlr3book.mlr-org.com/Applied-Machine-Learning-Using-mlr3-in-R.pdf)
 
 ## Working on the book
 
