@@ -13,18 +13,16 @@ update_db = function() {
 #'
 #' @param topic Name of the topic to link against.
 #' @param text Text to use for the link. Defaults to the topic name.
-#' @param format Either markdown or HTML.
 #' @param index If `TRUE` calls `index`
 #' @param aside Passed to `index`
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = NULL, format = "markdown", index = FALSE, aside = FALSE) {
+ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
   checkmate::assert_string(text, min.chars = 1L, null.ok = TRUE)
-  checkmate::assert_choice(format, c("markdown", "html"))
 
   topic = trimws(topic)
   text = if (is.null(text)) {
@@ -81,81 +79,76 @@ ref = function(topic, text = NULL, format = "markdown", index = FALSE, aside = F
 #'
 #' @param pkg Name of the package.
 #' @param runiverse If `TRUE` (default) then creates R-universe link instead of GH
-#' @inheritParams ref
+#' @param index If `TRUE` calls `index`
+#' @param aside Passed to `index`
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref_pkg = function(pkg, runiverse = TRUE, format = "markdown") {
+ref_pkg = function(pkg, runiverse = TRUE, index = FALSE, aside = FALSE) {
   checkmate::assert_string(pkg, pattern = "(^[[:alnum:]._-]+$)|(^[[:alnum:]_-]+/[[:alnum:]._-]+$)")
-  checkmate::assert_choice(format, c("markdown", "html"))
+
   pkg = trimws(pkg)
 
   if (grepl("/", pkg, fixed = TRUE)) {
     if (runiverse) {
-      out = ru_pkg(pkg, format = format)
+      out = ru_pkg(pkg)
     } else {
-      out = gh_pkg(pkg, format = format)
+      out = gh_pkg(pkg)
     }
   } else if (pkg %in% db$hosted) {
-    out = mlr_pkg(pkg, format = format)
+    out = mlr_pkg(pkg)
   } else {
-    out = cran_pkg(pkg, format = format)
+    out = cran_pkg(pkg)
   }
 
-  sprintf("[%s]{.refpkg}", out)
+  if (index || aside) {
+    out = paste0(out, index(main = NULL, index = pkg, aside = aside))
+  }
+
+  out
 }
 
-cran_pkg = function(pkg, format = "markdown") {
+cran_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
   pkg = trimws(pkg)
 
   if (pkg %in% c("stats", "graphics", "datasets")) {
     sprintf("`%s`", pkg)
   } else {
     url = sprintf("https://cran.r-project.org/package=%s", pkg)
-    switch(format,
-      "markdown" = sprintf("[`%s`](%s)", pkg, url),
-      "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
-    )
+    sprintf("[`%s`](%s)", pkg, url)
   }
 }
 
-mlr_pkg = function(pkg, format = "markdown") {
+mlr_pkg = function(pkg, index = FALSE, aside = FALSE) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
   pkg = trimws(pkg)
 
   url = sprintf("https://%1$s.mlr-org.com", pkg)
-  switch(format,
-    "markdown" = sprintf("[`%s`](%s)", pkg, url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, pkg)
-  )
+  out = sprintf("[`%s`](%s)", pkg, url)
+
+  if (index || aside) {
+    out = paste0(out, index(main = NULL, index = pkg, aside = aside))
+  }
+
+  out
 }
 
-gh_pkg = function(pkg, format = "markdown") {
+gh_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
   pkg = trimws(pkg)
 
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://github.com/%s", pkg)
-  switch(format,
-    "markdown" = sprintf("[`%s`](%s)", parts[2L], url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
-  )
+  sprintf("[`%s`](%s)", parts[2L], url)
 }
 
-ru_pkg = function(pkg, format = "markdown") {
+ru_pkg = function(pkg) {
   checkmate::assert_string(pkg, pattern = "^[[:alnum:]_-]+/[[:alnum:]._-]+$")
-  checkmate::assert_choice(format, c("markdown", "html"))
 
   parts = strsplit(pkg, "/", fixed = TRUE)[[1L]]
   url = sprintf("https://%s.r-universe.dev/ui#package:%s", parts[1L], parts[2L])
-  switch(format,
-    "markdown" = sprintf("[`%s`](%s)", parts[2L], url),
-    "html" = sprintf("<a href = \"%s\">%s</a>", url, parts[2L])
-  )
+  sprintf("[`%s`](%s)", parts[2L], url)
 }
 
 toproper = function(str) {
@@ -184,16 +177,16 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE) {
     index = if (code) main else toproper(main)
   }
 
-  asidetxt = index
-
   if (code) {
     index = gsub("([\\$\\_])", "\\\\\\1", index)
   }
 
   out = sprintf("%s\\index{%s}", out, index)
 
-  if (aside)
+  if (aside) {
+    asidetxt = if (code) main else toproper(main)
     out = sprintf("%s[%s]{.aside}", out, asidetxt)
+  }
 
   out
 }
