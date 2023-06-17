@@ -170,7 +170,7 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   parent = NULL) {
 
   stopifnot(!(is.null(main) && is.null(index)))
-  asidetext = ""
+  asidetext = NULL
   if (is.null(main)) {
     out = ""
     if (aside) {
@@ -217,7 +217,7 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   out = sprintf("%s\\index{%s}", out, index)
 
   if (aside) {
-    if (length(asidetext) == 0)  asidetext = if (code) main else toproper(main)
+    if (is.null(asidetext))  asidetext = if (code) main else toproper(main)
     out = sprintf("%s[%s]{.aside}", out, asidetext)
   }
 
