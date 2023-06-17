@@ -19,7 +19,7 @@ update_db = function() {
 #' @return (`character(1)`) markdown link.
 #' @export
 ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
-  browser()
+
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
@@ -168,7 +168,7 @@ toproper = function(str) {
 #' @export
 index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE, see = NULL,
   parent = NULL) {
-browser()
+
   stopifnot(!(is.null(main) && is.null(index)))
 
   if (is.null(main)) {
