@@ -64,7 +64,7 @@ ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  out = sprintf("[`%s`](%s){.refcode}", text, url)
+  out = sprintf("[`%s`](%s)", text, url)
 
   if (index || aside) {
     out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
@@ -170,7 +170,7 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   parent = NULL) {
 
   stopifnot(!(is.null(main) && is.null(index)))
-
+  asidetext = ""
   if (is.null(main)) {
     out = ""
     if (aside) {
@@ -217,8 +217,8 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   out = sprintf("%s\\index{%s}", out, index)
 
   if (aside) {
-    asidetxt = if (code) main else toproper(main)
-    out = sprintf("%s[%s]{.aside}", out, asidetxt)
+    if (length(asidetext) == 0)  asidetext = if (code) main else toproper(main)
+    out = sprintf("%s[%s]{.aside}", out, asidetext)
   }
 
   out
