@@ -162,8 +162,11 @@ toproper = function(str) {
 #' @param aside If TRUE prints in margin
 #' @param code If TRUE tells function to wrap in ``
 #' @param lower If TRUE makes non-code index entry lower case (required by publisher)
+#' @param see If non-NULL index entry to 'see'
+#' @param parent If non-NULL index parent entry
 #' @export
-index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE) {
+index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE, see = NULL,
+  parent = NULL) {
 
   stopifnot(!(is.null(main) && is.null(index)))
 
@@ -175,16 +178,32 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
     out = main
   }
 
-  if (is.null(index)) {
-    if (lower && !code) {
-      index = tolower(main)
-    } else {
-      index = main
+  if (code) lower = FALSE
+
+  if (is.null(index)) index = ifelse(lower, tolower(main), main)
+
+  index = gsub("([\\$\\_])", "\\\\\\1", index)
+
+  if (code) index = sprintf("\\texttt{%s}", index)
+
+  if (!is.null(parent) && !is.null(see)) stop("not worth the effort, do it manually")
+
+  if (!is.null(parent)) {
+    if (code) {
+      parent = sprintf("\\texttt{%s}", parent)
+    } else if (lower) {
+      parent = tolower(parent)
     }
+    index = sprintf("%s!%s", parent, index)
   }
 
-  if (code) {
-    index = gsub("([\\$\\_])", "\\\\\\1", index)
+  if (!is.null(see)) {
+    if (code) {
+      see = sprintf("\\texttt{%s}", see)
+    } else if (lower) {
+      see = tolower(see)
+    }
+    index = sprintf("%s|see{%s}", index, see)
   }
 
   out = sprintf("%s\\index{%s}", out, index)

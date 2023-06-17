@@ -4,16 +4,30 @@
 \alias{index}
 \title{Add term to index if non-NULL}
 \usage{
-index(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower = TRUE)
+index(
+  main = NULL,
+  index = NULL,
+  aside = FALSE,
+  code = FALSE,
+  lower = TRUE,
+  see = NULL,
+  parent = NULL
+)
 }
 \arguments{
 \item{main}{Text to show in book}
 
 \item{index}{Index entry if different from `main}
 
+\item{aside}{If TRUE prints in margin}
+
 \item{code}{If TRUE tells function to wrap in ``}
 
 \item{lower}{If TRUE makes non-code index entry lower case (required by publisher)}
+
+\item{see}{If non-NULL index entry to 'see'}
+
+\item{parent}{If non-NULL index parent entry}
 }
 \description{
 Add term to index if non-NULL
