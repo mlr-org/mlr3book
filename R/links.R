@@ -129,7 +129,8 @@ mlr_pkg = function(pkg, index = FALSE, aside = FALSE) {
   out = sprintf("[`%s`](%s)", pkg, url)
 
   if (index || aside) {
-    out = paste0(out, index(main = NULL, index = pkg, aside = aside))
+    out = paste0(out, index(main = NULL, index = pkg, aside = aside,
+      code = TRUE, lower = FALSE))
   }
 
   out
