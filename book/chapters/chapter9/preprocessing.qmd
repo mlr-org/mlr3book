@@ -70,22 +70,22 @@ Before we continue with feature engineering we will create a task, measure, and 
 ```{r preprocessing-007, message=FALSE}
 library(mlr3verse)
 
-ames_task = as_task_regr(ames, target = "Sale_Price", id = "ames")
+tsk_ames = as_task_regr(ames, target = "Sale_Price", id = "ames")
 # remove problematic features
-ames_task$select(setdiff(ames_task$feature_names, to_remove))
+tsk_ames$select(setdiff(tsk_ames$feature_names, to_remove))
 
 measure = msr("regr.mae")
-cv3 = rsmp("cv", folds = 3)
-cv3$instantiate(ames_task)
+rsmp_cv3 = rsmp("cv", folds = 3)
+rsmp_cv3$instantiate(tsk_ames)
 ```
 
 Lastly we run a very simple experiment to verify our setup works as expected with a simple featureless baseline, note below we set `robust = TRUE` to always predict the *median* sale price as opposed to the *mean*.
 
 ```{r preprocessing-008, echo = TRUE, eval = TRUE, message=FALSE}
-baseline_lrn = lrn("regr.featureless", robust = TRUE)
-baseline_lrn$id = "Baseline"
-baseline_res = resample(ames_task, baseline_lrn, cv3)
-baseline_res$aggregate(measure)
+lrn_baseline = lrn("regr.featureless", robust = TRUE)
+lrn_baseline$id = "Baseline"
+rr_baseline = resample(tsk_ames, lrn_baseline, rsmp_cv3)
+rr_baseline$aggregate(measure)
 ```
 
 ## Factor Encoding
@@ -95,8 +95,8 @@ We refer to variables as categorical features if they can only take a limited se
 Many machine learning algorithms implementations, such as XGBoost [@chen2016xgboost], cannot handle categorical data and so categorical features must be encoded into numerical variables.
 
 ```{r preprocessing-010, echo = TRUE, eval = TRUE, message=FALSE, error=TRUE}
-xgboost = lrn("regr.xgboost", nrounds = 100)
-xgboost$train(ames_task)
+lrn_xgb = lrn("regr.xgboost", nrounds = 100)
+lrn_xgb$train(tsk_ames)
 ```
 
 Categorical features can be distinguished from one another by their cardinality, which refers to the number of levels they contain.
@@ -104,13 +104,13 @@ There are three types of categorical features: binary (two levels), low-cardinal
 For now we will consider high-cardinality to be features with more than 10 levels:
 
 ```{r}
-names(which(lengths(ames_task$levels()) > 10))
+names(which(lengths(tsk_ames$levels()) > 10))
 ```
 
 Binary features can be trivially encoded by setting one of the feature levels to `1` and the other to `0`.
 
 ```{r}
-names(which(lengths(ames_task$levels()) == 2))
+names(which(lengths(tsk_ames$levels()) == 2))
 ```
 
 Low-cardinality features can be handled by `r index('one-hot encoding', aside = TRUE)`.
@@ -154,20 +154,20 @@ factor_pipeline =
 Now we can apply this pipeline to our xgboost model to use it in a benchmark experiment; we also compare a simpler pipeline that only uses one-hot encoding to demonstrate performance difference resulting from different strategies.
 
 ```{r preprocessing-013, message=FALSE}
-xgboost_impact = as_learner(factor_pipeline %>>% xgboost)
-xgboost_impact$id = "XGB_enc_impact"
+glrn_xgb_impact = as_learner(factor_pipeline %>>% xgboost)
+glrn_xgb_impact$id = "XGB_enc_impact"
 
-xgboost_one_hot = as_learner(po("encode") %>>% xgboost)
-xgboost_one_hot$id = "XGB_enc_onehot"
+glrn_xgb_one_hot = as_learner(po("encode") %>>% xgboost)
+glrn_xgb_one_hot$id = "XGB_enc_onehot"
 
 
 learners = list(
-    baseline = baseline_lrn,
-    xgboost_impact = xgboost_impact,
-    xgboost_one_hot = xgboost_one_hot
+    baseline = lrn_baseline,
+    xgb_impact = glrn_xgb_impact,
+    xgb_one_hot = glrn_xgb_one_hot
 )
 
-bmr = benchmark(benchmark_grid(ames_task, learners, cv3))
+bmr = benchmark(benchmark_grid(tsk_ames, learners, rsmp_cv3))
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
 
@@ -180,7 +180,7 @@ A common problem in real-world data is `r index('missing data')`.
 In the Ames dataset, several variables have at least one missing data point:
 
 ```{r}
-names(which(ames_task$missings() > 0)  )
+names(which(tsk_ames$missings() > 0)  )
 ```
 
 Many learners cannot handle missing values automatically (e.g., `lrn("regr.ranger")` and `lrn("regr.lm")`), other learners can handle missing values but may use simple methods that may not be ideal (e.g., just omitting rows with missing data).
@@ -228,13 +228,13 @@ impute_hist$plot(horizontal = TRUE)
 Using this pipeline we can now run experiments with `lrn("regr.ranger")`, which cannot handle missing data; we also compare a simpler pipeline that only uses OOR imputation to demonstrate performance difference resulting from different strategies.
 
 ```{r preprocessing-016}
-rf_impute_hist = as_learner(impute_hist %>>% lrn("regr.ranger"))
-rf_impute_hist$id = "RF_imp_Hist"
+glrn_rf_impute_hist = as_learner(impute_hist %>>% lrn("regr.ranger"))
+glrn_rf_impute_hist$id = "RF_imp_Hist"
 
-rf_impute_oor = as_learner(po("imputeoor") %>>% lrn("regr.ranger"))
-rf_impute_oor$id = "RF_imp_OOR"
+glrn_rf_impute_oor = as_learner(po("imputeoor") %>>% lrn("regr.ranger"))
+glrn_rf_impute_oor$id = "RF_imp_OOR"
 
-design = benchmark_grid(ames_task, c(rf_impute_hist, rf_impute_oor), cv3)
+design = benchmark_grid(tsk_ames, c(glrn_rf_impute_hist, glrn_rf_impute_oor), rsmp_cv3)
 bmr_new = benchmark(design)
 bmr$combine(bmr_new)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
@@ -265,10 +265,10 @@ The pipeline includes the following `PipeOp`s:
 Linear regression is a simple model that cannot handle most problems that we may face when processing data, but with the `ppl("robustify")` pipeline we can now include it in our experiment:
 
 ```{r preprocessing-019, warning = FALSE}
-lm_robust = as_learner(ppl("robustify") %>>% lrn("regr.lm"))
-lm_robust$id = "lm_robust"
+glrn_lm_robust = as_learner(ppl("robustify") %>>% lrn("regr.lm"))
+glrn_lm_robust$id = "lm_robust"
 
-bmr_new = benchmark(benchmark_grid(ames_task, lm_robust,  cv3))
+bmr_new = benchmark(benchmark_grid(tsk_ames, glrn_lm_robust,  rsmp_cv3))
 bmr$combine(bmr_new)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
@@ -323,12 +323,12 @@ The pipeline includes a parameter `targetmutate.trafo` for the transformation to
 So now let us consider the log transformation by adding this pipeline to our robust linear regression model:
 
 ```{r preprocessing-020, warning=FALSE}
-log_lm_robust = as_learner(ppl("targettrafo", graph = lm_robust,
+glrn_log_lm_robust = as_learner(ppl("targettrafo", graph = lm_robust,
   targetmutate.trafo = function(x)log(x),
   targetmutate.inverter = function(x) list(response = exp(x$response))))
-log_lm_robust$id = "lm_robust_logtrafo"
+glrn_log_lm_robust$id = "lm_robust_logtrafo"
 
-bmr_new = benchmark(benchmark_grid(ames_task, log_lm_robust, cv3))
+bmr_new = benchmark(benchmark_grid(tsk_ames, glrn_log_lm_robust, rsmp_cv3))
 bmr$combine(bmr_new)
 bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
 ```
@@ -401,14 +401,14 @@ include_multi_graphics("Figures/mlr3book_figures-14.svg", "Figures/mlr3book_figu
 Before using this in an experiment we first test that the `PipeOp` works as expected.
 
 ```{r preprocessing-026}
-ames_task_ext = cbind(ames, energy_data)
-ames_task_ext = as_task_regr(ames_task_ext, "Sale_Price", "ames_ext")
+tsk_ames_ext = cbind(ames, energy_data)
+tsk_ames_ext = as_task_regr(tsk_ames_ext, "Sale_Price", "ames_ext")
 # remove the redundant variables identified at the start of this chapter
-ames_task_ext$select(setdiff(ames_task_ext$feature_names, to_remove))
+tsk_ames_ext$select(setdiff(tsk_ames_ext$feature_names, to_remove))
 
 func_extractor = PipeOpFuncExtract$new("energy_extract")
-ames_task_ext = func_extractor$train(list(ames_task_ext))[[1]]
-ames_task_ext$data(1, c("energy_means", "energy_mins", "energy_maxs", "energy_vars"))
+tsk_ames_ext = func_extractor$train(list(tsk_ames_ext))[[1]]
+tsk_ames_ext$data(1, c("energy_means", "energy_mins", "energy_maxs", "energy_vars"))
 ```
 
 These outputs look sensible compared to @fig-energy so we can now run our final benchmark experiment using feature extraction.
@@ -416,15 +416,15 @@ We do not need to add the `PipeOp` to each learner as we can apply it once (as a
 
 ```{r preprocessing-027, warning=FALSE}
 learners = list(
-    baseline = baseline_lrn,
+    baseline = lrn_baseline,
     tree = lrn("regr.rpart"),
-    xgboost_impact = xgboost_impact,
-    rf_impute_oor = rf_impute_oor,
-    lm_robust = lm_robust,
-    log_lm_robust = log_lm_robust
+    xgb_impact = glrn_xgb_impact,
+    rf_impute_oor = glrn_rf_impute_oor,
+    lm_robust = glrn_lm_robust,
+    log_lm_robust = glrn_log_lm_robust
 )
 
-bmr_final = benchmark(benchmark_grid(c(ames_task_ext, ames_task), learners, cv3))
+bmr_final = benchmark(benchmark_grid(c(tsk_ames_ext, tsk_ames), learners, rsmp_cv3))
 bmr_final$aggregate(measure = measure)
 ```
 
