@@ -34,8 +34,8 @@ learner$train(task, splits$train)
 Once the model is trained, generate the predictions on the test set and score them.
 
 ```{r solutions-002}
-preds = learner$predict(task, splits$test)
-preds$score(measure)
+prediction = learner$predict(task, splits$test)
+prediction$score(measure)
 ```
 
 1. Calculate the true positive, false positive, true negative, and false negative rates of the predictions made by the model in exercise 1.
@@ -43,11 +43,11 @@ preds$score(measure)
 Using `$confusion`, generate a confusion matrix and extract the required statistics,
 
 ```{r solutions-003}
-preds$confusion
+prediction$confusion
 ```
 
 ```{r solutions-004, echo=FALSE}
-confusion = as.data.frame(preds$confusion)
+confusion = as.data.frame(prediction$confusion)
 
 TP = confusion$Freq[1]
 FP = confusion$Freq[2]
@@ -69,9 +69,9 @@ Since the rows represent predictions (response) and the columns represent the gr
 
 ```{r solutions-005}
 # raise threshold from 0.5 default to 0.6
-preds$set_threshold(0.6)
+prediction$set_threshold(0.6)
 
-preds$confusion
+prediction$confusion
 ```
 One reason we might want the false positive rate to be lower than the false negative rate is if we felt it was worse for a positive prediction to be incorrect (meaning the true label was the negative label) than it was for a negative prediction to be incorrect (meaning the true label was the positive label).
 
@@ -104,14 +104,14 @@ How would you improve upon this?
 
 ```{r solutions-007, warning=FALSE}
 set.seed(3)
-grid = benchmark_grid(
+design = benchmark_grid(
   tasks = tsk("spam"),
   learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"),
                   predict_type = "prob"),
   resamplings = rsmp("cv", folds = 5)
 )
 
-bmr = benchmark(grid)
+bmr = benchmark(design)
 
 mlr3viz::autoplot(bmr, measure = msr("classif.auc"))
 ```
@@ -126,14 +126,14 @@ See if you can reproduce their results.
 
 ```{r solutions-008}
 task = tsk("penguins_simple")
-r = rsmp("custom_cv")
+rsmp_cv = rsmp("custom_cv")
 
 r$instantiate(task = task, f = factor(task$row_ids %% 3))
 
 rr = resample(
   task = task,
   learner = lrn("classif.rpart"),
-  resampling = r
+  resampling = rsmp_cv
 )
 
 rr$aggregate(msr("classif.acc"))
@@ -200,21 +200,21 @@ Use mlr3tuningspaces and nested resampling.
 ```{r solutions-011}
 library(mlr3tuningspaces)
 
-learner_xgboost = lts(lrn("classif.xgboost", predict_type = "prob"))
+lrn_xgboost = lts(lrn("classif.xgboost", predict_type = "prob"))
 
 at_xgboost = auto_tuner(
   tuner = tnr("random_search", batch_size = 1),
-  learner = learner_xgboost,
+  learner = lrn_xgboost,
   resampling = rsmp("cv", folds = 3),
   measure = msr("classif.bbrier"),
   term_evals = 2,
 )
 
-learner_logreg = lrn("classif.log_reg", predict_type = "prob")
+lrn_logreg = lrn("classif.log_reg", predict_type = "prob")
 
 at_logreg = auto_tuner(
   tuner = tnr("random_search", batch_size = 1),
-  learner = learner_logreg,
+  learner = lrn_logreg,
   resampling = rsmp("cv", folds = 3),
   measure = msr("classif.bbrier"),
   term_evals = 2,
@@ -487,22 +487,22 @@ No, they are not comparable because the holdout sampling called with `rsmp("hold
 resampling = rsmp("holdout")
 resampling$instantiate(tsk("penguins"))
 
-sfs = fselect(
+instance_sfs = fselect(
   fselector = fs("sequential", strategy = "sfs"),
   task =  tsk("penguins"),
   learner = lrn("classif.rpart"),
   resampling = resampling,
   measure = msr("classif.acc")
 )
-sbs = fselect(
+instance_sbs = fselect(
   fselector = fs("sequential", strategy = "sbs"),
   task =  tsk("penguins"),
   learner = lrn("classif.rpart"),
   resampling = resampling,
   measure = msr("classif.acc")
 )
-as.data.table(sfs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-as.data.table(sbs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
+as.data.table(instance_sfs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
+as.data.table(instance_sbs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
 ```
 
 Alternatively, one could automate the feature selection and perform a benchmark between the two wrapped learners.
@@ -521,13 +521,13 @@ at = auto_fselector(
   terminator = trm("evals", n_evals = 50)
 )
 
-grid = benchmark_grid(
+design = benchmark_grid(
   task = tsk("spam"),
   learner = list(at, lrn("classif.log_reg")),
   resampling = rsmp("cv", folds = 3)
 )
 
-bmr = benchmark(grid)
+bmr = benchmark(design)
 
 aggr = bmr$aggregate(msrs(c("classif.acc", "time_train")))
 as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
@@ -607,20 +607,20 @@ Using this selector in @sec-pipelines-stack, one could use the resulting stackin
   Additionally, `ppl("robustify")` is used along with the `r ref("ranger::ranger")`-based learners inside `po("imputelearner")` because the data passed to the imputation learners still contains missing values, which `ranger::ranger` cannot handle.
 
 ```{r pipelines-006}
-impute_factors = po("imputelearner", id = "impute_factors",
+gr_impute_factors = po("imputelearner", id = "impute_factors",
   learner = ppl("robustify", learner = lrn("classif.ranger")) %>>%
     lrn("classif.ranger"),
   affect_columns = selector_type("factor")
 )
-impute_numerics = po("imputelearner", id = "impute_numerics",
+gr_impute_numerics = po("imputelearner", id = "impute_numerics",
   learner = ppl("robustify", learner = lrn("regr.ranger")) %>>%
     lrn("regr.ranger"),
   affect_columns = selector_type(c("numeric", "integer"))
 )
 
-impute_graph = impute_numerics %>>% impute_factors
+gr_impute = gr_impute_numerics %>>% gr_impute_factors
 
-imputed = impute_graph$train(tsk("penguins"))[[1]]
+imputed = gr_impute$train(tsk("penguins"))[[1]]
 
 # e.g. see how row 4 was imputed
 # original:
@@ -640,14 +640,14 @@ set.seed(11)
 costs = matrix(c(-10, 3, 2, -1), nrow = 2, dimnames =
   list("Predicted Credit" = c("good", "bad"),
     Truth = c("good", "bad")))
-cost_measure = msr("classif.costs", costs = costs)
+msr_costs = msr("classif.costs", costs = costs)
 
 gr = po("learner_cv", lrn("classif.featureless", predict_type = "prob")) %>>%
-  po("tunethreshold", measure = cost_measure)
+  po("tunethreshold", measure = msr_costs)
 task = tsk("german_credit")
 learners = list(as_learner(gr), lrn("classif.log_reg"), lrn("classif.ranger"))
 bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 2)))
-bmr$aggregate(cost_measure)[, c(4, 7)]
+bmr$aggregate(msr_costs)[, c(4, 7)]
 ```
 
 2. Train and predict a survival forest using `rfsrc` (from `mlr3extralearners`). Run this experiment using `task = tsk("rats"); split = partition(task)`. Evaluate your model with the RCLL measure.
@@ -902,12 +902,12 @@ tasks = lapply(tbl$task_id, function(id) tsk("oml", task_id = id))
 Below, we define the robustified learners with a featureless fallback learner.
 
 ```{r solutions-034}
-learner_ranger = as_learner(
+lrn_ranger = as_learner(
   ppl("robustify", learner = lrn("regr.ranger")) %>>%
     po("learner", lrn("regr.ranger"))
 )
-learner_ranger$id = "ranger"
-learner_ranger$fallback = lrn("regr.featureless")
+lrn_ranger$id = "ranger"
+lrn_ranger$fallback = lrn("regr.featureless")
 
 learner_rpart = as_learner(
   ppl("robustify", learner = lrn("regr.rpart")) %>>%
@@ -916,7 +916,7 @@ learner_rpart = as_learner(
 learner_rpart$id = "rpart"
 learner_rpart$fallback = lrn("regr.featureless")
 
-learners = list(learner_ranger, learner_rpart)
+learners = list(lrn_ranger, learner_rpart)
 ```
 
 Finally, we create the experimental design using `r ref("benchmark_grid()")`.
@@ -1189,9 +1189,9 @@ l2 = po("learner_cv", lrn("classif.rpart")) %>>%
 And run the benchmark again. Note, that we use 3-fold CV this time for comparison.
 
 ```{r}
-lrns = list(l, l1, l2)
-grd = benchmark_grid(trn, lrns, rsmp("cv", folds = 3L))
-bmr = benchmark(grd)
+learners = list(l, l1, l2)
+design = benchmark_grid(trn, learners, rsmp("cv", folds = 3L))
+bmr = benchmark(design)
 bmr$aggregate(msrs(c("classif.acc", "fairness.fomr")))
 ```
 
