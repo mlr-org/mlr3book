@@ -61,12 +61,12 @@ library(mlr3verse)
 
 task = tsk("german_credit")
 
-cost_measure = msr("classif.costs", costs = costs)
-cost_measure
+msr_costs = msr("classif.costs", costs = costs)
+msr_costs
 
 learners = lrns(c("classif.log_reg", "classif.featureless", "classif.ranger"))
 bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
-bmr$aggregate(cost_measure)[, c(4, 7)]
+bmr$aggregate(msr_costs)[, c(4, 7)]
 ```
 
 In this experiment we find that the logistic regression learner happens to perform best as it minimizes the expected costs (and maximizes expected profits) and the featureless learner performs the worst.
@@ -83,7 +83,7 @@ This is highlighted in the `"threshold"` `autoplot`:
 ```{r special-004}
 prediction = lrn("classif.log_reg",
   predict_type = "prob")$train(task)$predict(task)
-autoplot(prediction, type = "threshold", measure = cost_measure)
+autoplot(prediction, type = "threshold", measure = msr_costs)
 ```
 
 As expected, the optimal threshold is greater than 0.5, indicating that to maximize profits, the majority of observations should be predicted to have bad credit.
@@ -92,12 +92,12 @@ To automate the process of optimizing the threshold, we can make use of `r mlr3t
 Continuing the same example:
 
 ```{r special-005}
-gr = po("learner_cv", lrn("classif.log_reg", predict_type = "prob")) %>>%
-  po("tunethreshold", measure = cost_measure)
+graph = po("learner_cv", lrn("classif.log_reg", predict_type = "prob")) %>>%
+  po("tunethreshold", measure = msr_costs)
 
-learners = list(as_learner(gr), lrn("classif.log_reg"))
+learners = list(as_learner(graph), lrn("classif.log_reg"))
 bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
-bmr$aggregate(cost_measure)[, c(4, 7)]
+bmr$aggregate(msr_costs)[, c(4, 7)]
 ```
 
 As expected, our tuned learner performs much better and now we expect a profit and not a loss.
@@ -215,10 +215,10 @@ In this chunk we are partitioning the `rats` dataset and training a `r index("Co
 For this model, all predict types except `response` can be computed.
 
 ```{r special-015}
-t = tsk("rats")
-split = partition(t)
-p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
-p
+tsk_rats = tsk("rats")
+split = partition(tsk_rats)
+prediction = lrn("surv.coxph")$train(t, split$train)$predict(tsk_rats, split$test)
+prediction
 ```
 
 #### `predict_type = "response"` {.unnumbered .unlisted}
@@ -233,9 +233,9 @@ We then compare the predictions from the model to the true data.
 
 ```{r special-016}
 library(mlr3extralearners)
-pred = lrn("surv.svm", type = "regression", gamma.mu = 1e-3)$
+prediction = lrn("surv.svm", type = "regression", gamma.mu = 1e-3)$
   train(t, split$train)$predict(t, split$test)
-data.frame(pred = pred$response[1:3], truth = pred$truth[1:3])
+data.frame(pred = prediction$response[1:3], truth = pred$truth[1:3])
 ```
 
 As can be seen from the output, our predictions are all less than the true observed time, which means we know our model definitely underestimated the truth.
@@ -250,10 +250,10 @@ These predictions are implemented using the `r ref_pkg("alan-turing-institute/di
 In the example below we train a Cox PH model on the `rats` dataset and then evaluate the survival function for three predictions at $t = 77$.
 
 ```{r special-017}
-t = tsk("rats")
-split = partition(t)
-p = lrn("surv.coxph")$train(t, split$train)$predict(t, split$test)
-p$distr[1:3]$survival(77)
+tsk_rats = tsk("rats")
+split = partition(tsk_rats)
+prediction = lrn("surv.coxph")$train(tsk_rats, split$train)$predict(tsk_rats, split$test)
+prediction$distr[1:3]$survival(77)
 ```
 
 The output indicates that there is a `r paste0(round(p$distr[1:3]$survival(77)*100, 1), "%")`, chance of the first three predicted rats being alive at time 77 respectively.
@@ -287,7 +287,7 @@ The distance between predictions also tells us that the difference in risk betwe
 The actual values themselves are meaningless and therefore comparing `crank` values between samples (or papers or experiments) is not meaningful.
 
 ```{r special-018}
-p$crank[1:3]
+prediction$crank[1:3]
 ```
 
 The `crank` prediction type is informative and common in practice because it allows identifying observations at lower/higher risk to each other, which is useful for resource allocation and prioritization (e.g., which patient should be given an expensive treatment), and clinical trials (e.g., are people in a treatment arm at lower risk of disease X than people in the control arm.).
@@ -313,7 +313,7 @@ We can now evaluate our predictions from the previous example.
 In the code below we use the recommend measures and find this model's performance seems okay as the RCLL and DCalib are relatively low 0 and the C-index is greater than 0.5.
 
 ```{r}
-p$score(msrs(c("surv.rcll", "surv.cindex", "surv.dcalib")))
+prediction$score(msrs(c("surv.rcll", "surv.cindex", "surv.dcalib")))
 ```
 
 ### Composition {#sec-surv-comp}
@@ -361,7 +361,7 @@ learner = lrn("surv.glmnet")
 # no distr output
 learner$train(task, split$train)$predict(task, split$test)
 
-pipe = as_learner(ppl(
+graph_learner = as_learner(ppl(
   "distrcompositor",
   learner = learner,
   estimator = "kaplan",
@@ -369,7 +369,7 @@ pipe = as_learner(ppl(
 ))
 
 # now with distr
-pipe$train(task, split$train)$predict(task, split$test)
+graph_learner$train(task, split$train)$predict(task, split$test)
 ```
 
 Mathematically, we have done the following:
@@ -397,14 +397,14 @@ task = tsk("grace")$filter(1:500)
 msr_txt = c("surv.rcll", "surv.cindex", "surv.dcalib")
 measures = msrs(msr_txt)
 
-pipe = as_learner(ppl(
+graph_learner = as_learner(ppl(
   "distrcompositor",
   learner = lrn("surv.glmnet"),
   estimator = "kaplan",
   form = "ph"
 ))
-pipe$id = "Coxnet"
-learners = c(lrns(c("surv.coxph", "surv.kaplan")), pipe)
+graph_learner$id = "Coxnet"
+learners = c(lrns(c("surv.coxph", "surv.kaplan")), graph_learner)
 
 bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 3)))
 bmr$aggregate(measures)[, c("learner_id", ..msr_txt)]
@@ -459,8 +459,8 @@ Again, the `distr` predict type is implemented using `distr6`.
 #| label: fig-dens-hist
 #| fig-cap: Predicted density from the histogram learner, as expected this closely resembles the underlying N(0, 1) data.
 #| fig-alt: Image shows a line plot from (-2, 0) to (2, 0.4) in a histogram shape that closely resembles a Normal(0, 1) distribution.
-learn = lrn("dens.hist")
-p = learn$train(task, 1:900)$predict(task, 901:1000)
+learner = lrn("dens.hist")
+prediction = learner$train(task, 1:900)$predict(task, 901:1000)
 x = seq.int(-2, 2, 0.01)
 ggplot(data.frame(x = x, y = p$distr$pdf(x)), aes(x = x, y = y)) +
   geom_line() + theme_minimal()
@@ -469,10 +469,10 @@ ggplot(data.frame(x = x, y = p$distr$pdf(x)), aes(x = x, y = y)) +
 The `pdf` and `cdf` predict types are simply wrappers around `distr$pdf` and `distr$cdf` respectively, which is best demonstrated by example:
 
 ```{r special-025}
-learn = lrn("dens.hist")
-p = learn$train(task, 1:10)$predict(task, 11:13)
-p
-cbind(p$distr$cdf(task$data()$x[11:13]), p$cdf[1:3])
+learner = lrn("dens.hist")
+prediction = learner$train(task, 1:10)$predict(task, 11:13)
+prediction
+cbind(prediction$distr$cdf(task$data()$x[11:13]), prediction$cdf[1:3])
 ```
 
 The reason for returning `pdf` and `cdf` in this way is to support measures that can be used to evaluate the quality of our estimations, which we will return to in the next section.
@@ -483,10 +483,10 @@ Currently the only measure implemented in `mlr3proba` for density estimation is 
 Putting this together with the above we are now ready to train a density learner, estimate a distribution, and evaluate our estimation:
 
 ```{r special-026}
-meas = msr("dens.logloss")
-meas
+msr_logloss = msr("dens.logloss")
+msr_logloss
 
-p$score(meas)
+p$score(msr_logloss)
 ```
 
 As with any scoring rule this output cannot be interpreted by itself and is more useful in a benchmark experiment, which we will look at in the final part of this section.
@@ -614,9 +614,9 @@ Note that the silhouette measure in `mlr3cluster` returns the mean silhouette sc
 Putting this together with the above we can now score our cluster estimation (note we must pass the `task` to `$score`):
 
 ```{r special-036}
-meas = msrs(c("clust.wss", "clust.silhouette"))
+measures = msrs(c("clust.wss", "clust.silhouette"))
 
-prediction$score(meas, task = task)
+prediction$score(measures, task = task)
 ```
 
 The very high WSS and middling mean silhouette coefficient indicate that our clusters could do with a bit more work.
@@ -653,10 +653,10 @@ We can see that K-means clustering gives us a higher average silhouette score an
 However, now take a look at the cluster assignment plots.
 
 ```{r special-039, message=FALSE, warning=FALSE}
-prediction_kmeans = bmr$resample_results$resample_result[[1]]$prediction()
-prediction_dbscan = bmr$resample_results$resample_result[[2]]$prediction()
-autoplot(prediction_kmeans, task)
-autoplot(prediction_dbscan, task)
+pred_kmeans = bmr$resample_results$resample_result[[1]]$prediction()
+pred_dbscan = bmr$resample_results$resample_result[[2]]$prediction()
+autoplot(pred_kmeans, task)
+autoplot(pred_dbscan, task)
 ```
 
 The two learners arrived at different results -- the K-means algorithm assigned points that are part of the same line into two different clusters whereas DBSCAN assigned each line to its own cluster.
@@ -886,9 +886,9 @@ leipzig_raster = terra::rast(system.file("extdata", "leipzig_raster.tif",
 Now we can continue as normal to train and predict with a classification learner, in this case a random forest.
 
 ```{r special-049}
-lrn = lrn("classif.ranger")$train(tsk_leipzig)
-pred = predict_spatial(leipzig_raster, lrn, format = "terra")
-pred
+learner = lrn("classif.ranger")$train(tsk_leipzig)
+prediction = predict_spatial(leipzig_raster, learner, format = "terra")
+prediction
 ```
 
 In this example we specified creation of a `terra` object, which can be visualized with in-built plotting methods.
