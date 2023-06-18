@@ -28,12 +28,11 @@ The dataset includes 2,930 residential properties (rows) situated in Ames, Iowa,
 It contains 81 features on various aspects of the house, the size and shape of the lot, and information about its condition and quality.
 The prediction target is the sale price in USD, hence it is a regression task.
 
-```{r preprocessing-001, echo = TRUE, eval = TRUE, message=FALSE}
+```{r preprocessing-001, message=FALSE}
 repo = "ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
+url = paste0("https://raw.githubusercontent.com/", repo)
 
-ames = fread(paste0("https://raw.githubusercontent.com/", repo),
-    stringsAsFactors = TRUE
-)
+ames = data.table::fread(url, stringsAsFactors = TRUE)
 ```
 
 ## Data Cleaning
@@ -48,7 +47,7 @@ Instead of pretending to discover issues with the data, below we will just summa
 summary(ames$Misc_Feature_2)
 # 2. `Condition_2` and `Condition_3` are identical.
 identical(ames$Condition_2, ames$Condition_3)
-# 3. `Lot_Area` and `Lot_Area_m2` represent the same data but on different scales
+# 3. `Lot_Area` and `Lot_Area_m2` are same data on different scales
 cor(ames$Lot_Area, ames$Lot_Area_m2)
 ```
 
@@ -74,18 +73,18 @@ tsk_ames = as_task_regr(ames, target = "Sale_Price", id = "ames")
 # remove problematic features
 tsk_ames$select(setdiff(tsk_ames$feature_names, to_remove))
 
-measure = msr("regr.mae")
+msr_mae = msr("regr.mae")
 rsmp_cv3 = rsmp("cv", folds = 3)
 rsmp_cv3$instantiate(tsk_ames)
 ```
 
 Lastly, we run a very simple experiment to verify our setup works as expected with a simple featureless baseline, note below we set `robust = TRUE` to always predict the *median* sale price as opposed to the *mean*.
 
-```{r preprocessing-008, echo = TRUE, eval = TRUE, message=FALSE}
+```{r preprocessing-008, message=FALSE}
 lrn_baseline = lrn("regr.featureless", robust = TRUE)
 lrn_baseline$id = "Baseline"
 rr_baseline = resample(tsk_ames, lrn_baseline, rsmp_cv3)
-rr_baseline$aggregate(measure)
+rr_baseline$aggregate(msr_mae)
 ```
 
 ## Factor Encoding
@@ -94,7 +93,7 @@ We refer to variables as categorical features if they can only take a limited se
 
 Many machine learning algorithms implementations, such as XGBoost (@chen2016xgboost), cannot handle categorical data and so categorical features must be encoded into numerical variables.
 
-```{r preprocessing-010, echo = TRUE, eval = TRUE, message=FALSE, error=TRUE}
+```{r preprocessing-010, message=FALSE, error=TRUE}
 lrn_xgb = lrn("regr.xgboost", nrounds = 100)
 lrn_xgb$train(tsk_ames)
 ```
@@ -143,12 +142,14 @@ In the code below we use `po("removeconstants")` to remove features with only on
 factor_pipeline =
     po("removeconstants") %>>%
     po("collapsefactors", no_collapse_above_prevalence = 0.01) %>>%
-    po("encodeimpact", affect_columns = selector_cardinality_greater_than(10),
+    po("encodeimpact",
+        affect_columns = selector_cardinality_greater_than(10),
         id = "high_card_enc") %>>%
-    po("encode", method = "one-hot", affect_columns = selector_cardinality_greater_than(2),
+    po("encode", method = "one-hot",
+        affect_columns = selector_cardinality_greater_than(2),
         id = "low_card_enc") %>>%
-    po("encode", method = "treatment", affect_columns = selector_type("factor"),
-        id = "binary_enc")
+    po("encode", method = "treatment",
+        affect_columns = selector_type("factor"), id = "binary_enc")
 ```
 
 Now we can apply this pipeline to our xgboost model to use it in a benchmark experiment; we also compare a simpler pipeline that only uses one-hot encoding to demonstrate performance differences resulting from different strategies.
@@ -160,15 +161,9 @@ glrn_xgb_impact$id = "XGB_enc_impact"
 glrn_xgb_one_hot = as_learner(po("encode") %>>% lrn_xgb)
 glrn_xgb_one_hot$id = "XGB_enc_onehot"
 
-
-learners = list(
-    baseline = lrn_baseline,
-    xgb_impact = glrn_xgb_impact,
-    xgb_one_hot = glrn_xgb_one_hot
-)
-
-bmr = benchmark(benchmark_grid(tsk_ames, learners, rsmp_cv3))
-bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
+bmr = benchmark(benchmark_grid(tsk_ames,
+  c(lrn_baseline, glrn_xgb_impact, glrn_xgb_one_hot), rsmp_cv3))
+bmr$aggregate(measure = msr_mae)[, .(learner_id, regr.mae)]
 ```
 
 In this small experiment, we see that the difference between the extended factor encoding pipeline and the simpler one-hot encoding strategy pipeline is only moderate.
@@ -190,11 +185,10 @@ Alternatively, one can impute by sampling from the empirical distribution of the
 Instead of guessing at what a missing feature might be, missing values could instead be replaced by a new level, for example, called `.MISSING` (`po("imputeoor")`).
 For numeric features, @ding2010investigation show that for binary classification and tree-based models, encoding missing values out-of-range (OOR), e.g. as two times the largest observed value, is a reasonable approach.
 
-```{r}
+```{r, echo = FALSE, out.width = "70%"}
 #| label: fig-imputation
-#| fig-cap: Impute missing values.
-#| fig-alt: Impute missing values.
-#| echo: false
+#| fig-cap: Mean imputation of missing values using existing values.
+#| fig-alt: "On the left is a vector of numbers in a column, (1.3, NA, 1.5, NA). The non-NA numbers have arrows pointing to (1.3+1.5)/2, which then has an arrow pointing to a vector of numbers in a column on the right but now (1.3, 1.4, 1.5, 1.4) with '1.4' in red to highlight they were imputed with the mean."
 include_multi_graphics("mlr3book_figures-13")
 ```
 
@@ -205,24 +199,35 @@ Hence, imputation should be tracked by adding binary indicator features (one for
 
 In the code below we create a pipeline from the `r ref("PipeOp")`s listed above as well as making use of `po("featureunion")` to combine multiple `PipeOp`s acting on the `"integer"` columns.
 
-```{r preprocessing-014, message=FALSE, crop=TRUE}
+```{r preprocessing-014-evalF, eval = FALSE}
+impute_hist = list(
+      po("missind", type = "integer",
+          affect_columns = selector_type("integer")
+      ),
+      po("imputehist", affect_columns = selector_type("integer"))
+    ) %>>%
+    po("featureunion") %>>%
+    po("imputeoor", affect_columns = selector_type("factor"))
+
+impute_hist$plot(horizontal = TRUE)
+```
+```{r preprocessing-014-evalT, fig.width = 8, echo = FALSE}
 #| label: fig-impute
 #| fig-cap: Pipeline to impute missing values of numeric features by histogram with binary indicators and missings in categoricals out-of-range with a new level.
 #| fig-alt: "Flow diagram shows '<INPUT>' with arrows to 'missind' and 'imputehist', which both have arrows to 'featureunion', which has an arrow to 'imputeoor' that has an arrow to '<OUTPUT'>."
 impute_hist = list(
-    po("missind",
-        type = "integer",
-        affect_columns = selector_type("integer")
-    ),
-    po("imputehist",
-        affect_columns = selector_type("integer")
-    )) %>>%
+      po("missind", type = "integer",
+          affect_columns = selector_type("integer")
+      ),
+      po("imputehist", affect_columns = selector_type("integer"))
+    ) %>>%
     po("featureunion") %>>%
-    po("imputeoor",
-        affect_columns = selector_type("factor")
-    )
+    po("imputeoor", affect_columns = selector_type("factor"))
 
+fig = magick::image_graph(width = 1500, height = 1000, res = 100, pointsize = 24)
 impute_hist$plot(horizontal = TRUE)
+invisible(dev.off())
+magick::image_trim(fig)
 ```
 
 Using this pipeline we can now run experiments with `lrn("regr.ranger")`, which cannot handle missing data; we also compare a simpler pipeline that only uses OOR imputation to demonstrate performance differences resulting from different strategies.
@@ -234,10 +239,11 @@ glrn_rf_impute_hist$id = "RF_imp_Hist"
 glrn_rf_impute_oor = as_learner(po("imputeoor") %>>% lrn("regr.ranger"))
 glrn_rf_impute_oor$id = "RF_imp_OOR"
 
-design = benchmark_grid(tsk_ames, c(glrn_rf_impute_hist, glrn_rf_impute_oor), rsmp_cv3)
+design = benchmark_grid(tsk_ames,
+  c(glrn_rf_impute_hist, glrn_rf_impute_oor), rsmp_cv3)
 bmr_new = benchmark(design)
 bmr$combine(bmr_new)
-bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
+bmr$aggregate(measure = msr_mae)[, .(learner_id, regr.mae)]
 ```
 
 Similarly to encoding, we see limited differences in performance between the different imputation strategies.
@@ -270,7 +276,7 @@ glrn_lm_robust$id = "lm_robust"
 
 bmr_new = benchmark(benchmark_grid(tsk_ames, glrn_lm_robust,  rsmp_cv3))
 bmr$combine(bmr_new)
-bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
+bmr$aggregate(measure = msr_mae)[, .(learner_id, regr.mae)]
 ```
 
 Robustifying the linear regression results in a model that vastly outperforms the featureless baseline and is competitive when compared to more complex machine learning models.
@@ -282,7 +288,7 @@ In particular, log transformation of the target can help in making the distribut
 Similarly, log transformation of skewed features can help to reduce the influence of outliers.
 In @fig-sale we plot the distribution of the target in the `ames` dataset and then the log-transformed target, we can see how simply taking the log of the variable results in a distribution that is much more symmetrical and with fewer outliers.
 
-```{r preprocessing-001, echo = TRUE, eval = TRUE, message=FALSE}
+```{r preprocessing-001, message=FALSE}
 #| label: fig-sale
 #| fig-cap: Distribution of house sales prices (in USD) in the ames dataset before (left) and after (right) log transformation. Before transformation there is a skewed distribution of prices towards cheaper properties with a few outliers of very expensive properties. After transformation the distribution is much more symmetrical with the majority of points evenly spread around the same range.
 #| fig-alt: Two boxplots. Left plot shows house prices up to $600,000, the majority of prices are between roughly $100,000-$200,000. Right plot shows log house prices primarily around 12 with an even range between 11 and 13 and a few outliers on both sides.
@@ -323,42 +329,53 @@ The pipeline includes a parameter `targetmutate.trafo` for the transformation to
 So now let us consider the log transformation by adding this pipeline to our robust linear regression model:
 
 ```{r preprocessing-020, warning=FALSE}
-glrn_log_lm_robust = as_learner(ppl("targettrafo", graph = glrn_lm_robust,
+glrn_log_lm_robust = as_learner(ppl("targettrafo",
+  graph = glrn_lm_robust,
   targetmutate.trafo = function(x)log(x),
   targetmutate.inverter = function(x) list(response = exp(x$response))))
 glrn_log_lm_robust$id = "lm_robust_logtrafo"
 
-bmr_new = benchmark(benchmark_grid(tsk_ames, glrn_log_lm_robust, rsmp_cv3))
+bmr_new = benchmark(benchmark_grid(tsk_ames, glrn_log_lm_robust,
+  rsmp_cv3))
 bmr$combine(bmr_new)
-bmr$aggregate(measure = measure)[, .(learner_id, regr.mae)]
+bmr$aggregate(measure = msr_mae)[, .(learner_id, regr.mae)]
 ```
 
 With the target transformation and the `ppl("robustify")` pipeline, the simple linear regression now appears to be the best-performing model.
 
-## Feature Extraction
+## Functional Feature Extraction
 
-As a final step of data preprocessing, we will look at `r index('feature extraction')`.
+As a final step of data preprocessing, we will look at `r index('feature extraction')` from functional features.
 In @sec-feature-selection we look at automated feature selection and how automated approaches with filters and wrappers can be used to reduce a dataset to the optimal set of features.
-Feature extraction differs from this process as we are now interested in features that are dependent on one another and together may provide useful information but not individually.
+Functional feature extraction differs from this process as we are now interested in features that are dependent on one another and together may provide useful information but not individually.
+@fig-functional-features visualizes the difference between regular and functional features.
+
+```{r optimization-003, echo = FALSE}
+#| label: fig-functional-features
+#| fig-cap: Variables x1,x2,x3 are regular features, variables xt1,...,xt365 are functional features that could be plotted to identify important properties.
+#| fig-alt: On the left is a table with columns 'x1,x2,x3,xt1,xt2,...,xt365'. Below the first three columns is the label 'Regular Features', below the others is the label 'Functional Features, e.g. days in year'. The table has a bidirectional arrow to a line graph that indicates plotting of one row of functional features.
+include_multi_graphics("mlr3book_figures-14")
+```
+
 As a concrete example, consider the power consumption of kitchen appliances in houses in the Ames dataset.
 
-```{r preprocessing-023, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+```{r preprocessing-023, message=FALSE, warning=FALSE}
 repo = "ja-thomas/extend_ames_housing/main/data/energy_usage.csv"
+url = paste0("https://raw.githubusercontent.com/", repo)
 
-energy_data = fread(paste0("https://raw.githubusercontent.com/", repo),
-    stringsAsFactors = TRUE
-)
+energy_data = data.table::fread(url, stringsAsFactors = TRUE)
 ```
 
 In this dataset, each row represents one house and each feature is the total power consumption from kitchen appliances at a given time (@bagnall2017great).
-The consumption is measured in 2-minute intervals, resulting in 720 features.
+The consumption is measured in two-minute intervals, resulting in 720 features.
 
-```{r preprocessing-024, echo = TRUE, eval = TRUE, message=FALSE, warning=FALSE}
+```{r preprocessing-024, message=FALSE, warning=FALSE}
 #| label: fig-energy
 #| fig-cap: Energy consumption of one example house in a day, recorded in 2-minute intervals.
 #| fig-alt: Line plot with '2-Minute Interval' on axis ranging from 1 to 720 and 'Power Consumption' on y-axis ranging from 0 to 20. There are spikes at around (200, 20), (300, 20), and then some consistently raised usage between (500-700, 3).
 library(ggplot2)
-ggplot(data.frame(y = as.numeric(energy_data[1, ])), aes(y = y, x = 1:720)) +
+ggplot(data.frame(y = as.numeric(energy_data[1, ])),
+    aes(y = y, x = 1:720)) +
   geom_line() + theme_minimal() +
   labs(x = "2-Minute Interval", y = "Power Consumption")
 ```
@@ -389,15 +406,6 @@ PipeOpFuncExtract = R6::R6Class("PipeOpFuncExtract",
 )
 ```
 
-
-```{r optimization-003}
-#| label: fig-functional-features
-#| fig-cap: Functional features.
-#| fig-alt: Functional features.
-#| echo: false
-include_multi_graphics("mlr3book_figures-14")
-```
-
 Before using this in an experiment we first test that the `PipeOp` works as expected.
 
 ```{r preprocessing-026}
@@ -408,24 +416,20 @@ tsk_ames_ext$select(setdiff(tsk_ames_ext$feature_names, to_remove))
 
 func_extractor = PipeOpFuncExtract$new("energy_extract")
 tsk_ames_ext = func_extractor$train(list(tsk_ames_ext))[[1]]
-tsk_ames_ext$data(1, c("energy_means", "energy_mins", "energy_maxs", "energy_vars"))
+tsk_ames_ext$data(1,
+  c("energy_means", "energy_mins", "energy_maxs", "energy_vars"))
 ```
 
 These outputs look sensible compared to @fig-energy so we can now run our final benchmark experiment using feature extraction.
 We do not need to add the `PipeOp` to each learner as we can apply it once (as above) before any model training by applying it to all available data.
 
 ```{r preprocessing-027, warning=FALSE}
-learners = list(
-    baseline = lrn_baseline,
-    tree = lrn("regr.rpart"),
-    xgb_impact = glrn_xgb_impact,
-    rf_impute_oor = glrn_rf_impute_oor,
-    lm_robust = glrn_lm_robust,
-    log_lm_robust = glrn_log_lm_robust
-)
+learners = list(lrn_baseline, lrn("regr.rpart"), glrn_xgb_impact,
+    glrn_rf_impute_oor, glrn_lm_robust, glrn_log_lm_robust)
 
-bmr_final = benchmark(benchmark_grid(c(tsk_ames_ext, tsk_ames), learners, rsmp_cv3))
-bmr_final$aggregate(measure = measure)
+bmr_final = benchmark(benchmark_grid(c(tsk_ames_ext, tsk_ames), learners,
+  rsmp_cv3))
+bmr_final$aggregate(measure = msr_mae)
 ```
 
 The final results indicate that adding these extracted features improved the performance of all models (except the featureless baseline).
@@ -440,7 +444,7 @@ We focused primarily on feature engineering, which can make use of `r mlr3pipeli
 We looked at factor encoding for categorical variables, imputing missing data, scaling variables, and feature extraction.
 Preprocessing is almost always required in machine learning experiments, and applying the `ppl("robustify")` pipeline will help in many cases to simplify this process by applying the most common preprocessing steps, we will see this in use in @sec-large-benchmarking.
 
-We have not introduced any new classes here so in @tbl-prepro-api we list the `r ref("PipeOp")`s and `r ref("Graph")`s discussed in this chapter.
+We have not introduced any new classes in this chapter, so instead @tbl-prepro-api lists the `r ref("PipeOp")`s and `r ref("Graph")`s we discussed.
 
 | PipeOp/Graph | Description |
 | --- | -- |
