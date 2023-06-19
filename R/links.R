@@ -19,6 +19,7 @@ update_db = function() {
 #' @return (`character(1)`) markdown link.
 #' @export
 ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
+
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
@@ -63,7 +64,7 @@ ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  out = sprintf("[`%s`](%s){.refcode}", text, url)
+  out = sprintf("[`%s`](%s)", text, url)
 
   if (index || aside) {
     out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
@@ -128,7 +129,8 @@ mlr_pkg = function(pkg, index = FALSE, aside = FALSE) {
   out = sprintf("[`%s`](%s)", pkg, url)
 
   if (index || aside) {
-    out = paste0(out, index(main = NULL, index = pkg, aside = aside))
+    out = paste0(out, index(main = NULL, index = pkg, aside = aside,
+      code = TRUE, lower = FALSE))
   }
 
   out
@@ -169,9 +171,16 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   parent = NULL) {
 
   stopifnot(!(is.null(main) && is.null(index)))
-
+  asidetext = NULL
   if (is.null(main)) {
     out = ""
+    if (aside) {
+      if (code) {
+        asidetext = sprintf("`%s`", index)
+      } else {
+        asidetext = toproper(index)
+      }
+    }
   } else if (code) {
     out = sprintf("`%s`", main)
   } else {
@@ -209,8 +218,8 @@ index = function(main = NULL, index = NULL, aside = FALSE, code = FALSE, lower =
   out = sprintf("%s\\index{%s}", out, index)
 
   if (aside) {
-    asidetxt = if (code) main else toproper(main)
-    out = sprintf("%s[%s]{.aside}", out, asidetxt)
+    if (is.null(asidetext))  asidetext = if (code) main else toproper(main)
+    out = sprintf("%s[%s]{.aside}", out, asidetext)
   }
 
   out
