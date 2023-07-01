@@ -7,26 +7,29 @@
 
 The increasing availability of data and software frameworks to create predictive models has allowed the widespread adoption of ML in many applications.
 However, high predictive performance of such models often comes at the cost of `r index("interpretability")`.
-Many models are a '`r index('black-box')`' and the 'decisions' that influence predictions are rarely immediately interpretable.
-This lack of explanation can decrease trust in ML and may create barriers to the adoption of predictive models, especially in critical applications such as medicine, engineering, and finance.
+Many models are considered as '`r index('black-boxes')`', where the decision-making process behind their predictions is often not immediately interpretable.
+This lack of explanation can decrease trust in ML and may create barriers to the adoption of predictive models, especially in critical applications such as medicine, engineering, and finance (@lipton2018mythos).
 
-Interpretation methods can be used to 'peek' inside these models to understand how data features are being used to make predictions.
-These methods can be valuable from multiple perspectives:
+In recent years, many interpretation methods have been developed that allow to 'peek' inside these models and produce explanations to, for example, understand how data features are being used to make predictions (@guidotti2018survey).
+Interpretation methods can be valuable from multiple perspectives:
 
-1. To gain global insights into a model, for example, to identify which features were the most important overall.
+1. To gain global insights into a model, for example, to identify which features were the most important overall or how the features act on the predictions.
 2. To improve the model if flaws are identified (in the data or model), for example, if the model depends on one feature unexpectedly.
 3. To understand and control individual predictions, for example, to identify how a given prediction may change if a feature is altered.
 4. To assess `r index('algorithmic fairness')`, for example, to inspect whether the model adversely affects certain subpopulations or individuals (see @sec-fairness).
 
 In this chapter, we will look at model-agnostic (i.e., can be applied to any model) `r index('interpretable machine learning', aside = TRUE)` (IML) methods that can be used to understand models `r index("post hoc")` (after they have been trained).
-We will focus on methods implemented in three packages that interface with `mlr3`: `r ref_pkg("iml")` (@sec-iml), `r ref_pkg("counterfactuals")` (@sec-counterfactuals), and `r ref_pkg("DALEX")` (@sec-dalex).
+We will focus on methods implemented in three R packages that nicely interface with `mlr3`: `r ref_pkg("iml")` (@sec-iml), `r ref_pkg("counterfactuals")` (@sec-counterfactuals), and `r ref_pkg("DALEX")` (@sec-dalex).
 
 `iml` and `DALEX` offer similar functionality but differ in design choices in that `iml` makes use of the `R6` class system whereas `DALEX` is based on the S3 class system.
-`counterfactuals` also uses `R6`.
+`counterfactuals` also uses the `R6` class system.
 In contrast to `iml` and `counterfactuals`, `DALEX` focuses on comparing multiple predictive models, usually of different types, which is a model comparison-oriented approach often referred to as the `r index('Rashomon', lower = FALSE)` perspective.
 We will only provide a brief overview of the methodology discussed below, we recommend @Molnar2022 as a comprehensive introductory book about IML.
 
-As a running example throughout this chapter, we will consider a gradient boosting machine (GBM) fit on half the features in the `"german_credit"` task:
+As a running example throughout this chapter, we will consider an gradient boosting machine (GBM).
+For the sake of simplicity, we have not tuned the GBM and trained it on half the features in the `"german_credit"` task.
+In practice, we would tune the hyperparameters of GBM as discussed in @sec-optimization and perform feature selection as discussed in @sec-feature-selection to select the most relevant features. 
+However, for the sake of simplicity, we opted to utilize an untuned GBM for the `"german_credit"` task, considering that it exhibited satisfactory performance even without fine-tuning, saving the reader valuable time and resources when running the example code below:
 
 ```{r interpretation-003, results = 'hide'}
 library(mlr3verse)
@@ -39,8 +42,8 @@ lrn_gbm$train(tsk_german, row_ids = split$train)
 ```
 
 ::: {.callout-tip}
-## Interpretation Methods Require Test Data
-Performance-based interpretation methods should be computed on an independent test set to decrease bias in estimation (see @sec-performance).
+## Performance-based Interpretation Methods Require Test Data
+Performance-based interpretation methods such as PFI (@sec-feat-importance) rely on measuring the generalization performance. Hence, they should be computed on an independent test set to decrease bias in estimation (see @sec-performance).
 
 However, the differences in interpretation between training and test data are less pronounced (@Molnar2022pitfalls) in prediction-based methods that do not require performance estimation such as ICE/PD (@sec-feature-effects) or Shapley values (@sec-shapley).
 :::
@@ -48,7 +51,7 @@ However, the differences in interpretation between training and test data are le
 ## The iml Package {#sec-iml}
 
 \index{\texttt{iml}}`r ref_pkg("iml")` (@Molnar2018) implements a unified interface for a variety of model-agnostic interpretation methods that facilitate the analysis and interpretation of machine learning models.
-In theory, `iml` supports machine learning models (for classification or regression) fitted by *any* R package, and in particular all `mlr3` models are supported by wrapping learners in an `r ref("iml::Predictor")` object, which unifies the input-output behavior of the trained models.
+`iml` supports machine learning models (for classification or regression) fitted by *any* R package, and in particular all `mlr3` models are supported by wrapping learners in an `r ref("iml::Predictor")` object, which unifies the input-output behavior of the trained models.
 This object contains the prediction model as well as the data used for analyzing the model and producing the desired explanation.
 We construct the `Predictor` object using our trained learner and heldout test data:
 
@@ -74,7 +77,7 @@ This can be useful to better understand the problem at hand and the relationship
 In model development, this can be used to filter features (@sec-fs-filter) that do not contribute a lot to the model's predictive ability.
 In this book, we use the term 'feature importance' to describe global methods that calculate a single score per feature that reflect the importance regarding a given quantity of interest, e.g., model performance, thus allowing features to be ranked.
 
-One of the most popular feature importance methods is `r index('permutation feature importance', aside = TRUE)` (PFI), originally introduced by @breiman2001random for random forests\index{random forest} and adapted by @Fisher2019pfi as a model-agnostic feature importance measure (originally termed, 'model reliance').
+One of the most popular feature importance methods is the `r index('permutation feature importance', aside = TRUE)` (PFI), originally introduced by @breiman2001random for random forests\index{random forest} and adapted by @Fisher2019pfi as a model-agnostic feature importance measure (originally termed, 'model reliance').
 Feature permutation is the process of randomly shuffling observed values for a single feature in a dataset.
 This removes the original dependency structure of the feature with the target variable and with all other features while maintaining the marginal distribution of the feature.
 The PFI measures the change in the model performance before (original model performance) and after (permuted model performance) permuting a feature.
@@ -83,13 +86,19 @@ Conversely, we would expect a clear decrease in model performance if the feature
 It is generally recommended to repeat the permutation process and aggregate performance changes over multiple repetitions to decrease randomness in results.
 
 PFI is run in `iml` by constructing an object of class `r ref("iml::FeatureImp")` and specifying the performance measure, below we use classification error.
-By default, the permutation is repeated five times (this can be changed with `n.repetitions` when calling the constructor `$new()`) and in each repetition, the importance value corresponding to the change in the classification error is calculated.
+By default, the permutation is repeated five times to keep computation time low (this can be changed with `n.repetitions` when calling the constructor `$new()`) and in each repetition, the importance value corresponding to the change in the classification error is calculated.
 The `$plot()` method shows the median of the five resulting importance values (as a point) and the boundaries of the error bars in the plot refer to the 5% and 95% quantiles of the importance values (@fig-iml-pfi).
+
+::: {.callout-tip}
+## Increase the Number of Repetitions to Obtain Useful Error Bars
+
+Obviously, the error bars are most useful if the number of repetitions is high, e.g., at least 100 as they refer to the 5% and 95% quantiles of the importance values.
+:::
 
 ```{r iml-007}
 #| output: false
 #| cache: false
-importance = FeatureImp$new(predictor, loss = "ce")
+importance = FeatureImp$new(predictor, loss = "ce", n.repetitions = 100)
 importance$plot()
 ```
 
@@ -97,7 +106,7 @@ importance$plot()
 #| fig-height: 3
 #| label: fig-iml-pfi
 #| fig-cap: Permutation feature importance (PFI). Points indicate the median and bars the 5% and 95% quantiles of the PFI over five repetitions of the permutation process.
-#| fig-alt: "x-axis says 'Feature Importance (loss: ce)' and ranges from just below 0.95 to just above 1.15. y-axis lists the features in the data. Plot shows 10 error bars with solid black circles in the middle and horizontal black lines on each row. Top row is 'duration' with a CE of around 1.11 (1.08-1.17)."
+#| fig-alt: "x-axis says 'Feature Importance (loss: ce)' and y-axis lists the features in the data. Plot shows 10 error bars, one for each feature, with solid black circles in the middle (the median importance value across the repetitions) and horizontal black lines on each row (the 5% and 95% quantile of the feature importance values). Top row shows the most important feature."
 #| echo: false
 #| warning: false
 #| message: false
@@ -151,16 +160,25 @@ effect = FeatureEffect$new(predictor, feature = "amount",
 effect$plot()
 ```
 
-@fig-iml-pdice shows that if the `amount` is smaller than roughly 10,000 then on average there is a high chance that the predicted creditworthiness will be `good`.
+@fig-iml-pdice shows that if the `amount` is smaller than roughly 10,000 then on average there is a high chance that the predicted creditworthiness will be `good`. Furthermore, the ICE curves are more or less parallel lines, meaning that there do not seem to be strong interactions present where `amount` is involved.
 
 ### Surrogate Models
 
-Interpretable models such as decision trees or linear models can be used as `r index("surrogate models", "surrogate model")` to approximate or mimic a (often very complex) black-box model.
+Interpretable models such as decision trees or linear models can be used as `r index("surrogate models", "surrogate model")` to approximate or mimic an often very complex black-box model.
 Inspecting the surrogate model can provide insights into the behavior of a black-box model, for example by looking at the model coefficients in a linear regression or splits in a decision tree.
-
 We differentiate between local surrogate models, which approximate a model locally around a specific data point of interest, and global surrogate models which approximate the model across the entire input space (@Ribeiro2016lime; @Molnar2022).
+
 The features used to train a surrogate model are usually the same features used to train the black-box model or at least data with the same distribution to ensure a representative input space.
-However, the target used to train the surrogate is the predictions obtained from the black-box model.
+However, the target used to train the surrogate model is the predictions obtained from the black-box model, not the real outcome of the underlying data.
+Hence, conclusions drawn from the surrogate model are valid if the surrogate model approximates the black-box model very well (i.e., if the model fidelity is high). 
+It is therefore important to measure and report also the approximation error of the surrogate model.
+
+The data used to train the black-box model may be very complex or limited, making it challenging to directly train a well-performing interpretable model on that data. 
+Having trained a black-box model that captures the relationships in the original data very well, enables us to generate new labeled data in specific regions of the input space with which we can augment the original data.
+<!-- During this 'surrogate data generation' process the predictions of the black-box model serve as labels. -->
+The augmented data can then be used to train an interpretable model that captures and explains the relationships learned by the black-box model (in specific regions) or to identify flaws or unexpected behavior.
+<!-- Surrogate data generation allows for the benefits of both the accuracy of the black-box model and the interpretability of the resulting interpretable model. -->
+<!-- The black-box model acts as a powerful predictor, providing labels for the artificially generated data, while the interpretable model can offer a better understanding in the targeted regions of the input space. -->
 
 #### Global Surrogate Model
 
@@ -169,14 +187,14 @@ This class extracts the decision rules created by the tree surrogate and the `$p
 Below, we pass `maxdepth = 2` to the constructor to build a tree with two binary splits, yielding four terminal nodes.
 
 ```{r iml-globalsurrogate,message=FALSE}
-treesurrogate = TreeSurrogate$new(predictor, maxdepth = 2L)
+tree_surrogate = TreeSurrogate$new(predictor, maxdepth = 2L)
 ```
 
-Before inspecting this model we need to first check if the surrogate model approximates the prediction model accurately, which we can assess by comparing the predictions of the tree surrogate and the predictions of the black-box model.
-For example, we could quantify the number of matching predictions and measure the accuracy of the surrogate in predicting the predictions of the black-box GBM:
+Before inspecting this model, we need to first check if the surrogate model approximates the prediction model accurately, which we can assess by comparing the predictions of the tree surrogate and the predictions of the black-box model.
+For example, we could quantify the number of matching predictions and measure the accuracy of the surrogate in predicting the predictions of the black-box GBM model:
 
 ```{r iml-crosstable}
-pred_surrogate = treesurrogate$predict(credit_x, type = "class")$.class
+pred_surrogate = tree_surrogate$predict(credit_x, type = "class")$.class
 pred_surrogate = factor(pred_surrogate, levels = c("good", "bad"))
 pred_gbm = lrn_gbm$predict_newdata(credit_x)$response
 confusion = mlr3measures::confusion_matrix(pred_surrogate, pred_gbm, positive = "good")
@@ -189,16 +207,16 @@ This shows an accuracy of around `r round(confusion$measures[["acc"]] * 100)`% i
 #| fig-cap: Distribution of the predicted outcomes for each terminal node identified by the tree surrogate. The top two nodes consist of applications with a positive balance in the account (`status`is either `"0 <= ... < 200 DM"`, `"... >= 200 DM"` or `"salary for at least 1 year"`) and either a duration of less or equal than 42 months (top left), or more than 42 months (top right). The bottom nodes contain applicants that either have no checking account or a negative balance (`status`) and either a duration of less than or equal to 36 months (bottom left) or more than 36 months (bottom right).
 #| fig-alt: Four barplots with 'count' on the y-axis and '.class' on the x-axis. Top left shows 150 'good' credit predictions and around 1 'bad' prediction. Top right shows around 10 'good' predictions and 1 'bad' one. Bottom left shows around 120 'good' predictions and 40 'bad' ones. Bottom right shows about 23 'bad' predictions and around 5 'good' ones.
 #| label: fig-iml-surro
-treesurrogate$plot()
+tree_surrogate$plot()
 ```
 
 Or we could access the trained tree surrogate via the `$tree` field of the `TreeSurrogate` object and then have access to all methods in `r ref_pkg("partykit")`:
 
 ```{r iml-globalsurrogate-tree}
-partykit::print.party(treesurrogate$tree)
+partykit::print.party(tree_surrogate$tree)
 ```
 
-Since the surrogate model only uses the predictions of the black-box model (here, the GBM model) and not the real outcomes of the underlying data, the conclusions drawn from the surrogate model do not apply generally, but only to the black-box model (if the approximation of the surrogate model is accurate enough).
+<!-- Since the surrogate model only uses the predictions of the black-box model (here, the GBM model) and not the real outcomes of the underlying data, the conclusions drawn from the surrogate model do not apply generally, but only to the black-box model (if the approximation of the surrogate model is accurate enough). -->
 
 #### Local Surrogate Model
 
@@ -211,44 +229,58 @@ Local surrogate models are constructed as follows:
 3.  Fit an interpretable, surrogate model on the weighted dataset using the predictions of the black-box model as the target.
 4.  Explain the prediction of our point of interest with the surrogate model.
 
-To illustrate this using the `iml` package, we will select a random data point to explain.
+To illustrate this, we will select a random data point to explain.
 As we are dealing with people, we will name our observation "Charlie" and first look at the black-box predictions:
 
 ```{r Charlie,  asis='results'}
 Charlie = credit_x[35, ]
-global_predict = predictor$predict(Charlie)
-global_predict
+gbm_predict = predictor$predict(Charlie)
+gbm_predict
 ```
 
 We can see that the model predicts the class '`r names(which.max(predictor$predict(Charlie)))`' with `r round(max(predictor$predict(Charlie))*100, 1)`%  probability, so now we can use `r ref("iml::LocalModel")` to find out why this prediction was made.
-The underlying surrogate model is a locally weighted L1-penalized linear regression model such that only a pre-defined number of features per class, `k` (default is `3`), will have a non-zero coefficient and as such are the `k` most influential features., below we set `k = 2`.
-We can also set the parameter `gower.power` which specifies the size of the neighborhood for the local model (default is `gower.power = 1`), the smaller the value the more the model will focus on points closer to the point of interest, below we set `gower.power = 0.01`.
+The underlying surrogate model is a locally weighted L1-penalized linear regression model such that only a pre-defined number of features per class, `k` (default is `3`), will have a non-zero coefficient and as such are the `k` most influential features, below we set `k = 2`.
+We can also set the parameter `gower.power` which specifies the size of the neighborhood for the local model (default is `gower.power = 1`), the smaller the value, the more the model will focus on points closer to the point of interest, below we set `gower.power = 0.1`.
 This implementation is very closely related to Local Interpretable Model-agnostic Explanations (`r index('LIME', lower = FALSE)`) (@Ribeiro2016lime), the differences are outlined in the documentation of `iml::LocalModel`.
 
-```{r iml-localsurrogate,message=FALSE,warning=FALSE}
+```{r iml-local_surrogate,message=FALSE,warning=FALSE}
 predictor$class = "good" # explain the 'good' class
-localsurrogate = LocalModel$new(predictor, Charlie, gower.power = 0.01,
+local_surrogate = LocalModel$new(predictor, Charlie, gower.power = 0.1,
   k = 2)
 ```
 
-If the prediction of the local model and the prediction of the black box model greatly differ then you might want to experiment with changing the `k` and `gower.power` parameters.
+If the prediction of the local model and the prediction of the black-box GBM model greatly differ, then you might want to experiment with changing the `k` and `gower.power` parameters, which can be considered hyperparameters of the local surrogate model that should be tuned to achieve an accurate local surrogate.
+We can first check if the predictions for Charlie match:
 
 ```{r}
-c(global = global_predict[[1]], local = localsurrogate$predict()[[1]])
+c(gbm = gbm_predict[[1]], local = local_surrogate$predict()[[1]])
 ```
 
-As we see good agreement between the local and black-box model we can move on to look at the most influential features for Charlie's predictions:
+Ideally, we should assess the fidelity of the surrogate model in the local neighborhood of Charlie, i.e., how well the local surrogate model approximates the predictions of the black-box GBM model in the vicinity of Charlie.
+For example, one can generate artificial data points in the local neighborhood of Charlie or select the $k$ nearest neighbors from the underlying original data (and potentially weight the data points according to their distance to Charlie) to assess the local model fidelity.
+Below, we measure the mean absolute error of the 10 nearest neighbors according to the Gower distance (@gower1971general):
+
+```{r}
+ind_10nn = gower::gower_topn(Charlie, credit_x, n = 10)$index[, 1]
+Charlie_10nn = credit_x[ind_10nn, ]
+
+gbm_pred_10nn = predictor$predict(Charlie_10nn)[[1]]
+local_pred_10nn = local_surrogate$predict(Charlie_10nn)[[1]]
+mean(abs(global_pred_10nn - local_pred_10nn))
+```
+
+As we see good agreement between the local and black-box model, we can move on to look at the most influential features for Charlie's predictions:
 
 ```{r, eval = FALSE}
-localsurrogate$results[, c("feature.value", "effect")]
+local_surrogate$results[, c("feature.value", "effect")]
 ```
 ```{r, echo = FALSE}
-x = localsurrogate$results[, c("feature.value", "effect")]
+x = local_surrogate$results[, c("feature.value", "effect")]
 rownames(x) = NULL
 x
 ```
 
-In this case, 'duration' and 'status' were most important and both decreased the predictive value.
+In this case, 'duration' and 'status' were most important and both have a negative effect on the prediction of Charlie.
 
 ### Shapley Values {#sec-shapley}
 `r index("Shapley values", lower = FALSE)` were originally developed in the context of cooperative game theory to study how the payout of a game can be fairly distributed among the players that form a team.
@@ -257,7 +289,7 @@ Hence, the 'players' are the features, and the 'payout', which should be fairly 
 
 Shapley values estimate how much each input feature contributed to the final prediction for a single observation (after subtracting the mean prediction).
 By assigning a value to each feature, we can gain insights into which features were the most important ones for the considered observation.
-Compared to the penalized linear model as a local surrogate model, Shapley values guarantee that the prediction is fairly distributed among the features.
+Compared to the penalized linear model as a local surrogate model, Shapley values guarantee that the prediction is fairly distributed among the features as they also inherently consider interactions between features when calculating the contribution of each feature.
 
 ::: {.callout-warning}
 ## Correctly Interpreting Shapley Values
@@ -266,20 +298,25 @@ The Shapley value of a feature is calculated by considering all possible subsets
 Hence, it refers to the average marginal contribution of a feature to the difference between the actual prediction and the mean prediction, given the current set of features.
 :::
 
-Shapley values can be calculated by passing the `Predictor` and the observation of interest to the constructor of `r ref("iml::Shapley")`:
+Shapley values can be calculated by passing the `Predictor` and the observation of interest to the constructor of `r ref("iml::Shapley")`. 
+The exact computation of Shapley values is time consuming, as it involves taking into account all possible combinations of features to calculate the marginal contribution of a feature. 
+Therefore, the estimation of Shapley values is often approximated.
+The `sample.size` argument (default is `sample.size = 100`) can be increased to obtain a more accurate approximation of exact Shapley values.
 
 ```{r iml-006}
 #| fig-height: 3
 #| fig-cap: Shapley values for Charlie. The actual prediction (0.63) displays the prediction of the model for the observation we are interested in, the average prediction (0.71) displays the average prediction over the given test dataset. Each horizontal bar is the Shapley value (phi) for the given feature.
 #| fig-alt: 10 bar plots of Shapley values, one for each feature. x-axis says 'phi' and ranges from -0.1 to 0.05. The strongest positive contribution is from 'purpose=furniture/equipment; 'other_debtors=none' has the smallest value, and 'status=no checking account' is the strongest negative contribution.
 #| label: fig-iml-shapley
-shapley = Shapley$new(predictor, x.interest = Charlie)
+shapley = Shapley$new(predictor, x.interest = Charlie, sample.size = 1000)
 shapley$plot()
 ```
 
 In @fig-iml-shapley, the Shapley values (`phi`) of the features show us how to fairly distribute the difference of Charlie's probability of being creditworthy to the dataset's average probability among the given features.
+The approximation is sufficiently good if all Shapley values (`phi`) sum up to the difference of the actual prediction and the average prediction.
+Here, we used `sample.size = 1000` leading to sufficiently good prediction difference of `r round(sum(shapley$results$phi), 3)` between the actual prediction of Charlie (`r round(gbm_predict[,1], 3)`) and the average prediction (`r round(mean(lrn_gbm$predict_newdata(credit_x)$prob[,1]), 3)`).
 The 'purpose' variable has the most positive effect on the probability of being creditworthy, with an increase in the predicted probability of around 5%.
-In contrast, the 'status' variable leads to a decrease in the predicted probability of over 5%.
+In contrast, the 'status' variable leads to a decrease in the predicted probability of over 10%.
 
 ## The counterfactuals Package {#sec-counterfactuals}
 
@@ -298,7 +335,9 @@ For our `tsk("german_credit")` example, we might consider what changes in featur
 knitr::include_graphics("Figures/counterfactuals.png", dpi = 600)
 ```
 
-A simple counterfactual method is the `r index('What-If', aside = TRUE, lower = FALSE)` approach (@Wexler2019) where, for a given prediction to explain, the counterfactual is the closest data point in the dataset with the desired prediction -- so if the underlying dataset is changed then the counterfactual can be quite different.
+A simple counterfactual method is the `r index('What-If', aside = TRUE, lower = FALSE)` approach (@Wexler2019) where, for a given prediction to explain, the counterfactual is the closest data point in the dataset with the desired prediction.
+Obviously, if we do not restrict ourselves to a fixed dataset, many possible counterfactual data points can exist, as there are many ways to achieve a desired prediction.
+However, the approach by @Wexler2019 only produces a single counterfactual explanation, as many other early counterfactual methods (see @guidotti2022counterfactual for a comprehensive overview).
 
 In contrast, the `r index('multi-objective counterfactuals', aside = TRUE)` method (MOC) (@Dandl2020) generates multiple artificially-generated counterfactuals that may not be equal to observations in a given dataset.
 The generation of counterfactuals is based on an optimization problem that aims for counterfactuals that:
@@ -308,14 +347,17 @@ The generation of counterfactuals is based on an optimization problem that aims 
 3) Only require changes in a few features; and
 4) Originate from the same distribution as the observations in the given dataset.
 
-All four objectives are optimized simultaneously via a multi-objective optimization method.
-The returned set is a set of non-dominated and, therefore equally good, counterfactuals with respect to the four objectives (similarly to the `r index('Pareto front', lower = FALSE)` we saw in @sec-multi-metrics-tuning).
+In MOC, all four objectives are optimized simultaneously via a multi-objective optimization method.
+Conversely, several other counterfactual methods rely on single-objective optimization methods, where multiple objectives are combined into a single objective, e.g., using a weighted sum. 
+However, a single-objective approach raises concerns about the appropriate weighting of objectives and is unable to account for inherent trade-offs among individual objectives. 
+Moreover, it may restrict the solution set of the counterfactural search to a single candidate.
+MOC returns a set of non-dominated and, therefore equally good, counterfactuals with respect to the four objectives (similarly to the `r index('Pareto front', lower = FALSE)` we saw in @sec-multi-metrics-tuning).
 
 Counterfactual explanations are available in the `counterfactuals` package, which depends on `r ref("iml::Predictor")` objects as inputs.
 
 ### What-If Method
 
-Continuing our previous example, we saw that the random forest classifies Charlie as having `r predictor$class` credit with a predicted probability of `r round(max(predictor$predict(Charlie))*100, 1)`%.
+Continuing our previous example, we saw that the GBM model classifies Charlie as having `r predictor$class` credit with a predicted probability of `r round(max(predictor$predict(Charlie))*100, 1)`%.
 We can use the What-If method to understand how the features need to change for this predicted probability to increase to 75%.
 We initialize a `r ref("counterfactuals::WhatIfClassif")` object with our `Predictor` and state that we only want to find one counterfactual (`n_counterfactuals = 1L`), increasing `n_counterfactuals` would return the specified number of counterfactuals closest to the point of interest.
 The `$find_counterfactuals()` method generates a counterfactual of class  `r ref("counterfactuals::Counterfactuals")`, below we set our desired predicted probability to be between `0.75` and `1` (`desired_prob = c(0.75, 1)`).
