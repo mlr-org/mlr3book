@@ -5,7 +5,7 @@
 `r chapter = "Advanced Technical Aspects of mlr3"`
 `r authors(chapter)`
 
-In the previous chapters, we demonstrated how to turn machine learning concepts and methods into code without going into a lot of technical detail.
+In the previous chapters, we demonstrated how to turn machine learning concepts and methods into code.
 In this chapter we will turn to those technical details that can be important for more advanced uses of `r mlr3`, including:
 
 * `r index('Parallelization')` with the `r ref_pkg("future")` framework (@sec-parallelization);
@@ -16,15 +16,13 @@ In this chapter we will turn to those technical details that can be important fo
 
 ## Parallelization {#sec-parallelization}
 
-{{< include ../../common/_optional.qmd >}}
-
 The term `r index("parallelization")` refers to running multiple algorithms in parallel, i.e., executing them simultaneously on multiple CPU cores, CPUs, or computational nodes.
 Not all algorithms can be parallelized, but when they can, parallelization allows significant savings in computation time.
 
 In general, there are many possibilities to parallelize, depending on the hardware to run the computations.
 If you only have a single CPU with multiple cores, then *threads* or *processes* are ways to utilize all cores on a local machine.
 If you have multiple machines on the other hand, they can communicate and exchange information via protocols such as *network sockets* or the *Message Passing Interface*.
-Larger computational sites rely on scheduling systems to orchestrate the computation for multiple users and offer a shared network file system all machines can access.
+Larger computational sites rely on scheduling systems to orchestrate the computation for multiple users and usually offer a shared network file system all machines can access.
 Interacting with scheduling systems on compute clusters is covered in @sec-hpc-exec using the R package `r ref_pkg("batchtools")`.
 
 There are a few pieces of terminology associated with parallelization that we will use in this section:
@@ -35,28 +33,27 @@ There are a few pieces of terminology associated with parallelization that we wi
 * The Main process is the R session or process that orchestrates the computational work, called jobs.
 * Workers are the R sessions, processes, or machines that receive the jobs, perform calculations, and then send the results back to Main.
 
-An important step in parallel programming involves the identification of sections of the program flow that are both time-consuming ('bottlenecks') and can run independently of a different section, i.e., section A's jobs are not dependent on the results of section B's jobs, and vice versa.
-Fortunately, these sections are relatively easy to spot for machine learning experiments:
+An important step in parallel programming involves the identification of sections of the program flow that are both time-consuming ('bottlenecks') and can run independently of a different section, i.e., section A's operations are not dependent on the results of section B's operations, and vice versa.
+Fortunately, these sections are usually relatively easy to spot for machine learning experiments:
 
 1. Training of a learning algorithm (or other computationally intensive parts of a machine learning pipeline) *may* contain independent sections which can run in parallel, e.g.
     * A single `r index('decision tree')` iterates over all features to find the best split point, for each feature independently.
     * A `r index('random forest')` usually fits hundreds of trees independently.
-    * Many feature `r index('filters')` work in a univariate fashion, i.e., calculate a numeric score for each feature independently.
 
    The key principle that makes parallelization possible for these examples (and in general in many fields of statistics and ML) is called `r index("data parallelism", aside = TRUE)`, which means the same operation is performed concurrently on different elements of the input data.
    Parallelization of learning algorithms is covered in @sec-parallel-learner.
 2. Resampling consists of independent repetitions of train-test-splits and benchmarking consists of multiple independent resamplings (@sec-parallel-resample).
-3. Tuning (@sec-optimization) is repeated benchmarking (nested resampling), embedded in a sequential procedure that determines the hyperparameter configuration to try next. In addition, while many tuning algorithms are inherently sequential, there are some (e.g., random search) that can propose multiple configurations in parallel to be evaluated independently, providing another level for parallelization (@sec-nested-resampling-parallelization).
+3. Tuning (@sec-optimization) often is iterated benchmarking, embedded in a sequential procedure that determines the hyperparameter configurations to try next. While many tuning algorithms are inherently sequential to some degree, there are some (e.g., random search) that can propose multiple configurations in parallel to be evaluated independently, providing another level for parallelization (@sec-nested-resampling-parallelization).
 4. Predictions of a single learner for multiple observations can be computed independently (@sec-parallel-predict).
 
-These examples are referred to as `r index("embarrassingly parallel", aside = TRUE)` as they are so easy to parallelize.
-If you can write a computation into a function that can be passed to map-like functions such as `r ref("lapply()")`, then you have an embarrassingly parallel problem.
+These examples are referred to as "`r index("embarrassingly parallel", aside = TRUE)`" as they are so easy to parallelize.
+If we can formulate the problem as a function that can be passed to map-like functions such as `r ref("lapply()")`, then you have an embarrassingly parallel problem.
 However, just because a problem *can* be parallelized, it does not follow that every operation in a problem *should* be parallelized.
 Starting and terminating workers as well as possible communication between workers comes at a price in the form of additionally required runtime which is called `r index("parallelization overhead", aside = TRUE)`.
 This overhead strongly varies between parallelization backends and must be carefully weighed against the runtime of the sequential execution to determine if parallelization is worth the effort.
 If the sequential execution is comparably fast, enabling parallelization may introduce additional complexity with little runtime savings, or could even slow down the execution.
-It can be possible to control the `r index("granularity", aside = TRUE)` of the parallelization to reduce the parallelization overhead.
-For example, we could reduce the overhead of parallelizing a `for`-loop with 1000 iterations on four CPU cores by `r index('chunking')` the work of the 1000 jobs into four computational jobs performing 250 iterations each, resulting in four bigger jobs and not 1000 small ones.
+It is possible to control the `r index("granularity", aside = TRUE)` of the parallelization to reduce the parallelization overhead.
+For example, we could reduce the overhead of parallelizing a `for`-loop with 1000 iterations on four CPU cores by `r index('chunking')` the work of the 1000 jobs into four computational jobs performing 250 iterations each, resulting in four big jobs and not 1000 small ones.
 
 This effect is illustrated in the following code chunk using a `r index('socket cluster')` with the `r ref_pkg("parallel")` package, which has a `chunk.size` option so we do not need to manually create chunks:
 ```{r technical-001, eval = TRUE}
@@ -78,12 +75,17 @@ system.time({parSapply(cl, x, f, chunk.size = 1)})
 system.time({parSapply(cl, x, f, chunk.size = 2500)})
 ```
 
-Whenever you have the option to control the granularity by setting the chunk size, you should aim for at least as many jobs as workers and also the runtime of each worker should be at least several seconds.
-This ensures that you can fully utilize the system and that the parallelization overhead stays reasonable.
+Whenever you have the option to control the granularity by setting the chunk size, you should aim for at least as many jobs as workers.
+However, if there are too few job chunks with strongly dissimilar runtimes, the system may end up waiting for the last chunk to finish, while other ressources are idle.
+This is referred to as `r index("synchronization overhead", aside = TRUE)`.
+You should therefore aim for chunks with a runtime of at least several seconds, so that the parallelization overhead remains reasonable, while still having enough chunks to ensures that you can fully utilize the system.
+
 If you have heterogeneous runtimes, you can consider grouping jobs so that the runtimes of the chunks are more homogeneous.
 If runtimes can be estimated, then `r ref("batchtools::binpack()")` and `r ref('batchtools::lpt()')` are useful for chunking jobs.
-If runtimes cannot be estimated, then it can be useful to randomize the order of jobs, this can prevent long jobs all being executed at the end, which leads to avoidable underutilization of resources.
-`r mlr3misc` ships with the functions `r ref("chunk()")` and `r ref("chunk_vector()")` to conveniently chunk jobs and also shuffles them per default.
+If runtimes cannot be estimated, then it can be useful to randomize the order of jobs.
+It could otherwise happen that jobs are accidentally ordered by runtime, e.g. because they are sorted by a hyperparameter that has a strong influence on training time.
+Naively chunking jobs could then lead to some chunks containing much more expensive jobs than others, resulting in avoidable underutilization of ressources.
+`r mlr3misc` ships with the functions `r ref("chunk()")` and `r ref("chunk_vector()")` that conveniently chunk jobs and also shuffle them by default.
 There are also options to control the chunk size for parallelization in `mlr3`, which are discussed in @sec-parallel-resample.
 
 ::: {.callout-tip}
@@ -92,20 +94,19 @@ There are also options to control the chunk size for parallelization in `mlr3`, 
 Reproducibility is often a concern during parallelization because special Pseudorandom number generators (PRNGs) may be required (@future119).
 However, `r ref_pkg("future")` ensures that all workers will receive the same PRNG streams, independent of the number of workers (@future119).
 Therefore, `mlr3` experiments will be reproducible as long as you use `set.seed` at the start of your scripts (with the PRNG of your choice).
-We can never guarantee complete reproducibility as this depends on the computational accuracy of the hardware, the processor instructions used, compiler versions and optimization flags, and/or the `r index("BLAS", lower = FALSE)` library for linear algebra.
 :::
 
 ### Parallelization of Learners {#sec-parallel-learner}
 
-At the lowest level, calls to external code can be parallelized if available in underlying implementations.
+At the lowest level, external code can be parallelized if available in underlying implementations.
 For example, while fitting a single decision tree, each split that divides the data into two disjoint partitions requires a search for the best cut point on all $p$ features.
 Instead of iterating over all features sequentially, the search can be broken down into $p$ threads, each searching for the best cut point on a single feature.
-These threads can be parallelized by the scheduler of the operating system as there is no need for communication between the threads.
+These threads can then be scheduled depending on available CPU cores, as there is no need for communication between the threads.
 After all the threads have finished, the results are collected and merged before terminating the threads.
 The $p$ best-cut points per feature are collected and aggregated to the single best-cut point across all features by iterating over the $p$ results sequentially.
 
 :::{.callout-tip}
-## GPU Parallelization
+## GPU computation
 
 Parallelization on GPUs is not covered in this book.
 `mlr3` only distributes the fitting of multiple learners, e.g., during resampling, benchmarking, or tuning.
@@ -129,7 +130,7 @@ lrn_ranger$param_set$ids(tags = "threads")
 lrn_ranger$param_set$values$num.threads
 ```
 
-To enable the parallelization for this learner, `mlr3` provides the helper function `r ref("set_threads()")`:
+To enable the parallelization for this learner, `mlr3` provides the helper function `r ref("set_threads()")`. It automatically adjusts the hyperparameters associated with builtin learner parallelization:
 ```{r technical-003}
 # use four CPUs
 set_threads(lrn_ranger, n = 4)
@@ -140,8 +141,6 @@ This heuristic is not always ideal (interested readers might want to look up "Am
 
 * You want to simultaneously use your system for other purposes.
 * You are on a multi-user system and want to spare some resources for other users.
-* You have a CPU with heterogeneous cores, for example, the energy-efficient "Icestorm" cores on a Mac M1 chip.
-  These are comparably slower than the high-performance "Firestorm" cores and not well suited for heavy computations.
 * You have linked R to a threaded `r index('BLAS', lower = FALSE)` implementation like OpenBLAS and your learners make heavy use of linear algebra.
 
 ```{r}
@@ -166,7 +165,7 @@ In many scenarios, it makes more sense to parallelize on a different level like 
 In addition to parallel learners, most machine learning experiments can be easily parallelized during resampling.
 By definition, resampling is performed by aggregating over independent repetitions of multiple train-test splits.
 
-`mlr3` makes use of `r ref_pkg("future")` to enable parallelization over resampling iterations using the parallel backend configured by the user via the `r ref("future::plan()")` function.
+`mlr3` makes use of `r ref_pkg("future")` to enable parallelization over resampling iterations using the parallel backend, which can be configured by the user via the `r ref("future::plan()")` function.
 
 By example, we will look at parallelizing three-fold CV for a decision tree on the sonar task (@fig-parallel-overview).
 We use the `r ref("future::multisession")` plan (which internally uses socket clusters from the `parallel` package) that should work on all operating systems.
@@ -175,7 +174,7 @@ We use the `r ref("future::multisession")` plan (which internally uses socket cl
 library(future)
 
 # select the multisession backend to use
-plan("multisession")
+future::plan("multisession")
 
 # run our experiment
 tsk_sonar = tsk("sonar")
@@ -233,10 +232,10 @@ design = benchmark_grid(tsks(c("sonar", "penguins")),
   lrns(c("classif.featureless", "classif.rpart")), rsmp_cv3)
 
 # enable parallelization
-plan("multisession")
+future::plan("multisession")
 
 # run benchmark in parallel
-benchmark(design)$aggregate()[, .(task_id, learner_id, classif.ce)]
+bmr = benchmark(design)
 ```
 
 See @sec-hpc-exec for larger benchmark experiments that may have a cumulative runtime of weeks, months or even years.
@@ -253,19 +252,20 @@ If you expect homogeneous runtimes, i.e., you are tuning over a single learner o
 In general, larger batches allow for more parallelization, while smaller batches imply a more frequent evaluation of the termination criteria.
 For example, `trm("perf_reached")` checks only after each batch evaluation if the performance level has been reached.
 If you run this terminator with a batch size of 10 and the first configuration of the batch yields better performance than the required performance threshold, the remaining nine configurations are evaluated nevertheless.
-For this reason, the `batch_size` parameter defaults to `1` so that all `r ref("Terminator")`s work as intended, i.e., you cannot exceed the computational budget and draw wrong conclusions while comparing tuning algorithms.
+For this reason, the `batch_size` parameter defaults to `1` so that all `r ref("Terminator")`s work as intended.
+This way, you cannot exceed the computational budget and draw wrong conclusions while comparing tuning algorithms.
 
 ### Nested Resampling Parallelization {#sec-nested-resampling-parallelization}
 
 As in benchmarking, nested resampling (@sec-nested-resampling) for tuning also translates into two nested resampling loops.
-But unlike benchmarking, the outer loop iterations are not necessarily independent of each other as different hyperparameters may be suggested in one iteration based on the results of the previous.
+But unlike benchmarking, the nner loop iterations are not necessarily independent of each other as different hyperparameters may be suggested in one iteration based on the results of the previous.
 Therefore, nested loops cannot be flattened, and the user instead has to choose which of the loops to parallelize.
 By example, let us tune the `minsplit` argument of a classification tree using an `r ref("AutoTuner")` (@sec-autotuner) and a racing algorithm (which is dependent on previous iterations), we will use two-fold CV for our inner resampling strategy and five-fold CV for our outer resampling strategy; first running sequentially without parallelization:
 
 ```{r technical-007}
 library(mlr3tuning)
 # reset to default sequential plan
-plan("sequential")
+future::plan("sequential")
 
 lrn_rpart = lrn("classif.rpart",
   minsplit  = to_tune(2, 128, logscale = TRUE))
@@ -284,7 +284,7 @@ If we parallelize the outer five-fold CV (@fig-parallel-outer), all four cores w
 
 ```{r technical-009, eval = FALSE}
 # Parallelize outer loop
-plan(list("multisession", "sequential"))
+future::plan(list("multisession", "sequential"))
 ```
 
 Assume that each fit during the inner resampling takes four seconds to compute and that there is no other significant overhead.
@@ -297,7 +297,7 @@ In contrast, if we parallelize the inner two-fold CV (@fig-parallel-inner) then 
 
 ```{r technical-010, eval = FALSE}
 # Parallelize inner loop
-plan(list("sequential", "multisession"))
+future::plan(list("sequential", "multisession"))
 ```
 
 ```{mermaid}
@@ -369,7 +369,7 @@ In this case, the number of workers must be manually tweaked with `r ref("future
 
 ```{r technical-011, eval = FALSE}
 # Runs both loops in parallel
-plan(list(
+future::plan(list(
   tweak("multisession", workers = 2),
   tweak("multisession", workers = 4)
 ))
@@ -394,22 +394,22 @@ lrn_rpart = lrn("classif.rpart")
 lrn_rpart$train(tsk_sonar)
 
 # set up parallel predict on four workers
-plan("multisession", workers = 4)
+future::plan("multisession", workers = 4)
 lrn_rpart$parallel_predict = TRUE
 
 # predict
-lrn_rpart$predict(tsk_sonar)$score()
+prediction = lrn_rpart$predict(tsk_sonar)
 ```
 
 ## Error Handling {#sec-error-handling}
 
 In large experiments, it is not uncommon that a model fit or prediction fails with an error.\index{debugging}
 This is because the algorithms have to process arbitrary data, and not all eventualities can always be handled.
-While we try to identify obvious problems before execution, such as when missing values occur (but a learner cannot handle them), other problems are far more complex to detect.
+While we try to identify obvious problems before execution, such as when missing values occur for a learner that cannot handle them, other problems are far more complex to detect.
 Examples include numerical problems that may cause issues in training (e.g., due to lack of convergence), or new levels of categorical variables appearing in the prediction step.
-Learners behave quite differently when encountering such problems: some models signal a warning during the training step that they failed to fit but return a baseline model, while other models stop the execution.
+Different learners behave quite differently when encountering such problems: some models signal a warning during the training step that they failed to fit but return a baseline model, while other models stop the execution.
 During prediction, some learners error and refuse to predict the response for observations they cannot handle, while others may predict `NA`.
-In this section, we will discuss how to prevent these errors from causing the program to stop when we do not want it to (e.g., during an experiment).
+In this section, we will discuss how to prevent these errors from causing the program to stop when we do not want it to (e.g., during a benchmark experiment).
 
 For illustration (and internal testing) of error handling, `mlr3` ships with `lrn("classif.debug")` and `lrn("regr.debug")`:
 
@@ -419,7 +419,8 @@ lrn_debug = lrn("classif.debug")
 lrn_debug
 ```
 
-This learner comes with special parameters that let us simulate problems frequently encountered in ML, for example, hyperparameters to control the probability of different conditions (message, warning, error, segfaults) being signaled and when these should occur (train or predict).
+This learner lets us simulate problems that are frequently encountered in ML.
+It can be configured to stochastically trigger warnings, errors, and even segfaults, during training or prediction.
 
 With the learner's default settings, the learner will remember a random label and constantly predict this label without signaling any conditions.
 In the following code we tell the learner to signal an error during the training step:
@@ -440,7 +441,7 @@ However, the result of the experiment will be a missing model and/or predictions
 In @sec-fallback, we will discuss fallback learners to replace missing models and/or predictions.
 
 Each `r ref("Learner")` contains the field `r index("$encapsulate", parent = "Learner", aside = TRUE, code = TRUE)` to control how the train or predict steps are wrapped.
-The easiest way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")`, which evaluates R expressions and captures and tracks conditions (outputs, messages, warnings or errors) without letting them crash the process (see documentation of `r ref("mlr3misc::encapsulate()")` for full details):
+The first way to encapsulate the execution is provided by the package `r ref_pkg("evaluate")`, which evaluates R expressions and captures and tracks conditions (outputs, messages, warnings or errors) without letting them stop the process (see documentation of `r ref("mlr3misc::encapsulate()")` for full details):
 
 ```{r technical-017}
 # trigger warning and error in training
@@ -475,6 +476,7 @@ lrn_debug$train(task = tsk_penguins)$errors
 ```
 
 As well as catching errors, we can also set a timeout, in seconds, so that learners do not run for an indefinite time (e.g., due to failing to converge) but are terminated after a specified time.
+This works most reliably when using `callr` encapsulation, since the `evaluate` method is sometimes not able to interrupt a learner if it gets stuck in external compiled code.
 If learners are interrupted, then this is logged as an error by the encapsulation process.
 Again, the timeout can be set separately for training and prediction:
 
@@ -499,8 +501,8 @@ lrn_debug$model
 lrn_debug$predict(tsk_penguins)
 ```
 
-Missing learners and/or predictions are particularly problematic during automated processes such as resampling, benchmarking, or tuning (@sec-encapsulation-fallback), as results cannot be aggregated across iterations.
-In the next section, we will look at fallback learners to impute missing models and predictions.
+Missing learners and/or predictions are particularly problematic during automated processes such as resampling, benchmarking, or tuning (@sec-encapsulation-fallback), as results cannot be aggregated properly across iterations.
+In the next section, we will look at fallback learners that impute missing models and predictions.
 
 ### `r index('Fallback Learners', "fallback learner")` {#sec-fallback}
 
@@ -515,7 +517,7 @@ Say an error has occurred when training a model in one or more iterations during
 3. Train and predict with a `r index('fallback learner', aside = TRUE)` --  Instead of imputing with the worst possible score, we could train a baseline learner and make predictions from this model.
 
 We strongly recommend the final option, which is statistically sound and can be easily used in any practical experiment.
-`mlr3` includes two baseline learners: `lrn("classif.featureless")`, which always predicts the majority class, and `lrn("regr.featureless")`, which always predicts the average response.
+`mlr3` includes two baseline learners: `lrn("classif.featureless")`, which in its default configuration always predicts the majority class, and `lrn("regr.featureless")`, which predicts the average response by default.
 
 To make this procedure convenient during resampling and benchmarking, we support fitting a baseline (though in theory you could use any `Learner`) as a `r index('fallback learner')` by passing a `r ref("Learner")` to `r index('$fallback', parent = "Learner", aside = TRUE, code = TRUE)`.
 In the next example, we add a classification baseline to our debug learner, so that when the debug learner errors, `mlr3` falls back to the predictions of the featureless learner internally.
@@ -558,10 +560,10 @@ E.g., if we only want to have a closer look into the debug learner, we can extra
 
 ```{r technical-025}
 rr = aggr[learner_id == "classif.debug"]$resample_result[[1L]]
-rr$errors
+rr$errors[1:2]
 ```
 
-In summary, combining encapsulation and fallback learners makes it possible to benchmark unreliable or unstable learning algorithms in a convenient and statistically sound fashion.
+In summary, combining encapsulation and fallback learners makes it possible to benchmark and tune unreliable or unstable learning algorithms in a convenient and statistically sound fashion.
 
 ## `r index("Logging")` {#sec-logging}
 
@@ -591,14 +593,14 @@ lgr::get_logger("mlr3")$set_threshold("warn")
 `lgr` comes with a global option called `"lgr.default_threshold"` which can be set via `options()` to make your choice permanent across sessions (note this will affect all packages using `lgr`), e.g., `options(lgr.default_threshold = "info")`.
 
 The packages in `mlr3` that make use of optimization, i.e., `r mlr3tuning` or `r mlr3fselect`, use the logger of their base package `r ref_pkg("bbotk")`.
-This means you could disable logging from the `mlr3` logger, but keep the output from `mlr3tuning`:
+This means you could disable "info"-logging from the `mlr3` logger, but keep the output from `mlr3tuning`:
 
 ```{r technical-031, eval=FALSE}
 lgr::get_logger("mlr3")$set_threshold("warn")
 lgr::get_logger("bbotk")$set_threshold("info")
 ```
 
-By default, output from `lgr` is printed in the console, however, you could choose to redirect this to another file format, for example to JSON:
+By default, output from `lgr` is printed in the console, however, you could choose to redirect this to a file in various formats, for example to a JSON file:
 
 ```{r technical-032}
 tf = tempfile("mlr3log_", fileext = ".json")
@@ -629,15 +631,13 @@ Debug mode should only be enabled during debugging and not in production use as 
 
 ## Data Backends {#sec-backends}
 
-{{< include ../../common/_optional.qmd >}}
-
 `Task` objects store their data in an abstract data object, the `r ref("DataBackend")`.
 A `r index("data backend")` provides a unified API to retrieve subsets of the data or query information about it, regardless of how the data is stored on the system.
-The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` as a very fast and efficient in-memory database.
+The default backend uses `r ref_pkg("data.table")` via the `r ref("DataBackendDataTable")` class as a very fast and efficient in-memory database.
 
 While storing the task's data in memory is most efficient for accessing it for model fitting, there are two major disadvantages:
 
-1. Although only a small proportion of the data is required, the complete dataset sits in, and consumes, memory.
+1. Even if only a small proportion of the data is required, for example when doing subsampling, the complete dataset sits in, and consumes, memory.
   This is especially a problem if you work with large tasks or many tasks simultaneously, e.g., for benchmarking\index{benchmark experiments}.
 1. During parallelization (@sec-parallelization), the complete data needs to be transferred to the workers which can increase the overhead.
 
@@ -646,7 +646,7 @@ This way, only the part of the data which is currently required by the learners 
 There are multiple options to handle this:
 
 1. `r ref("DataBackendDplyr")`, which interfaces the R package `r ref_pkg("dbplyr")`, extending `r ref_pkg("dplyr")` to work on many popular `r index("SQL", lower = FALSE)` databases like *MariaDB*, *PostgresSQL*, or *SQLite*.
-2. `r ref("DataBackendDuckDB")` for the impressive *`r index('DuckDB', lower = FALSE)`* database connected via `r ref_pkg("duckdb")`, which is a fast, zero-configuration alternative to `r index('SQLite', lower = FALSE)`.
+2. `r ref("DataBackendDuckDB")` for the *`r index('DuckDB', lower = FALSE)`* database connected via `r ref_pkg("duckdb")`, which is a fast, zero-configuration alternative to `r index('SQLite', lower = FALSE)`.
 3. `r ref("DataBackendDuckDB")` for `r index("Parquet", lower = FALSE)` files. This means the data does not need to be converted to DuckDB's native storage format and instead you can work directly on directories containing one or multiple files stored in the popular Parquet format.
 
 In the following, we will show how to work with each of these choices using `r ref_pkg("mlr3db")`\index{\texttt{mlr3db}}.
@@ -725,7 +725,7 @@ c(nrow = backend_flights$nrow, ncol = backend_flights$ncol)
 backend_flights$head()
 ```
 
-Note that the `DataBackendDplyr` can only operate on the data we provided, so does not 'know' about the rows and columns we already filtered out (this is in contrast to using `$filter` and `$subset` as in @sec-tasks-mutators).
+Note that the `DataBackendDplyr` can only operate on the data we provided, so does not 'know' about the rows and columns we already filtered out (this is in contrast to using `$filter` and `$subset` as in @sec-tasks-mutators, which only remove row or column roles).
 
 With a backend constructed, we can now use the standard `mlr3` API:
 
@@ -775,7 +775,7 @@ The backend can also operate on a folder with multiple parquet files.
 After getting this far in the book you are well on your way to being an `mlr3` expert and may even want to add more classes to our universe.
 Whilst many classes could be extended, all have a similar design interface and so, we will only demonstrate how to create a custom `r ref("Measure")`.
 If you are interested in implementing new learners, `PipeOp`s, or tuners, then check out the vignettes in the respective packages: `r mlr3extralearners`, `r mlr3pipelines`, or `r mlr3tuning`.
-If you are considering adding a new machine learning task then please contact us on GitHub, email, or Mattermost first so we can help you get started.
+If you are considering creating a package that adds an entirely new task type (next to regression, classification, survival etc.) then feel free to contact us for some support via GitHub, email, or Mattermost.
 This section assumes good knowledge of `R6`, see @sec-r6 for a brief introduction and references to further resources.
 
 As an example, let us consider a regression measure that scores a prediction as `1` if the difference between the true and predicted values is less than one standard deviation of the truth, or scores the prediction as `0` otherwise.
@@ -835,7 +835,7 @@ Sometimes measures require data from the training set, the task, or the learner.
 These are usually complex edge-cases examples, so we will not go into detail here, for working examples we suggest looking at the code for `r ref("mlr3proba::MeasureSurvSongAUC")` and `r ref("mlr3proba::MeasureSurvAUC")`.
 You can also consult the manual page of the `Measure` for an overview of other properties and meta-data that can be specified.
 
-Once you have defined your measure you can load it with the `R6` constructor (`$new()`), or by adding it to the `r ref("mlr_measures")` dictionary:
+Once you have defined your measure you can load it with the `R6` constructor (`$new()`), or make it available to be constructed with the `msr()` shorthand by adding it to the `r ref("mlr_measures")` dictionary:
 
 ```{r technical-049}
 tsk_mtcars = tsk("mtcars")
@@ -868,7 +868,7 @@ If you are working with large experiments or datasets, then understanding parall
 
 We have not covered any of these topics extensively and therefore recommended the following resources should you want to read more about these areas.
 If you are interested to learn more about parallelization in R, we recommend @Schmidberger2009 and @Eddelbuettel2020.
-To find out more about logging, then have a read of the vignettes in `lgr`, which cover everything from logging to JSON files to retrieving logged objects for debugging.
+To find out more about logging, have a read of the vignettes in `lgr`, which cover everything from logging to JSON files to retrieving logged objects for debugging.
 For an overview of available DBMS in R, see the CRAN task view on databases at `r link("https://cran.r-project.org/view=Databases")`, and in particular the vignettes of the `dbplyr` package for DBMS readily available in `mlr3`.
 
 @tbl-technical-api summarizes the most important classes, functions, and methods seen in this chapter.
@@ -878,7 +878,7 @@ For an overview of available DBMS in R, see the CRAN task view on databases at `
 | - | `r ref("future::plan()")` | - |
 | - | `r ref("set_threads()")` | - |
 | - | `r ref("future::tweak()")` | - |
-| `Learner` | `lrn()` | `$encapsulate`; `$fallback`; `$log` |
+| `Learner` | `lrn()` | `$encapsulate`; `$fallback`; `$timeout`; `$parallel_predict`; `$log` |
 | `r ref("lgr::Logger")` | `r ref("lgr::get_logger")` | `$set_threshold()` |
 | `r ref("mlr3db::DataBackendDplyr")` | `r ref("mlr3::as_data_backend")` | - |
 | `r ref("mlr3db::DataBackendDuckDB")` | `r ref("as_duckdb_backend")` | - |
@@ -893,20 +893,23 @@ tsk_penguins = tsk("penguins")
 lrn_debug = lrn("classif.debug", sleep_train = function() 3)
 rsmp_cv6 = rsmp("cv", folds = 6)
 
-plan("multisession", workers = 4)
+future::plan("multisession", workers = 4)
 resample(tsk_penguins, lrn_debug, rsmp_cv6)
 ```
 
-i. Assuming that the learner would actually calculate something and not just sleep: Would all CPUs be busy?
-ii. Prove your point by measuring the elapsed time, e.g., using `r ref("system.time()")`.
-iii. What would you change in the setup and why?
+(a) Assuming you were running this experiment on a computer with four CPUs, and that the learner would actually calculate something and not just sleep: Would all CPUs be busy for the entire time of this calculation?
+(b) Prove your point by measuring the elapsed time, e.g., using `r ref("system.time()")`.
+(c) What would you change in the setup and why?
 
-1. Create a new custom classification measure (either using methods demonstrated in @sec-extending or with `msr("classif.costs")` which scores predictions using the mean over the following classification costs:
+2. Create a new custom binary classification measure (either using methods demonstrated in @sec-extending or with `msr("classif.costs")`) which scores ("prob"-type) predictions.
+  This measure should compute the absolute difference between the predicted probability for the positive class and a 0-1 encoding of the ground truth and then average these values across the test set.
+  Test this with `classif.log_reg` on `tsk(“sonar”)`.
 
-* If the learner predicted label "A" and the truth is "A", assign score 0
-* If the learner predicted label "B" and the truth is "B", assign score 0
-* If the learner predicted label "A" and the truth is "B", assign score 1
-* If the learner predicted label "B" and the truth is "A", assign score 10
+3. "Tune" the `error_train` hyperparameter of the `classif.debug` learner on a continuous interval from 0 to 1, using a simple fallback learner.
+  Tune for 50 iterations using random search and holdout resampling.
+  Inspect the resulting archive and find out which evaluations resulted in an error, and which did not.
+  Now do the same in the interval 0.3 to 0.7.
+  Are your results surprising?
 
 ::: {.content-visible when-format="html"}
 `r citeas(chapter)`
