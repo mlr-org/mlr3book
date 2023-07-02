@@ -289,8 +289,12 @@ In the next section, we will look at a second example, which makes use of cross-
 
 ### Stacking with `po("learner_cv")` {#sec-pipelines-stack}
 
-`r index('Stacking')` (@Wolpert1992) is another technique that can significantly improve model performance.
-The basic idea behind stacking is to use predictions from one model as features for a subsequent model to try to improve performance (@fig-pipelines-stacking).
+`r index('Stacking')` (@Wolpert1992) is another very popular ensembling technique that can significantly improve predictive performance.
+The basic idea behind stacking is to use predictions from multiple models (usually referred to as level 0 models) as features for a subsequent model (the level 1 model) which in turn combines these predictions (@fig-pipelines-stacking).
+A simple combination can be a linear model (maybe regularized if you have very many level 0 models), since a weighted sum of level 0 models is often plausible and good enough.
+However, non-linear level 1 models are also possible, and it is also an option for the level 1 model to access the input features besides the level 0 predictions.
+Stacking can be built with more than two levels (both conceptually, and in `mlr3`) but we will limit ourselves to this simpler setup here, which also often works well enough.
+  
 As with bagging, we will demonstrate how to create a stacking pipeline manually, although a pre-constructed pipeline is available with `ppl("stacking")`.
 
 ```{r echo = FALSE, out.width = "70%"}
@@ -300,9 +304,10 @@ As with bagging, we will demonstrate how to create a stacking pipeline manually,
 include_multi_graphics("mlr3book_figures-27")
 ```
 
-Stacking depends on the predictions of models that are trained on one dataset.
-Therefore, analogously to nested resampling when tuning (@sec-nested-resampling), we must limit overfitting by stacking features from cross-validated data, this is possible in pipelines with `r ref("PipeOpLearnerCV", index = TRUE)`.
-Each of the models is trained on a subset of folds and makes predictions on the out-of-fold data, obtaining predictions for all data points in our input data without 'leaking' information into the prediction stage.
+For a stacking pipeline to work, it is necessary that the level 0 learners return predictions during the `$train()` phase.
+This is possible in `mlr3pipelines` with `r ref("PipeOpLearnerCV", index = TRUE)`.
+During training, it performs a cross-validation and returns the out-of-sample predictions into the level 1 model.
+Using cross-validated predictions is also recommended in stacking since it reduces the risk of overfitting.
 
 We first create learners to produce the predictions that will be used as features, known as the "level 0" learners.
 Like bagging, stacking also often uses 'weak' learners that might not perform well on their own.
@@ -408,12 +413,16 @@ Having covered the building blocks of `mlr3pipelines` and seen these in practice
 
 ## `r index('Tuning')` Graphs {#sec-pipelines-tuning}
 
-By making use of `r ref("GraphLearner")`, it is possible to tune a `r ref("Graph")` of arbitrary complexity using `r mlr3tuning`.
-However, tuning pipelines is not straightforward as not only do you have to choose which `Learner` `r index('hyperparameters')` to tune, but you also have to consider which `r ref("PipeOp")`s to include in the pipeline and which of their hyperparameters to tune.
-For example, we saw how to create different complexities of bagging pipelines in @sec-pipelines-bagging, if we wanted to tune this we would have to decide: 1) which `r ref("Learner")` to use as our weak learner; 2) the hyperparameters to tune for the weak learner and their ranges; 3) if we should tune the replications of `ppl("greplicate")`; 4) if we should tune or select the averaging method; 5) should we add a custom feature selection and tune this?; 6) what sampling method should we use and should the sampling fraction be tuned?
-This gets more complicated with stacking if we have many weak learners we might want to tune.
-And yet more complicated if we also want to decide if further `r index('preprocessing')` steps are necessary.
-To consider these questions, in @sec-pipelines-combined we will look at how to tune `Learner` and `PipeOp` hyperparameters and then in @sec-pipelines-branch and @sec-pipelines-proxy we will take this a step further to see how we can also tune the choice of which operations to include in the pipeline, known as "`r index('Combined Algorithm Selection and Hyperparameter optimization')`"\index{CASH|see{combined algorithm selection and hyperparameter optimization}} (@Thornton2013).
+By wrapping a pipeline inside a `r ref("GraphLearner")`, we can tune it at two levels of complexity using `r mlr3tuning`:
+
+1. Tuning of a fixed, usually sequential pipeline, where preprocessing is combined with a given learner.
+  This simply means the joint tuning of any subset of selected hyperparameters of operations in the pipeline.
+  Conceptually and also technically in `mlr3`, this is not much different from tuning a learner that is not part of a pipeline.
+
+2. Tuning not only the hyperparameters of a pipeline, whose structure is not completely fixed in terms of its included operations, but also which concrete `r ref("PipeOp")`s should be applied to data.
+  This allows us to select these operations (e.g. which learner to use, which preprocessing to perform) in a data-driven manner and this is known as "`r index('Combined Algorithm Selection and Hyperparameter optimization')`"\index{CASH|see{combined algorithm selection and hyperparameter optimization}} (@Thornton2013).
+  As we will soon see, we can do this in `mlr3pipelines` by using the powerful branching (@sec-pipelines-branch) and proxy (@sec-pipelines-proxy) meta operators.
+  Through this, we can conveniently create our own "mini AutoML systems" (@hutter2019automated) in `mlr3`, which can even be geared for specific tasks.
 
 ### Tuning Graph Hyperparameters {#sec-pipelines-combined}
 
@@ -423,19 +432,8 @@ Let us consider a simple, sequential pipeline using `po("pca")` followed by `lrn
 graph_learner = as_learner(po("pca") %>>% lrn("classif.kknn"))
 ```
 
-Now if we wanted to tune the `k` parameter of the KNN model we *could* use an `r ref("AutoTuner")` and pass this to the graph as a `r ref("Learner")`:
-
-```{r}
-at_knn = auto_tuner(tnr("random_search"),
-  lrn("classif.kknn", k = to_tune(1, 32)), rsmp("holdout"),
-  term_evals = 10)
-
-graph_learner = as_learner(po("pca") %>>% at_knn)
-resample(tsk("sonar"), graph_learner, rsmp("holdout"))$aggregate()
-```
-
-However, if we also wanted to tune the `rank.` parameter of our PCA `r ref("PipeOp")` then this would be inefficient as the optimal hyperparameters may depend on each other.
-Instead, we would tune the graph directly by tuning `PipeOp`s in the same way as `Learner`s:
+As the optimal setting of the `rank.` hyperparameter of our PCA `r ref("PipeOp")` can very realistically depend on the value of the `k` hyperparameter of the KNN model, jointly tuning them seems reasonable.
+For this, we can simply use the syntax for tuning `Learner`s, which was introduced in @sec-optimization.
 
 ```{r}
 lrn_knn = lrn("classif.kknn", k = to_tune(1, 32))
@@ -444,8 +442,8 @@ graph_learner = as_learner(po_pca %>>% lrn_knn)
 graph_learner$param_set$values
 ```
 
-We can see how the pipeline's `$param_set` includes the tune tokens for all elements of the pipeline so when we tune the pipeline these are combined in hyperparameter configurations.
-We can compare the tuned and untuned pipeline in a benchmark experiment by using an `AutoTuner`:
+We can see how the pipeline's `$param_set` includes the tune tokens for all selected hyperparameters, creating a joint search space.
+We can compare the tuned and untuned pipeline in a benchmark experiment with nested resampling by using an `AutoTuner`:
 
 ```{r}
 glrn_tuned = auto_tuner(tnr("random_search"), graph_learner,
@@ -456,9 +454,8 @@ design = benchmark_grid(tsk("sonar"), c(glrn_tuned, glrn_untuned),
 benchmark(design)$aggregate()[, .(learner_id, classif.ce)]
 ```
 
-Using the same syntax as we have learned in @sec-optimization, you can now tune hyperparameters for fixed pipelines.
-Tuning pipelines will usually take longer than tuning individual learners as training steps are often more complex and the search space may be much larger.
-Therefore, parallelization is often required in practice (@sec-parallelization) and/or more efficient tuning methods for searching large search spaces such as `r index('Bayesian optimization', lower = FALSE)` (@sec-bayesian-optimization).
+Tuning pipelines will usually take longer than tuning individual learners as training steps are often more complex and the search space will be larger.
+Therefore, parallelization is often appropriate (@sec-parallelization) and/or more efficient tuning methods for searching large tuning spaces such as `r index('Bayesian optimization', lower = FALSE)` (@sec-bayesian-optimization) become more attractive.
 
 ### Tuning Alternative Paths with po("branch") {#sec-pipelines-branch}
 
