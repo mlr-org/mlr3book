@@ -7,9 +7,9 @@
 
 Having looked at the basic usage of `r mlr3tuning`, we will now turn to more advanced methods.
 We will begin in @sec-tuning-errors by continuing to look at single-objective tuning but will consider what happens when experiments go wrong and how to prevent fatal errors\index{debugging}.
-We will then extend the methodology from @sec-optimization to enable `r index('multi-objective tuning')`, where learners are optimized to multiple measures simultaneously, in @sec-multi-metrics-tuning we will consider important theory behind this and demonstrate how this is handled relatively simply in `mlr3` by making use of the same classes and methods we have already used.
+We will then extend the methodology from @sec-optimization to enable `r index('multi-objective tuning')`, where learners are optimized to multiple measures simultaneously, in @sec-multi-metrics-tuning we will demonstrate how this is handled relatively simply in `mlr3` by making use of the same classes and methods we have already used.
 The final two sections focus on specific optimization methods.
-@sec-hyperband looks in detail at multi-fidelity tuning and the Hyperband tuner, considers some theory behind this method and then demonstrates it in practice with `r mlr3hyperband`.
+@sec-hyperband looks in detail at multi-fidelity tuning and the Hyperband tuner, and then demonstrates it in practice with `r mlr3hyperband`.
 Finally, @sec-bayesian-optimization takes a deep dive into black-box Bayesian Optimization.
 This is a more theory-heavy section to motivate the design of the classes and methods in `r mlr3mbo`.
 
@@ -23,25 +23,27 @@ In particular, we will consider how to enable features that prevent fatal errors
 Error handling is discussed in detail in @sec-error-handling, however, it is very important in the context of tuning so here we will just practically demonstrate how to make use of encapsulation and fallback learners and explain why they are essential during HPO.
 
 Even in simple machine learning problems, there is a lot of potential for things to go wrong.
-For example, when learners do not converge, run out of memory, or terminate with an error due to issues in the underlying data or bugs in the code.
-As a common example, learners can fail if there are factor levels present in the test data that were not in the training data, models fail in this case as there have been no weights/coefficients trained for these new factor levels:
+For example, when learners do not converge, run out of memory, or terminate with an error due to issues in the underlying data.
+As a common issue, learners can fail if there are factor levels present in the test data that were not in the training data, models fail in this case as there have been no weights/coefficients trained for these new factor levels:
 
 ```{r, error = TRUE, warning = FALSE, message = FALSE}
-tsk_penguins = tsk("penguins")
+tsk_pen = tsk("penguins")
+# remove rows with missing values
+tsk_pen$filter(tsk_pen$row_ids[complete.cases(tsk_pen$data())])
 # create custom resampling with new factors in test data
 rsmp_custom = rsmp("custom")
-rsmp_custom$instantiate(tsk_penguins,
-  list(which(tsk_penguins$data()$island != "Biscoe")),
-  list(which(tsk_penguins$data()$island == "Biscoe"))
+rsmp_custom$instantiate(tsk_pen,
+  list(tsk_pen$row_ids[tsk_pen$data()$island != "Torgersen"]),
+  list(tsk_pen$row_ids[tsk_pen$data()$island == "Torgersen"])
 )
 msr_ce = msr("classif.ce")
 tnr_random = tnr("random_search")
-learner = lrn("classif.gbm", n.trees = to_tune(50, 100))
+learner = lrn("classif.lda", method = "t", nu = to_tune(3, 10))
 
-tune(tnr_random, tsk_penguins, learner, rsmp_custom, msr_ce, 10)
+tune(tnr_random, tsk_pen, learner, rsmp_custom, msr_ce, 10)
 ```
 
-In the above example, we can see the tuning process breaks and we lose all information about the hyperparameter optimization process as the `instance` cannot be saved.
+In the above example, we can see the tuning process breaks and we lose all information about the hyperparameter optimization process.
 This is even worse in nested resampling or benchmarking when errors could cause us to lose all progress across multiple configurations or even learners and tasks.
 
 `r index('Encapsulation')` (@sec-encapsulation) allows errors to be isolated and handled, without disrupting the tuning process.
@@ -51,7 +53,7 @@ We can tell a learner to encapsulate an error by setting the `$encapsulate` fiel
 learner$encapsulate = c(train = "evaluate", predict = "evaluate")
 ```
 
-Note by passing `"evaluate"` to both `train` and `predict`, we are telling the learner to set up encapsulation in both the training and prediction stages, however, we could have only set it for one stage (see @sec-error-handling for other encapsulation options).
+Note by passing `"evaluate"` to both `train` and `predict`, we are telling the learner to set up encapsulation in both the training and prediction stages (see @sec-error-handling for other encapsulation options).
 
 Another common issue that cannot be easily solved during HPO is learners not converging and the process running indefinitely.
 We can prevent this from happening by setting the `timeout` field in a learner, which signals the learner to stop if it has been running for that much time (in seconds), again this can be set for training and prediction individually:
@@ -61,7 +63,7 @@ learner$timeout = c(train = 30, predict = 30)
 ```
 
 Now if either an error occurs, or the model timeout threshold is reached, then instead of breaking, the learner will simply not make predictions when errors are found and the result is `NA` for resampling iterations with errors.
-When this happens, our hyperparameter optimization experiment will fail as we cannot aggregate results across resampling iterations (@sec-fallback discusses why you cannot just ignore the `NA`s).
+When this happens, our hyperparameter optimization experiment will fail as we cannot aggregate results across resampling iterations.
 Therefore it is essential to select a `r index('fallback learner')` (@sec-fallback), which is a learner that will be fitted if the learner of interest fails.
 
 A common approach is to use a featureless baseline\index{baselines} (`lrn("regr.featureless")` or `lrn("classif.featureless")`).
@@ -74,7 +76,7 @@ learner$fallback = lrn("classif.featureless")
 We can now run our experiment and see errors that occurred during tuning in the archive.
 
 ```{r optimization-038}
-instance = tune(tnr_random, tsk_penguins, learner, rsmp_custom, msr_ce,
+instance = tune(tnr_random, tsk_pen, learner, rsmp_custom, msr_ce,
   10)
 
 as.data.table(instance$archive)[1:3, .(df, classif.ce, errors)]
@@ -91,18 +93,18 @@ instance$result
 
 ### Memory Management {#sec-memory-management}
 
-Running a large tuning experiment requires a lot of working memory, especially when using nested resampling.
+Running a large tuning experiment can use a lot of memory, especially when using nested resampling.
 Most of the memory is consumed by the models since each resampling iteration creates one new model.
+Storing the models is therefore disabled by default and in most cases is not required.
 The option `store_models` in the functions `r ref("ti()")` and `r ref("auto_tuner()")` allows us to enable the storage of the models.
-Storing the models is disabled by default and in most cases is not required.
 
 The archive stores a `r ref("ResampleResult")` for each evaluated hyperparameter configuration.
-The contained `r ref("Prediction")` objects can take up a lot of memory, especially with large datasets and many resampling iterations.
+The contained `r ref("Prediction")` objects can also take up a lot of memory, especially with large datasets and many resampling iterations.
 We can disable the storage of the resample results by setting `store_benchmark_result = FALSE` in the functions `ti()` and `auto_tuner()`.
-Note that without the resample results, it is no longer possible to score the configurations on another measure.
+Note that without the resample results, it is no longer possible to score the configurations with another measure.
 
 When we run nested resampling with many outer resampling iterations, additional memory can be saved if we set `store_tuning_instance = FALSE` in the `auto_tuner()` function.
-However, the functions `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` would then no longer work.
+However, the functions `r ref("extract_inner_tuning_results()")` and `r ref("extract_inner_tuning_archives()")` will then no longer work.
 
 The option `store_models = TRUE` sets `store_benchmark_result` and `store_tuning_instance` to `TRUE` because the models are stored in the benchmark results which in turn is part of the instance.
 This also means that `store_benchmark_result = TRUE` sets  `store_tuning_instance` to `TRUE`.
@@ -114,9 +116,9 @@ This way we can still access the aggregated performance (`rr$aggregate()`) but l
 ## Multi-Objective Tuning {#sec-multi-metrics-tuning}
 
 So far we have considered optimizing a model with respect to one metric, but multi-criteria, or `r index("multi-objective", "multi-objective tuning", aside = TRUE)` optimization, is also possible.
-A simple example of multi-objective optimization might be optimizing a classifier to minimize false positive *and* false negative predictions.
+A simple example of multi-objective optimization might be optimizing a classifier to simultaneously maximize true positive predictions and minimize false negative predictions.
 In another example, consider the single-objective problem of tuning a `r index('neural network')` to minimize classification error.
-The best-performing model is likely to be quite complex, possibly with many layers that will take a long time to train, which would not be appropriate when you have limited resources.
+The best-performing model is likely to be quite complex, possibly with many layers that will have drawbacks like being harder to deploy on devices with limited resources.
 In this case, we might want to simultaneously minimize the classification error and model complexity.
 
 By definition, optimization of multiple metrics means these will be in competition (otherwise we would only optimize one of them) and therefore in general no *single* configuration exists that optimizes all metrics.
@@ -162,7 +164,7 @@ tuner = tnr("random_search")
 tuner$optimize(instance)
 ```
 
-Finally, we inspect the best-performing configurations, i.e., the Pareto set, and visualize the corresponding estimated Pareto front (@fig-pareto).
+Finally, we inspect the best-performing configurations, i.e., the Pareto set, and visualize the corresponding estimated Pareto front (@fig-pareto). Note that the `selected_features` measure is averaged across the folds, so the values in the archive may not always be integers.
 
 ```{r optimization-085}
 instance$archive$best()[, .(cp, minsplit, maxdepth, classif.ce,
@@ -171,7 +173,7 @@ instance$archive$best()[, .(cp, minsplit, maxdepth, classif.ce,
 
 ```{r optimization-086,message=FALSE, echo = FALSE, warning = FALSE}
 #| label: fig-pareto
-#| fig-cap: Pareto front of selected features and classification error. White dots represent tested configurations, each black dot individually represents a Pareto-optimal configuration and all black dots together represent the Pareto front.
+#| fig-cap: Pareto front of selected features and classification error. White dots represent tested configurations, each black dot individually represents a Pareto-optimal configuration and all black dots together represent the approximated Pareto front.
 #| fig-alt: Scatter plot with selected_features on x-axis and classif.ce on y-axis. Plot shows around 15 white dots and two black dots joined by a line at roughly (1, 0.26) and (2.5, 0.25).
 library(ggplot2)
 
@@ -200,7 +202,7 @@ ggplot(as.data.table(instance$archive), aes(x = selected_features, y = classif.c
   theme_minimal()
 ```
 
-Determining which configuration to use from the Pareto front is up to you.
+Determining which configuration to deploy from the Pareto front is up to you.
 By definition, there is no optimal configuration so this may depend on your use case, for example, if you would prefer lower complexity at the cost of higher error then you might prefer a configuration where `selected_features = 1`.
 
 You can select one configuration and pass it to a learner for training using `$result_learner_param_vals`, so if we want to select the second configuration we would run:
@@ -208,11 +210,9 @@ You can select one configuration and pass it to a learner for training using `$r
 ```{r}
 learner = lrn("classif.rpart")
 learner$param_set$values = instance$result_learner_param_vals[[2]]
-learner$param_set
 ```
 
 As multi-objective tuning requires manual intervention to select a configuration, it is currently not possible to use `r ref("auto_tuner()")`.
-Furthermore, it can also be quite difficult to compare multiple models over multiple measures.
 
 ## Multi-Fidelity Tuning via Hyperband {#sec-hyperband}
 
@@ -220,37 +220,37 @@ Increasingly large datasets and search spaces and increasingly complex models ma
 To tackle this, some HPO methods make use of evaluating a configuration at multiple fidelity levels\index{fidelity}.
 `r index('Multi-fidelity HPO', "multi-fidelity", parent = "fidelity", lower = FALSE, aside = TRUE)` is motivated by the idea that the performance of a lower-fidelity model is indicative of the full-fidelity model, which can be used to make HPO more efficient (as we will soon see with Hyperband).
 
-To unpack what these terms mean and to motivate multi-fidelity tuning, say that we think a gradient boosting algorithm with 1000 rounds will be a very good fit to our training data.
+To unpack what these terms mean and to motivate multi-fidelity tuning, say that we think a gradient boosting algorithm with up to 1000 rounds will be a very good fit to our training data.
 However, we are concerned this model will take too long to tune and train.
-Therefore, we want to gauge the performance of this model using a less complex model that is quicker to train by setting a smaller number of rounds.
-In this example, the hyperparameter controlling the number of rounds is a *fidelity parameter*, as it controls the tradeoff between model performance and complexity.
+Therefore, we want to gauge the performance of this model using a similar model that is quicker to train by setting a smaller number of rounds.
+In this example, the hyperparameter controlling the number of rounds is a *fidelity parameter*, as it controls the tradeoff between model performance and speed.
 The different configurations of this parameter are known as *fidelity levels*.
 We refer to the model with 1000 rounds as the model at *full-fidelity* and we want to approximate this model's performance using models at different fidelity levels.
 Lower fidelity levels result in low-fidelity models that are quicker to train but may poorly predict the full-fidelity model's performance.
-On the other hand, higher fidelity levels result in high-fidelity models that are slower to train but may better predict the full-fidelity model's performance.
+On the other hand, higher fidelity levels result in high-fidelity models that are slower to train but may better indicate the full-fidelity model's performance.
 
-Other common models that have fidelity parameters include `r index('neural networks', "neural network")` (number of epochs) and `r index('random forests', 'random forest')` (number of trees).
-The proportion of data to sample before running any algorithm can also be viewed as a model-agnostic fidelity parameter, we will return to this in @sec-hyperband-example-svm.
+Other common models that have natural fidelity parameters include `r index('neural networks', "neural network")` (number of epochs) and `r index('random forests', 'random forest')` (number of trees).
+The proportion of data to subsample before running any algorithm can also be viewed as a model-agnostic fidelity parameter, we will return to this in @sec-hyperband-example-svm.
 
 ### Hyperband and Successive Halving
 
 A popular multi-fidelity HPO algorithm is *Hyperband* [@li_2018].
 After having evaluated randomly sampled configurations on low fidelities, `r index('Hyperband')` iteratively allocates more resources to promising configurations and terminates low-performing ones early.
 Hyperband builds upon the Successive Halving algorithm by @jamieson_2016.
-Successive Halving is initialized with a number of starting configurations $m$, the proportion of configurations discarded in each stage $\eta$, and the minimum, $r{_{min}}$, and maximum, $r{_{max}}$, budget (fidelity) of a single evaluation.
-The algorithm starts by sampling $m$ random configurations and allocating the minimum budget $r{_{min}}$ to them.
-The configurations are evaluated and $\frac{1}{\eta}$ of the worst-performing configurations are discarded.
+Successive Halving is initialized with a number of starting configurations $m_0$, the proportion of configurations discarded in each stage $\eta$, and the minimum, $r{_{0}}$, and maximum, $r{_{max}}$, budget (fidelity) of a single evaluation.
+The algorithm starts by sampling $m_0$ random configurations and allocating the minimum budget $r{_{0}}$ to them.
+The configurations are evaluated and $\frac{\eta - 1}{\eta}$ of the worst-performing configurations are discarded.
 The remaining configurations are promoted to the next stage, or 'bracket', and evaluated on a larger budget.
 This continues until one or more configurations are evaluated on the maximum budget $r{_{max}}$ and the best-performing configuration is selected.
 The total number of stages is calculated so that each stage consumes approximately the same overall budget.
-A big disadvantage of this method is that it is unclear if it is better to start with many configurations (large $m$) and a small budget or fewer configurations (small $m$) but a larger budget.
+A big disadvantage of this method is that it is unclear if it is better to start with many configurations (large $m_0$) and a small budget or fewer configurations (small $m_0$) but a larger budget.
 
-Hyperband solves this problem by running Successive Halving with different numbers of starting configurations, each at different budget levels.
-The algorithm is initialized with the same $\eta$, $r_{min}$, and $r_{max}$ parameters (but not $m$).
-Each bracket starts with a different budget, $r_0$, where smaller values mean that more configurations can be evaluated and so the most exploratory bracket (i.e., the one with the most number of stages) is allocated the minimum budget $r_{min}$.
-In each bracket, the starting budget increases by a factor of $\eta$ until the last bracket ($s = 0$) essentially performs a random search with the full budget $r_{max}$ -- the minimum budget, $r_{min}$, may have to be adjusted so the last bracket does not exceed $r_{max}$.
+Hyperband solves this problem by running Successive Halving with different numbers of starting configurations, each at different budget levels $r_{0}$.
+The algorithm is initialized with the same $\eta$ and $r_{max}$ parameters (but not $m_0$).
+Each bracket starts with a different budget, $r_0$, where smaller values mean that more configurations can be evaluated and so the most exploratory bracket (i.e., the one with the most number of stages) is allocated the global minimum budget $r_{min}$.
+In each bracket, the starting budget increases by a factor of $\eta$ until the last bracket essentially performs a random search with the full budget $r_{max}$.
 The total number of brackets, $s_{max} + 1$, is calculated as $s_{max} = {\log_\eta \frac{r_{max}}{r_{min}}}$.
-The number of configurations are calculated so that each bracket uses approximately the same amount of budget.
+The number of starting configurations $m_0$ of each bracket are calculated so that each bracket uses approximately the same amount of budget.
 The optimal hyperparameter configuration in each bracket is the configuration with the best performance in the final stage.
 The optimal hyperparameter configuration at the end of tuning is the configuration with the best performance across all brackets.
 
@@ -283,7 +283,7 @@ An example Hyperband schedule is given in @tbl-hyperband where $s = 3$ is the mo
 | $HPC^*_s$   | $\{1\}$ | $\{15\}$ | $\{21\}$ | $\{22\}$ |
 | $HPC^*$   | $\{15\}$ |
 
-: Hyperparameter configurations in each stage and bracket from the schedule in @tbl-hyperband. Entries are unique identifiers for tested hyperparameter configurations (HPCs) (all HPCs are assigned unique identifiers although theoretically multiple HPCs could contain the same values). $HPC^*_s$ is the optimal hyperparameter configuration in bracket $s$ and $HPC^*$ is the optimal hyperparameter configuration across all brackets. {#tbl-hyperband-eg}
+: Hyperparameter configurations in each stage and bracket from the schedule in @tbl-hyperband. Entries are unique identifiers for tested hyperparameter configurations (HPCs). $HPC^*_s$ is the optimal hyperparameter configuration in bracket $s$ and $HPC^*$ is the optimal hyperparameter configuration across all brackets. {#tbl-hyperband-eg}
 
 ### mlr3hyperband
 
@@ -312,9 +312,8 @@ learner$param_set$set_values(
 )
 ```
 
-We now construct the tuning instance and tuner.
-We use `trm("none")` because Hyperband terminates itself after all brackets have been evaluated.
-We also set `eta = 2` and control the number of repetitions with `repetitions = 1`.
+We now construct the tuning instance and a hyperband tuner with `eta = 2`.
+We use `trm("none")` and set the `repetitions` control parameter to `1` so that Hyperband can terminate itself after all brackets have been evaluated a single time.
 Note that setting `repetition = Inf` can be useful if you want a terminator to stop the optimization, for example, based on runtime.
 The `r ref("hyperband_schedule()")` function can be used to display the schedule across the given fidelity levels and budget increase factor.
 
@@ -347,14 +346,14 @@ as.data.table(instance$archive)[,
 ## Bayesian Optimization {#sec-bayesian-optimization}
 
 In this section, we will take a deep dive into `r index('Bayesian optimization', lower = FALSE)` (BO), also known as Model Based Optimization (MBO)\index{model based optimization|see{Bayesian optimization}}.
-The design of BO is different from what we have seen so far in other tuning methods so to help motivate this we will spend a little more time in this section on theory and methodology.
+The design of BO is more complex than what we have seen so far in other tuning methods so to help motivate this we will spend a little more time in this section on theory and methodology.
 
 In `r index('hyperparameter optimization')` (@sec-optimization), learners are passed a hyperparameter configuration and evaluated on a given task via a resampling technique to estimate its generalization performance with the goal to find the optimal hyperparameter configuration.
 In general, no analytical description for the mapping from hyperparameter configuration to performance exists and gradient information is also not available.
 HPO is, therefore, a prime example for `r index('black-box optimization', aside = TRUE)`, which considers the optimization of a function whose mathematical structure and analytical description is unknown or unexploitable.
 As a result, the only observable information is the output value (i.e., generalization performance) of the function given an input value (i.e., hyperparameter configuration).
 In fact, as evaluating the performance of a learner can take a substantial amount of time, HPO is quite an expensive black-box optimization problem.
-In the real world, black-box optimization problems are encountered all the time, for example, modeling experiments like crash tests or chemical reactions.
+Black-box optimization problems occur in the real-world, for example they are encountered quite often in engineering such as in modeling experiments like crash tests or chemical reactions.
 
 Many optimization algorithm classes exist that can be used for black-box optimization, which differ in how they tackle this problem; for example we saw in @sec-optimization methods including grid/random search and briefly discussed evolutionary strategies.
 Bayesian optimization refers to a class of sample-efficient iterative global black-box optimization algorithms that rely on a 'surrogate model' trained on observed data to model the black-box function.
@@ -449,7 +448,7 @@ optimizer = opt("random_search", batch_size = 20)
 optimizer$optimize(instance)
 ```
 
-Similarly to how we can use `r ref("tune()")` to construct a tuning instance, here we can use `r ref("bb_optimize()")`, which returns a list with elements `"par"` (best found parameters), `"val"` (optimal outcome), and `"instance"` (the optimization instance); `"par"` and `"val"` are equivalent to the `instance$result`:
+Similarly to how we can use `r ref("tune()")` to construct a tuning instance, here we can use `r ref("bb_optimize()")`, which returns a list with elements `"par"` (best found parameters), `"val"` (optimal outcome), and `"instance"` (the optimization instance); the values given as `"par"` and `"val"` are the same as the values found in `instance$result`:
 
 ```{r}
 optimal = bb_optimize(objective, method = "random_search",
@@ -461,7 +460,7 @@ Now we have introduced the basic black-box optimization setup, we can introduce 
 
 ### Building Blocks of Bayesian Optimization {#sec-bayesian-optimization-blocks}
 
-Bayesian optimization (BO) is a global optimization algorithm that usually follows the following process:
+Bayesian optimization (BO) is a global optimization algorithm that usually follows the following process (@fig-optimization-loop):
 
 1. Generate and evaluate an `r index('initial design')`
 2. Loop:
@@ -473,7 +472,7 @@ Bayesian optimization (BO) is a global optimization algorithm that usually follo
 The acquisition function relies on the mean and standard deviation prediction of the surrogate model and requires no evaluation of the true black-box function, making it comparably cheap to optimize.
 A good acquisition function will balance *exploiting* knowledge about regions where we observed that performance is good and the surrogate model has low uncertainty, with *exploring* regions where it has not yet evaluated points and as a result the uncertainty of the surrogate model is high.
 
-We refer to these elements as the 'building blocks' of BO as it is a highly modular algorithm; as long as the above structure is in place, then the surrogate models, acquisition functions, and acquisition function optimizers are all interchangeable.
+We refer to these elements as the 'building blocks' of BO as it is a highly modular algorithm; as long as the above structure is in place, then the surrogate models, acquisition functions, and acquisition function optimizers are all interchangeable to a certain extent.
 The design of `mlr3mbo` reflects this modularity, with the base class for `r ref("OptimizerMbo")` holding all the key elements: the BO algorithm loop structure (`r ref("loop_function")`), *surrogate* model (`r ref("Surrogate")`),  *acquisition function* (`r ref("AcqFunction")`), and *acquisition function optimizer* (`r ref("AcqOptimizer")`).
 In this section, we will provide a more detailed explanation of these building blocks and explore their interplay and interaction during optimization.
 
@@ -500,11 +499,12 @@ A simple method to construct an initial design is to use one of the four design 
 * `r ref("generate_design_sobol()")`: Sobol sequence (@Niederreiter1988)
 
 @fig-bayesian-optimization-designs illustrates the difference in generated designs from these four methods assuming an initial design of size nine and a domain of two numeric variables from $0$ to $1$.
-We observe that a random design does not necessarily cover the search well and in this example simply due to bad luck samples points close to each other leaving large areas unexplored.
-The grid design results in points being equidistant from their nearest neighbor but does not cover the search space well as areas between points are unexplored.
-In contrast, the LHS design provides a good space-filling property, as it ensures that each interval of each input variable (spanned by the horizontal and vertical dotted lines) is represented by exactly one sample point, which usually results in a more even coverage of the search space and a better representation of the distribution of the input variables (as seen in the marginal distributions).
-The Sobol design works similarly to LHS but does not guarantee even coverage for a small number of samples.
-However, constructing a Sobol design is more efficient than LHS, especially as the number of samples and dimensions grows and in fact the coverage of Sobol is better than LHS when the number of dimensions is large.
+We already covered the difference between grid and random designs in @sec-tuner.
+An LHS design divides each input variable into equally sized intervals (indicated by the horizontal and vertical dotted lines in @fig-bayesian-optimization-designs) and ensures that each interval is represented by exactly one sample point, resulting in uniform marginal distributions.
+Furthermore, in LHS designs the minimal distance between two points is usually maximized, resulting in its space-filling coverage of the space.
+The Sobol design works similarly to LHS but can provide better coverage than LHS when the number of dimensions is large.
+For this reason, LHS or Sobol designs are usually recommended for BO, but usually the influence of the initial design will be smaller compared to other design choices of BO.
+A random design might work well-enough, but grid designs are usually discouraged.
 
 ```{r, echo = FALSE}
 #| label: fig-bayesian-optimization-designs
@@ -566,9 +566,10 @@ g_sobol = ggMarginal(g_sobol, type = "histogram", bins = 10)
 grid.arrange(g_random, g_grid, g_lhs, g_sobol, nrow = 2, ncol = 2)
 ```
 
-Whichever of these methods you choose, the result is simply a `data.table`:
+Whichever of these methods you choose, the result is a `r ref("Design")` object, which is mostly just a wrapper around a `data.table`:
 
 ```{r}
+sample_domain = ps(x1 = p_dbl(0, 1), x2 = p_dbl(0, 1))
 generate_design_random(sample_domain, n = 3)$data
 ```
 
@@ -591,8 +592,10 @@ We can see how each point in our design was evaluated by the sinusoidal function
 A `r index('surrogate model')` wraps a regression learner that models the unknown black-box function based on observed data.
 In `mlr3mbo`, the `r ref("SurrogateLearner")` is a higher-level R6 class inheriting from the base `r ref("Surrogate")` class, designed to construct and manage the surrogate model, including automatic construction of the `TaskRegr` that the learner should be trained on at each iteration of the BO loop.
 
-Any regression learner in `mlr3` can be used, however, most acquisition functions depend on both mean and standard deviation predictions from the surrogate model and therefore not all learners are suitable for all scenarios.
-Typical choices of regression learners used as surrogate models include `r index('Gaussian processes', "Gaussian process", lower = FALSE)` (`lrn("regr.km")`) for low dimensional numeric search spaces and `r index('random forests', 'random forest')` (e.g., `lrn("regr.ranger")`) for higher dimensional mixed (and/or hierarchical) search spaces.
+Any regression learner in `mlr3` can be used.
+However, most acquisition functions depend on both mean and standard deviation predictions from the surrogate model, the latter of which requires the `"se"` `predict_type` to be supported.
+Therefore not all learners are suitable for all scenarios.
+Typical choices of regression learners used as surrogate models include `r index('Gaussian processes', "Gaussian process", lower = FALSE)` (`lrn("regr.km")`) for low to medium dimensional numeric search spaces and `r index('random forests', 'random forest')` (e.g., `lrn("regr.ranger")`) for higher dimensional mixed (and/or hierarchical) search spaces.
 A detailed introduction to Gaussian processes can be found in @williams_2006 and an in-depth focus on Gaussian processes in the context of surrogate models in BO is given in @garnett_2022.
 In this example, we use a Gaussian process with Matérn 5/2 kernel, which uses `BFGS` as an optimizer to find the optimal kernel parameters and set `trace = FALSE` to prevent too much output during fitting.
 
@@ -633,7 +636,8 @@ Here, $Y(\mathbf{x)}$ is the surrogate model prediction (a random variable) for 
 Calculating the expected improvement requires mean and standard deviation predictions from the model.
 
 In `mlr3mbo`, acquisition functions (of class `r ref( "AcqFunction")`) are stored in the `r ref("mlr_acqfunctions")` dictionary and can be constructed with `r ref('acqf()', aside = TRUE)`, passing the key of the method you want to use and our surrogate learner.
-In our running example, we will use the expected improvement (`acqf("ei")`) to choose the next candidate for evaluation, which updates (`$update()`) the incumbent to ensure it is still the best value observed so far.
+In our running example, we will use the expected improvement (`acqf("ei")`) to choose the next candidate for evaluation.
+Before we can do that, we have to update (`$update()`) the `AcqFunction`'s view of the incumbent, to ensure it is still using the best value observed so far.
 
 ```{r}
 acq_function = acqf("ei", surrogate = surrogate)
@@ -643,11 +647,11 @@ acq_function$y_best
 
 You can use `$eval_dt()` to evaluate the acquisition function for the domain given as a `data.table`.
 In @fig-bayesian-optimization-ei we evaluated the expected improvement on a uniform grid of points between $0$ and $1$ using the predicted mean and standard deviation from the Gaussian process.
-We can see that the expected improvement is high in regions where the mean prediction (gray dashed lines) of the Gaussian process is low.
+We can see that the expected improvement is high in regions where the mean prediction (gray dashed lines) of the Gaussian process is low, or where the uncertainty is high.
 
 ```{r}
 #| label: fig-bayesian-optimization-ei
-#| fig-cap: Expected improvement (darkgray) based on the mean and uncertainty prediction (gray) of the Gaussian process surrogate model trained on an initial design of four points (black). Ribbons represent the mean plus minus the standard deviation prediction.
+#| fig-cap: Expected improvement (solid dark gray line) based on the mean and uncertainty prediction (dashed gray line) of the Gaussian process surrogate model trained on an initial design of four points (black). Ribbons represent the mean plus minus the standard deviation prediction.
 #| fig-alt: Plot of sinusoidal function plotted previously but now with four black dots at around (0.1, 0), (0.3, -0.8), (0.6, 0.5) and (1, 2). These are connected by a black curve. A gray dotted line is also fit through these black dots in a roughly 'u' shape, a gray ribbon surrounds this suggesting uncertainty.
 
 xydt = generate_design_grid(domain, resolution = 1001)$data
@@ -680,9 +684,7 @@ An `r index('acquisition function optimizer')` of class `r ref("AcqOptimizer", a
 
 Due to the non-convex nature of most commonly used acquisition functions [@garnett_2022] it is typical to employ global optimization techniques for acquisition function optimization.
 Widely used approaches for optimizing acquisition functions include derivative-free global optimization methods like branch and bound algorithms, such as the `r index('DIRECT', lower = FALSE)` algorithm [@jones_1993_lipschitzian], as well as multi-start local optimization methods, such as running the `r index('L-BFGS-B', lower = FALSE)` algorithm (@byrd1995limited) or a local search multiple times from various starting points [@kim_2021].
-Assuming a purely numeric search space, the utilization of gradient information in acquisition function optimization is theoretically possible, but its feasibility relies on the specific surrogate model chosen.
-However, even when employing a `r index('Gaussian process', lower = FALSE)` as a surrogate model, allowing for the calculation of gradients of the acquisition function with respect to the input variables, the issue of vanishing gradients in the mean and standard deviation predictions concerning the input variables presents a significant challenge [@garnett_2022].
-Consequently, in most cases, the optimization problem of the acquisition function can be regarded as a black box optimization problem itself, but a much cheaper one than the original.
+Consequently the optimization problem of the acquisition function can be handled as a black box optimization problem itself, but a much cheaper one than the original.
 
 `AcqOptimizer` objects are constructed with `r ref("acqo()", aside = TRUE)`, which takes as input a `r ref('bbotk::Optimizer')`, a `r ref("bbotk::Terminator")`, and the acquisition function.
 Optimizers are stored in the `r ref("mlr_optimizers")` dictionary and can be constructed with the sugar function `r ref('opt()', aside = TRUE)`.
@@ -702,7 +704,7 @@ candidate = acq_optimizer$optimize()
 candidate
 ```
 
-We have now manually shown how to run a single iteration of the BO algorithm loop.
+We have now shown how to run a single iteration of the BO algorithm loop manually.
 In practice, one would use `r ref("OptimizerMbo")` to put all these pieces together to automate the process.
 Before demonstrating this class we will first take a step back and introduce the `loop_function` which tells the algorithm how it should be run.
 
@@ -718,17 +720,18 @@ as.data.table(mlr_loop_functions)[, .(key, label, instance)]
 ```
 
 You could pick and use one of the loop functions included in the dictionary above, or you can write your own for finer control over the BO process.
-A common choice of loop function is the `r index('Efficient Global Optimization')` (EGO) algorithm [@jones_1998] (`r ref('bayesopt_ego()')`), a simplified version of this code is shown at the end of this section to help demonstrate the algorithm and its purpose.
+A common choice of loop function is the `r index('Efficient Global Optimization')` (EGO) algorithm [@jones_1998] (`r ref('bayesopt_ego()')`).
+A simplified version of this code is shown at the end of this section, both to help demonstrate the EGO algorithm, and to give an example of how to write a custom BO variant yourself.
 In short, the code sets up the relevant components discussed above and then loops the steps above:  1) update the surrogate model 2) update the acquisition function 3) optimize the acquisition function to yield a new candidate 4) evaluate the candidate and add it to the archive.
-Two additional points to note are that: firstly the function checks to see if the initial grid has been manually constructed (as we did above), if it has not then it generates a grid using the Sobol method of size `init_design_size` or if that is `NULL` then of size four times the dimensionality of the search space; and secondly if there is an error during the loop then a fallback is used where the next candidate is proposed uniformly at random, ensuring that the process continues even in the presence of potential issues, we will return to this in @sec-practical-bayesian-optimization.
+If there is an error during the loop then a fallback is used where the next candidate is proposed uniformly at random, ensuring that the process continues even in the presence of potential issues, we will return to this in @sec-practical-bayesian-optimization.
 
 ```{r, eval=FALSE}
-bayesopt_ego = function(
+my_simple_ego = function(
     instance,
     surrogate,
     acq_function,
     acq_optimizer,
-    init_design_size = NULL
+    init_design_size
   ) {
 
   # setting up the building blocks
@@ -736,17 +739,12 @@ bayesopt_ego = function(
   acq_function$surrogate = surrogate # surrogate model
   acq_optimizer$acq_function = acq_function # acquisition function
 
-  # initial design
   search_space = instance$search_space
-  # if initial design has not been manually constructed use Sobol method
-  if (is.null(init_design_size) && instance$archive$n_evals == 0L) {
-    init_design_size = 4L * search_space$length
-  }
-  if (!is.null(init_design_size) && instance$archive$n_evals == 0L) {
-    design = generate_design_sobol(
-      search_space, n = init_design_size)$data
-    instance$eval_batch(design)
-  }
+
+  # initial design
+  design = generate_design_sobol(
+    search_space, n = init_design_size)$data
+  instance$eval_batch(design)
 
   # MBO loop
   repeat {
@@ -762,7 +760,12 @@ bayesopt_ego = function(
     })
 
     # evaluate the candidate and add it to the archive
-    instance$eval_batch(candidate)
+    tryCatch({
+      instance$eval_batch(candidate)
+    }, terminated_error = function(cond) {
+      # $eval_batch() throws a terminated_error if the instance is
+      # already terminated, e.g. because of timeout.
+    })
     if (instance$is_terminated) break
   }
 
@@ -775,9 +778,11 @@ We are now ready to put everything together to automate the BO process.
 ### Automating BO with OptimizerMbo {#sec-bayesian-black-box-optimization}
 
 `r ref("OptimizerMbo")` can be used to assemble the building blocks described above into a single object that can then be used for optimization.
+We use the `bayesopt_ego` loop function provided by `mlr_loop_functions`, which works similarly to the code shown above but takes more care to offer sensible default values for its arguments and handle edge cases correctly.
 You do not need to pass any of these building blocks to each other manually as the `r ref('opt()', aside = TRUE)` constructor will do this for you:
 
 ```{r}
+bayesopt_ego = mlr_loop_functions$get("bayesopt_ego")
 surrogate = srlrn(lrn("regr.km", covtype = "matern5_2",
   optim.method = "BFGS", control = list(trace = FALSE)))
 acq_function = acqf("ei")
@@ -804,8 +809,6 @@ instance = OptimInstanceSingleCrit$new(objective,
 design = data.table(x = c(0.1, 0.34, 0.65, 1))
 instance$eval_batch(design)
 optimizer$optimize(instance)
-
-instance$archive$best()
 ```
 
 Using only a few evaluations, BO comes close to the true global optimum (0.792).
@@ -820,18 +823,67 @@ ggplot() +
   geom_line(aes(x = x, y = y), data = xydt) +
   geom_point(aes(x = x, y = y), colour = "black", fill = "black", size = 2, pch = 24,
     data = instance$archive$data[batch_nr == 1]) +
-  geom_point(aes(x = x, y = y, colour = batch_nr), size = 2,
+  geom_point(aes(x = x, y = y, fill = batch_nr), size = 2, pch = 21, color = "black",
     data = instance$archive$data[batch_nr > 1]) +
-  scale_color_gradient(low = "black", high = "white") +
+  scale_fill_gradient(low = "black", high = "white") +
   labs(colour = "Evaluation Number") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
 
+If we replicate running our BO algorithm ten times (with random initial designs and varying random seeds) and compare this to a random search, we can see that BO indeed performs much better and on average reaches the global optimum after around 15 function evaluations (@fig-bayesian-sinusoidal_bo_rs).
+As expected, the performance for the initial design size is close to the performance of the random search.
+
+```{r, eval=FALSE, echo=FALSE}
+library(mlr3misc)
+library(pammtools)
+set.seed(2906)
+results = map_dtr(1:10, function(replication) {
+  instance$archive$clear()
+  design = generate_design_random(instance$search_space, n = 4L)$data
+  instance$eval_batch(design)
+  optimizer$optimize(instance)
+  bo_result = instance$archive$data
+  bo_result[, nr_eval := seq_len(.N)]
+  bo_result[, y_min := cummin(y)]
+  bo_result[, method := "BO"]
+
+  instance$archive$clear()
+  opt("random_search", batch_size = 20)$optimize(instance)
+  rs_result = instance$archive$data
+  rs_result[, nr_eval := seq_len(.N)]
+  rs_result[, y_min := cummin(y)]
+  rs_result[, method := "Random Search"]
+
+  result = rbind(bo_result, rs_result, fill = TRUE)
+  result[, replication := replication]
+  result
+})
+mean_results = results[, .(mean_y_min = mean(y_min), se_y_min = sd(y_min) / sqrt(.N)), by = .(method, nr_eval)]
+g = ggplot() +
+  geom_step(aes(x = nr_eval, y = mean_y_min, linetype = method, colour = method), data = mean_results) +
+  geom_stepribbon(aes(x = nr_eval, min = mean_y_min - se_y_min, max = mean_y_min + se_y_min, fill = method), colour = NA, alpha = 0.2, data = mean_results) +
+  scale_colour_manual(values = c("black", "darkgrey")) +
+  scale_fill_manual(values = c("black", "darkgrey")) +
+  labs(y = "Best Observed Function Value", x = "Number of Function Evaluations", colour = "Method", fill = "Method", linetype = "Method") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+ggsave("Figures/bo_1d_sinusoidal_bo_rs.pdf", plot = g, width = 6, height = 4)
+ggsave("Figures/bo_1d_sinusoidal_bo_rs.png", plot = g, width = 6, height = 4)
+```
+
+```{r, echo=FALSE}
+#| echo: false
+#| label: fig-bayesian-sinusoidal_bo_rs
+#| fig-cap: Anytime performance of BO and random search on the 1D sinusoidal function given a budget of 20 function evaluations. Solid line depicts the best observed target value averaged over 10 replications. Ribbons represent standard errors.
+#| fig-alt: Line graph with two lines. x-axis is 'Number of Function Evaluations' between 0 and 20, y-axis is 'Best Observed Function Value' between -1.5 and 0. Solid line is Bayesian optimization, dashed line is random search. At 0-5 evaluations the methods perform similarly and then BO converges to the optimum at around 15 evaluations whereas random search gets stuck before the optimum.
+knitr::include_graphics("Figures/bo_1d_sinusoidal_bo_rs.png")
+```
+
 ### Bayesian Optimization for HPO {#sec-bayesian-tuning}
 
 `mlr3mbo` can be used for HPO by making use of `r ref("TunerMbo", aside = TRUE)`, which is a wrapper around `r ref("OptimizerMbo")` and works in the exact same way.
-As an example, below we will tune the `cost` and `gamma` parameters of `lrn("classif.svm")` with a radial kernel on `tsk("sonar")` with three-fold CV for the inner and outer resamplings.
+As an example, below we will tune the `cost` and `gamma` parameters of `lrn("classif.svm")` with a radial kernel on `tsk("sonar")` with three-fold CV.
 We set up `tnr("mbo")` using the same objects constructed above and then run our tuning experiment as usual:
 
 ```{r}
@@ -857,7 +909,7 @@ Multi-objective tuning is also possible with BO with algorithms using many diffe
 More details on multi-objective BO can for example be found in @Horn2015 or @Morales2022.
 
 Below we will illustrate multi-objective tuning using the ParEGO [@knowles_2006] loop function.
-ParEGO (`r ref("bayesopt_parego()")`) tackles multi-objective BO via a scalarization approach and models a single scalarized objective function via a single surrogate model and then proceeds to find the next candidate for evaluation making use of a standard single-objective acquisition function such as the expected improvement.
+ParEGO (`r ref("bayesopt_parego()")`) tackles multi-objective BO via a randomized scalarization approach and models a single scalarized objective function via a single surrogate model and then proceeds to find the next candidate for evaluation making use of a standard single-objective acquisition function such as the expected improvement.
 Other compatible loop functions can be found by looking at the `"instance"` column of `r ref('mlr_loop_functions')`.
 We will tune three parameters of a decision tree with respect to the true positive (maximize) and false positive (minimize) rates, the `r index('Pareto front', lower = FALSE)` is visualized in @fig-pareto-bayesopt.
 
@@ -880,12 +932,11 @@ instance = tune(tuner, tsk("sonar"), lrn_svm, rsmp("cv", folds = 3),
 
 ```{r, echo = FALSE, warning = FALSE}
 #| label: fig-pareto-bayesopt
-#| fig-cap: Pareto front of TPR and FPR obtained via ParEGO. White dots represent tested configurations, each black dot individually represents a Pareto-optimal configuration and all blue dots together represent the Pareto front.
-#| fig-alt: Scatter plot with classif.tpr on x-axis (between 0.75 and 1.00) and classif.fpr on y-axis (between 0.2 and 1.0). The Pareto front is shown as the set of points at roughly (0.85, 0.23), (0.88, 0.24), (0.91, 0.25), (0.93, 0.3), (0.95, 0.35), (0.96, 0.4), (1.00, 0.8).
-ggplot(aes(x = classif.tpr, y = classif.fpr),
+#| fig-cap: Pareto front of TPR and FPR obtained via ParEGO. White dots represent tested configurations, each black dot individually represents a Pareto-optimal configuration and all black dots together represent the Pareto front.
+#| fig-alt: Scatter plot with classif.tpr on y-axis (between 0.75 and 1.00) and classif.fpr on x-axis (between 0.2 and 1.0). The Pareto front is shown as the set of points at roughly (0.23, 0.85), (0.24, 0.88), (0.25, 0.91), (0.30, 0.93), (0.35, 0.95), (0.40, 0.96), (0.8, 1.00).
+ggplot(aes(y = classif.tpr, x = classif.fpr),
   data = as.data.table(instance$archive)) +
   geom_point(
-    data = ,
     shape = 21,
     size = 3,
     fill = "white",
@@ -961,7 +1012,7 @@ opt("mbo",
 
 ### Practical Considerations in Bayesian Optimization {#sec-practical-bayesian-optimization}
 
-`mlr3mbo` tries to use 'intelligent' defaults regarding the choice of surrogate model, acquisition function, acquisition function optimizer and even the loop function.
+`mlr3mbo` tries to use reasonable defaults regarding the choice of surrogate model, acquisition function, acquisition function optimizer and even the loop function.
 For example, in the case of a purely numeric search space, `mlr3mbo` will by default use a Gaussian process as the surrogate model and a random forest as the fallback learner and additionally encapsulates the learner (@sec-encapsulation-fallback).
 In the case of a mixed or hierarchical search space, `mlr3mbo` will use a random forest as the surrogate model.
 Therefore, users can perform BO without specifying any deviation from the defaults and still expect decent optimization performance.
@@ -981,18 +1032,18 @@ Note, when setting `catch_errors = TRUE` for the `r ref("AcqOptimizer")`, it is 
 
 In the worst-case scenario, if all iterations errored, the BO algorithm will simply perform a random search.
 Ideally, fallback learners (@sec-encapsulation-fallback) should also be used, which will be employed before proposing the next candidate randomly.
-The value of the acquisition function is also always logged in the archive of the optimization instance so inspecting this is a good idea to ensure the algorithm behaved as expected and that the acquisition function column is populated as expected (`instance$archive$data`).
+The value of the acquisition function is also always logged in the archive of the optimization instance so inspecting this is a good idea to ensure the algorithm behaved as expected.
 
 #### Surrogate Models {.unnumbered .unlisted}
 
 In practice, users may prefer a more robust BO variant over a potentially better-performing but unstable variant.
 Even if the `catch_errors` parameters are turned on and are never triggered, that does not guarantee that the BO algorithm ran as intended.
-For instance, Gaussian processes are sensitive to the choice of kernel and kernel parameters, typically estimated through maximum likelihood estimation, suboptimal parameter values can result in white noise models with a constant mean and standard deviation prediction (except for the interpolation of training data).
+For instance, Gaussian processes are sensitive to the choice of kernel and kernel parameters, typically estimated through maximum likelihood estimation, suboptimal parameter values can result in white noise models with a constant mean and standard deviation prediction.
 In this case, the surrogate model will not provide useful mean and standard deviation predictions resulting in poor overall performance of the BO algorithm.
 Another practical consideration regarding the choice of surrogate model can be overhead.
 Fitting a vanilla Gaussian process scales cubically in the number of data points and therefore the overhead of the BO algorithm grows with the number of iterations.
 Furthermore, vanilla Gaussian processes natively cannot handle categorical input variables or dependencies in the search space (recall that in HPO we often deal with mixed hierarchical spaces).
-In contrast, a random forest -- popularly used as a surrogate model in the *SMAC* package (@Lindauer2022) -- is cheap to train, quite robust in the sense that it is not as sensitive to its hyperparameters as a Gaussian process, and can easily handle mixed hierarchical spaces.
+In contrast, a random forest -- popularly used as a surrogate model in *SMAC* (@Lindauer2022) -- is cheap to train, quite robust in the sense that it is not as sensitive to its hyperparameters as a Gaussian process, and can easily handle mixed hierarchical spaces.
 On the downside, a random forest is not really Bayesian (i.e., there is no posterior predictive distribution) and suffers from poor uncertainty estimates and poor extrapolation.
 
 #### Warmstarting {.unnumbered .unlisted}
@@ -1016,12 +1067,13 @@ At the time of publishing, terminators based on acquisition functions have not b
 The standard behavior of most BO algorithms is to sequentially propose a single candidate that should be evaluated next.
 Users may want to use parallelization to compute candidates more efficiently.
 If you are using BO for HPO, then the most efficient method is to parallelize the nested resampling, see @sec-nested-resampling-parallelization.
-Alternatively, if the loop function supports candidates being proposed in batches (e.g., `bayesopt_parego()`) then the `q` argument to the loop function can be set to propose `q` candidates in each iteration that can be evaluated in parallel if the `Objective` is properly implemented (see exercises below for an example).
+Alternatively, if the loop function supports candidates being proposed in batches (e.g., `bayesopt_parego()`) then the `q` argument to the loop function can be set to propose `q` candidates in each iteration that can be evaluated in parallel if the `Objective` is properly implemented.
 
 ## Conclusion
 
 In this chapter, we looked at advanced tuning methods.
 We started by thinking about the types of errors that can occur during tuning and how to handle these to ensure your HPO process does not crash.
+We presented multi-objective tuning, which can be used to optimize performance measures simultaneously.
 We then looked at multi-fidelity tuning, in which the Hyberband tuner can be used to efficiently tune algorithms by making use of lower-fidelity evaluations to approximate full-fidelity model performance.
 We will return to Hyperband in @sec-hyperband-example-svm where we will learn how to make use of pipelines in order to tune any algorithm with Hyperband.
 Finally, we took a deep dive into Bayesian optimization to look at how `r bbotk`, `r mlr3mbo`, and `r mlr3tuning` can be used together to implement complex BO tuning algorithms in `mlr3`, allowing for highly flexible and sample-efficient algorithms.
@@ -1032,74 +1084,40 @@ In the next chapter we will look at feature selection and see how `r mlr3filters
 | Class | Constructor/Function | Fields/Methods |
 | ---- | --- | -- |
 | `r ref("Learner")` | `r ref("lrn")`| `$encapsulate`; `$fallback` |
+| `r ref("TuningInstanceMultiCrit")` | `r ref("ti()")`/`r ref("tune()")` | `$result`; `$archive` |
 | `r ref("mlr3hyperband::TunerHyperband")` | `tnr("hyperband")`| - |
 | `r ref("bbotk::Objective")` | - |  |
-| `r ref("mlr3mbo::SurrogateLearner")` | `r ref("srlrn()")`|  |
-| `r ref("mlr3mbo::AcqFunction")` | `r ref("acqf()")` |  |
-| `r ref("mlr3mbo::AcqOptimizer")` | `r ref("acqo()")` |  |
-| - | `r ref("mlr3mbo::loop_function")` | - |
-| `r ref('mlr3mbo::OptimizerMbo')` | `bbotk::opt("mbo")` | |
-| `r ref('mlr3mbo::TunerMbo')` | `tnr("mbo")` | |
+| `r ref("bbotk::OptimInstanceSingleCrit")` or `r ref("bbotk::OptimInstanceMultiCrit")` | `r ref("bb_optimize()")` | `$result`; `$archive` |
+| `r ref("SurrogateLearner")` | `r ref("srlrn()")`|  |
+| `r ref("AcqFunction")` | `r ref("acqf()")` |  |
+| `r ref("AcqOptimizer")` | `r ref("acqo()")` |  |
+| - | `r ref("loop_function")` | - |
+| `r ref('OptimizerMbo')` | `bbotk::opt("mbo")` | |
+| `r ref('TunerMbo')` | `tnr("mbo")` | |
+| `r ref('Design')` | `r ref("generate_design_random")`; `r ref("generate_design_grid")`; `r ref("generate_design_lhs")`; `r ref("generate_design_sobol")`;| `$data` |
 
 : Important classes and functions covered in this chapter with underlying class (if applicable), class constructor or function, and important class methods (if applicable). {#tbl-api-advanced-tuning}
 
 ## Exercises
 
-1. Minimize the 2D Rastrigin function $f: [-5.12, 5.12] \times [-5.12, 5.12] \rightarrow \mathbb{R}$, $\mathbf{x} \mapsto 10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$, $D = 2$ via BO (standard sequential single-objective BO via `bayesopt_ego()`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `opt("nloptr")` as acquisition function optimizer (similarly as above).
-Specify a budget of 40 function evaluations.
-Use either a Gaussian process with Matérn 5/2 kernel (`lrn("regr.km")`, similarly as above) or a random forest (`lrn("regr.ranger")`) as the surrogate model and compare the anytime performance (similarly as in @fig-bayesian-sinusoidal_bo_rs) of these two BO algorithms.
-As an initial design, use the following points:
+1. Tune the `mtry`, `sample.fraction`, and `num.trees` hyperparameters of `lrn("regr.ranger")` on `tsk("mtcars")` and evaluate this with a three-fold CV and the root mean squared error (same as @sec-optimization, Exercise 1).
+  Use `tnr("mbo")` with 50 evaluations.
+  Compare this with the performance progress of a random search run from @sec-optimization, Exercise 1.
+  Plot the progress of performance over iterations and visualize the spatial distribution of the evaluated hyperparameter configurations for both algorithms.
+2. Minimize the 2D Rastrigin function $f: [-5.12, 5.12] \times [-5.12, 5.12] \rightarrow \mathbb{R}$, $\mathbf{x} \mapsto 10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$, $D = 2$ via BO (standard sequential single-objective BO via `bayesopt_ego()`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `opt("nloptr")` as acquisition function optimizer.
+Use a budget of 40 function evaluations.
+Run this with both the "default" Gaussian process surrogate model with Matérn 5/2 kernel, and the "default" random forest surrogate model.
+Compare their anytime performance (similarly as in @fig-bayesian-sinusoidal_bo_rs).
+You can construct the surrogate models with default settings using:
 ```{r}
-initial_design = data.table(
-  x1 = c(-3.95, 1.16, 3.72, -1.39, -0.11, 5.00, -2.67, 2.44),
-  x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46))
+surrogate_gp = srlrn(default_gp())
+surrogate_rf = srlrn(default_rf())
 ```
-You can use the following function skeleton as a starting point to construct the objective function (using the `r ref("ObjectiveRFunDt")` class):
-```{r}
-rastrigin = function(xdt) {
-  D = ncol(xdt)
-  y = 10 * D + rowSums(xdt^2 - (10 * cos(2 * pi * xdt)))
-  data.table(y = y)
-}
-```
-The different surrogate models should for example look like the following:
-```{r}
-surrogate_gp = srlrn(lrn("regr.km", covtype = "matern5_2",
-  optim.method = "BFGS", control = list(trace = FALSE)))
-
-surrogate_rf = srlrn(lrn("regr.ranger", num.trees = 10L,
-  keep.inbag = TRUE, se.method = "jack"))
-```
-
-2. Minimize the following function: $f: [-10, 10] \rightarrow \mathbb{R}^2, x \mapsto \left(x^2, (x - 2)^2\right)$.
-Use the ParEGO algorithm in a batch setting of four candidates (`q = 4`) and parallelize the actual objective function evaluation using the `r ref_pkg("future")` package (using four workers in a `multisession` plan).
+3. Minimize the following function: $f: [-10, 10] \rightarrow \mathbb{R}^2, x \mapsto \left(x^2, (x - 2)^2\right)$ with respect to both objectives.
+Use the ParEGO algorithm.
 Construct the objective function using the `r ref("ObjectiveRFunMany")` class.
-For illustrative reasons, suspend the execution for five seconds every time a point is to be evaluated (making use of the `Sys.sleep()` function).
-Use the following surrogate model, acquisition function and acquisition function optimizer (recall that ParEGO uses a scalarization approach to multi-objective optimization):
-```{r}
-surrogate = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
-  se.method = "jack"))
-
-acq_function = acqf("ei")
-
-acq_optimizer = acqo(opt("random_search", batch_size = 100),
-  terminator = trm("evals", n_evals = 100))
-```
-Terminate the optimization after a runtime of 60 seconds.
-How many points did the BO algorithm evaluate (including the initial design) when properly parallelizing the evaluation of the objective function?
-Compare this to the number of points the BO algorithm evaluated when *not* parallelizing the evaluation (but still using a batch of size `q = 4`).
-Note that `q = 4` must be passed to the `r ref("OptimizerMbo")` via the `args` parameter.
-You can use the following (non-parallelized) function skeleton as a starting point to construct the objective function (note that `r ref_pkg("future.apply")` might be useful to implement the parallelization):
-```{r}
-# non-parallelized version of the Schaffer function N.1
-schaffer1 = function(xss) {
-  evaluations = lapply(xss, FUN = function(xs) {
-    Sys.sleep(5)
-    list(y1 = xs$x, y2 = (xs$x - 2)^2)
-  })
-  rbindlist(evaluations)
-}
-```
+Terminate the optimization after a runtime of 100 evals.
+Plot the resulting Pareto-front and compare it to the analytical solution, $x_2 = \left(\sqrt{x_1}-2\right)^2$ with $x_1$ ranging from $0$ to $4$.
 
 ::: {.content-visible when-format="html"}
 `r citeas(chapter)`

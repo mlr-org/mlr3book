@@ -22,18 +22,16 @@ Furthermore, different problems require different features to be extracted, and 
 Hence, manual feature engineering is often required but with `mlr3pipelines`, we can simplify the process as much as possible. -->
 
 As we work through this chapter we will use an adapted version of the Ames housing data (@de2011ames).
-We changed the data slightly and introduced some additional (artificial) problems to showcase as many aspects of preprocessing as possible on a single dataset, the code to recreate this version of the data from the original raw data can be found at `r link("https://github.com/mlr-org/mlr3book/data")`.
-This dataset was collected as an alternative to the Boston Housing data and is commonly used to demonstrate feature engineering in ML.
+We changed the data slightly and introduced some additional (artificial) problems to showcase as many aspects of preprocessing as possible on a single dataset.
+The modified version is shipped with `r ref_pkg("mlr3data")` and the code to recreate this version of the data from the original raw data can be found at `r link("https://github.com/mlr-org/mlr3data/")` in the directory `data-raw`.
+This original dataset was collected as an alternative to the Boston Housing data and is commonly used to demonstrate feature engineering in ML.
 Raw and processed versions of the data can be directly loaded from the `r ref_pkg("AmesHousing")` package.
 The dataset includes 2,930 residential properties (rows) situated in Ames, Iowa, sold between 2006 and 2010.
 It contains 81 features about various aspects of the property, the size and shape of the lot, and information about its condition and quality.
 The prediction target is the sale price in USD, hence it is a regression task.
 
 ```{r, message=FALSE}
-repo = "ja-thomas/extend_ames_housing/main/data/ames_dirty.csv"
-url = paste0("https://raw.githubusercontent.com/", repo)
-
-ames = data.table::fread(url, stringsAsFactors = TRUE)
+ames = mlr3data::ames_housing
 ```
 
 ## Data Cleaning
@@ -111,10 +109,10 @@ names(which(lengths(tsk_ames$levels()) == 2))
 Low-cardinality features can be handled by `r index('one-hot encoding', 'one-hot', parent = 'encoding', aside = TRUE)`.
 One-hot encoding is a process of converting categorical features into a binary representation, where each possible category is represented as a separate binary feature.
 Theoretically, it is sufficient to create one less binary feature than levels, as setting all binary features to zero is also a valid representation.
-This is typically called dummy\index{dummy encoding|see{encoding, treatment}} or treatment encoding\index{encoding!treatment} and is required if the learner is a generalized linear (GLM) or additive model (GAM) model\index{generalized linear model}.
+This is typically called dummy\index{dummy encoding|see{encoding, treatment}} or treatment encoding\index{encoding!treatment} and is required if the learner is a generalized linear model (GLM) or additive model (GAM)\index{generalized linear model}.
 
 Some learners support handling categorical features but may still crash for high-cardinality features if they internally apply encodings that are only suitable for low-cardinality features, such as one-hot encoding.
-Impact encoding is a good approach for handling high-cardinality features.
+Impact encoding (@MicciBarreca2001) is a good approach for handling high-cardinality features.
 `r index('Impact encoding', 'impact', parent = 'encoding', aside = TRUE)` converts categorical features into numeric values based on the impact of the feature on the target.
 The idea behind impact encoding is to use the target feature to create a mapping between the categorical feature and a numerical value that reflects its importance in predicting the target feature.
 Impact encoding involves the following steps:
@@ -179,19 +177,19 @@ Many learners cannot handle missing values automatically (e.g., `lrn("regr.range
 The simplest `r index('data imputation', aside = TRUE)` method is to replace missing values by the feature's mean (`po("imputemean")`) (@fig-imputation), median (`po("imputemedian")`), or mode (`po("imputemode")`).
 Alternatively, one can impute by sampling from the empirical distribution of the feature, for example a histogram (`po("imputehist")`).
 Instead of guessing at what a missing feature might be, missing values could instead be replaced by a new level, for example, called `.MISSING` (`po("imputeoor")`).
-For numeric features, @ding2010investigation show that for binary classification and tree-based models, encoding missing values out-of-range (OOR), e.g. as two times the largest observed value, is a reasonable approach.
+For numeric features, @ding2010investigation show that for binary classification and tree-based models, encoding missing values out-of-range (OOR), e.g. a constant value above the largest observed value, is a reasonable approach.
 
 ```{r, echo = FALSE, out.width = "60%"}
 #| label: fig-imputation
-#| fig-cap: Mean imputation of missing values using existing values.
+#| fig-cap: Mean imputation of missing values using observed values.
 #| fig-alt: "On the left is a vector of numbers in a column, (1.3, NA, 1.5, NA). The non-NA numbers have arrows pointing to (1.3+1.5)/2, which then has an arrow pointing to a vector of numbers in a column on the right but now (1.3, 1.4, 1.5, 1.4) with '1.4' in red to highlight they were imputed with the mean."
 include_multi_graphics("mlr3book_figures-13")
 ```
 
 It is very important for predictive tasks that you keep track of missing data as it is common for missing data to be informative in itself.
-As a real-world example, medical data is usually better collected for White communities than racially minoritized ones.
+To preserve the information about the missingness for the model, imputation should be tracked by adding binary indicator features (one for each imputed feature) that are `1` if the feature was missing for an observation and `0` if it was present (`po("missind")`).
+But also problems in model interpretation can arise, as in this real-world example: medical data are typically collected more extensively for white communities than for racially minoritized communities.
 Imputing data from minoritized communities would at best mask this data bias, and at worst would make the data bias even worse by making vastly inaccurate assumptions (see @sec-fairness for data bias and algorithmic fairness).
-Hence, imputation should be tracked by adding binary indicator features (one for each imputed feature) that are `1` if the feature was missing for an observation and `0` if it was present (`po("missind")`).
 
 In the code below we create a pipeline from the `r ref("PipeOp")`s listed above as well as making use of `po("featureunion")` to combine multiple `PipeOp`s acting on the `"integer"` columns.
 
@@ -244,9 +242,11 @@ bmr$aggregate(measure = msr_mae)[, .(learner_id, regr.mae)]
 ```
 
 Similarly to encoding, we see limited differences in performance between the different imputation strategies.
+This is expected here and confirms the findings of @ding2010investigation - out-of-range imputation is a simple yet effective imputation for tree-based methods.
 
 Many more advanced imputation strategies exist, including model-based imputation where machine learning models are used to predict missing values, and multiple imputation where data is repeatedly resampled and imputed in each sample (e.g., by mean imputation) to attain more robust estimates.
-However, these more advanced techniques rarely improve the model substantially and the simple imputation techniques introduced above are usually sufficient (@Poulos2018).
+However, these more advanced techniques rarely improve the models predictive performance substantially and the simple imputation techniques introduced above are usually sufficient (@Poulos2018).
+Nevertheless, these methods have their justification: Not for the predictive performance, but for finding imputations that fit well to the distribution of the observed values, so that a model can be fitted that can be interpreted and analyzed in a second step.
 
 ## Pipeline Robustify {#sec-prepro-robustify}
 
@@ -281,7 +281,7 @@ Robustifying the linear regression results in a model that vastly outperforms th
 ## Transforming Features and Targets {#sec-prepro-scale}
 
 Simple transformations of features and the target can be beneficial (and sometimes essential) for certain learners.
-In particular, log transformation of the target can help in making the distribution more symmetrical and can help reduce the impact of outliers; this is particularly important for algorithms that assume the target is normally distributed.
+In particular, log transformation of the target can help in making the distribution more symmetrical and can help reduce the impact of outliers.
 Similarly, log transformation of skewed features can help to reduce the influence of outliers.
 In @fig-sale we plot the distribution of the target in the `ames` dataset and then the log-transformed target, we can see how simply taking the log of the variable results in a distribution that is much more symmetrical and with fewer outliers.
 
@@ -369,10 +369,7 @@ include_multi_graphics("mlr3book_figures-14")
 As a concrete example, consider the power consumption of kitchen appliances in houses in the Ames dataset.
 
 ```{r preprocessing-023, message=FALSE, warning=FALSE}
-repo = "ja-thomas/extend_ames_housing/main/data/energy_usage.csv"
-url = paste0("https://raw.githubusercontent.com/", repo)
-
-energy_data = data.table::fread(url, stringsAsFactors = TRUE)
+energy_data = mlr3data::energy_usage
 ```
 
 In this dataset, each row represents one house and each feature is the total power consumption from kitchen appliances at a given time (@bagnall2017great).
@@ -438,7 +435,9 @@ learners = list(lrn_baseline, lrn("regr.rpart"), glrn_xgb_impact,
 
 bmr_final = benchmark(benchmark_grid(c(tsk_ames_ext, tsk_ames), learners,
   rsmp_cv3))
-bmr_final$aggregate(measure = msr_mae)
+
+perf = bmr_final$aggregate(measure = msr_mae)
+perf[order(learner_id, task_id), .(task_id, learner_id, regr.mae)]
 ```
 
 The final results indicate that adding these extracted features improved the performance of all models (except the featureless baseline).
