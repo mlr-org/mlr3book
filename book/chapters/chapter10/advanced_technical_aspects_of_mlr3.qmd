@@ -241,25 +241,98 @@ See @sec-hpc-exec for larger benchmark experiments that may have a cumulative ru
 
 ### Parallelization of Tuning {#sec-parallel-tuning}
 
-The parallelization of tuning is a special case of benchmarking.
-The `r ref("Tuner")` proposes a batch of `batch_size` hyperparameter configurations and creates `batch_size` learners (one learner parameterized for each proposed configuration).
-All learners are then passed to `r ref("benchmark()")` together with the resampling strategy of the tuning instance.
+Tuning is usually an iterative procedure, consisting of steps that are themselves embarrassingly parallel.
+In each iteration, a tuner proposes a batch of hyperparameter configurations -- in the worst case of size 1 -- which can then be evaluated in parallel.
+After each iteration, a typical tuner adapts itself in some way based on the obtained performance values.
+Random and grid search are exceptions, since they do not choose configurations based on past results.
+For them, all evaluations are therefore independent and can in principle be fully parallelized.
+Otherwise, tuning can be regarded as iterative benchmarks, which is also how `mlr3` implements it:
+The `r ref("Tuner")` proposes a batch of learners, each with a different configuration in its `$param_set$values`.
+The size of this batch can often be controlled with a tuner's `batch_size` configuration parameter.
+This batch is then passed to `r ref("benchmark()")` together with the resampling strategy of the tuning instance.
 
-For many optimizers, you can adjust the `batch_size`, i.e., control how many hyperparameter configurations are evaluated in parallel during a call of `benchmark()`.
-If you want full parallelization, make sure that the batch size multiplied by the number of resampling iterations is at least equal to the number of available workers.
-If you expect homogeneous runtimes, i.e., you are tuning over a single learner or pipeline, and you have no hyperparameter with a large influence on the runtime, aim for a multiple of the number of workers.
+Since each `benchmark()`-call depends on previous results, it is generally not possible to parallelize tuning at a higher "level" than individual benchmarks.
+Instead, the individual `benchmark()` evaluations are parallelized by `mlr3` in the same way as when benchmarks are run manually, without tuning.
+This has the benefit that the individual resampling iterations of each configuration being evaluated are all parallelized at the same time.
+Therefore, to get full parallelization, make sure that the `batch_size`, multiplied by the number of resampling iterations, is at least equal to the number of available workers.
+If you expect homogeneous runtimes, i.e., you are tuning over a single learner or pipeline without any hyperparameters with a large influence on the runtime, aim for a multiple of the number of workers.
+Note, however, that termination criteria are only checked between evaluations of batches.
+This is the case even if parallelization is not used.
 In general, larger batches allow for more parallelization, while smaller batches imply a more frequent evaluation of the termination criteria.
-For example, `trm("perf_reached")` checks only after each batch evaluation if the performance level has been reached.
-If you run this terminator with a batch size of 10 and the first configuration of the batch yields better performance than the required performance threshold, the remaining nine configurations are evaluated nevertheless.
-For this reason, the `batch_size` parameter defaults to `1` so that all `r ref("Terminator")`s work as intended.
-This way, you cannot exceed the computational budget and draw wrong conclusions while comparing tuning algorithms.
+
+The following code shows a parallelized execution of random search with the termination criterion set to 20 iterations and a moderate batch size, where 36 resampling splits -- 12 configurations of 3 splits each -- are evaluated in parallel on 4 workers.
+The batch size, set to a multiple of the number of workers, ensures that available resources are used efficiently.
+However, note that the tuning only terminates after a multiple of the given batch size, in this case after 24 evaluations.
+
+```{r}
+future::plan("multisession", workers = 4)
+
+instance = tune(
+  tnr("random_search", batch_size = 12),
+  tsk("penguins"),
+  lrn("classif.rpart", minsplit = to_tune(2, 128)),
+  rsmp("cv", folds = 3),
+  term_evals = 20
+)
+
+instance$archive$n_evals
+```
+
+In this example, we could have increased the batch size to 20 (not having a multiple of 4, the number of workers, would not matter here, since we want to terminate after 20 configurations and are not worried about sub-optimal usage of workers).
+Due to the embarrassingly parallel nature of random search, this would have made use of available resources in the most efficient way while stopping exactly at the point we configured, i.e. after 20 evaluations.
+However, for other termination criteria, such as `trm("perf_reached")`, which checks whether a sufficient performance value has already been reached, we would not know the number of evaluations beforehand and could not set the batch size accordingly.
+For example, with a batch size of 12, if the first configuration of the batch would already yield better performance than the given threshold, the remaining 11 configurations would still be evaluated.
 
 ### Nested Resampling Parallelization {#sec-nested-resampling-parallelization}
 
-As in benchmarking, nested resampling (@sec-nested-resampling) for tuning also translates into two nested resampling loops.
-But unlike benchmarking, the inner loop iterations are not necessarily independent of each other as different hyperparameters may be suggested in one iteration based on the results of the previous.
-Therefore, nested loops cannot be flattened, and the user instead has to choose which of the loops to parallelize.
-By example, let us tune the `minsplit` argument of a classification tree using an `r ref("AutoTuner")` (@sec-autotuner) and a racing algorithm (which is dependent on previous iterations), we will use two-fold CV for our inner resampling strategy and five-fold CV for our outer resampling strategy; first running sequentially without parallelization:
+Nested resampling can conceptually be parallelized at three different levels, each corresponding to jobs of different granularity:
+
+1. The parallelization of the outer resampling.
+  A job is then the tuning of a learner on the respective training set of the outer resampling splits.
+2. The parallel evaluation of the batch of hyperparameter configurations proposed in one tuning iteration.
+  A job is then, for example, the cross-validation of such a configuration.
+3. The parallelization of the inner resampling in tuning.
+  A job is then a train-predict-score step of a single configuration.
+
+This is also shown in Algorithm 3 from @hpo_practical, which is, in slightly simplified and conceptual form:
+
+```{r, eval = FALSE}
+# outer resampling, level 1:
+for (i in seq_len(n_outer_splits)) {
+  tuning_inst = ti(...)  # tuning instance
+  inner_task = get_training_task(task, outer_splits[[i]])
+  # tuning loop, the details of which depend on the tuner being used
+  # This does not correspond to a level:
+  while (!tuning_inst$is_terminated) {
+    proposed_points = propose_points(tuning_inst$archive, batch_size)
+    # Evaluation of configurations, level 2:
+    for (configuration in proposed_points) {
+      split_performances = numeric()
+      # Inner resampling, level 3:
+      for (j in seq_len(n_inner_splits)) {
+        split_performances[j] = evaluate_performance(
+          learner, configuration, inner_task, inner_splits[[j]]
+        )
+      }
+      performance = aggregate(split_performances)
+      update_archive(tuning_inst$archive, configuration, performance)
+    }
+  }
+  evaluate_performance(learner, tuning_inst$result, task, outer_splits[[i]])
+}
+```
+
+The pseudocode above is implemented in `mlr3` in a slightly more efficient variant.
+At the second level (the evaluation of configurations), it exploits the functionality of `benchmark()`: a learner is created for each proposed hyperparameter configuration and all learners are resampled in a benchmark experiment in the innermost for-loop, effectively executing the second level along with the third level on a finer granularity (number of proposed points times number of inner resampling iterations).
+Hence, when parallelizing nested resampling in `mlr3`, the user has to choose between two options: parallelizing the outer resampling or the inner benchmarking.
+
+
+By example, let us tune the `minsplit` argument of a classification tree using an `r ref("AutoTuner")` (@sec-autotuner) and random search with only two iterations.
+Note that this is a didactic example to illustrate the interplay of the different parallelization levels and not a realistic setup.
+We use holdout for inner resampling and set the `batch_size` to 2, which yields two independent iterations in the inner benchmark experiment.
+A five-fold CV is used for our outer resampling.
+For the sake of simplicity, we will also ignore the final model fit the `AutoTuner` performs after tuning.
+Below, we run the example sequentially without parallelization:
 
 ```{r technical-007}
 library(mlr3tuning)
@@ -267,32 +340,34 @@ library(mlr3tuning)
 future::plan("sequential")
 
 lrn_rpart = lrn("classif.rpart",
-  minsplit  = to_tune(2, 128, logscale = TRUE))
+  minsplit  = to_tune(2, 128))
 
-lrn_rpart_tuned = auto_tuner(tnr("mbo"), lrn_rpart,
-  rsmp("cv", folds = 2), msr("classif.ce"), 20)
+lrn_rpart_tuned = auto_tuner(tnr("random_search", batch_size = 2), lrn_rpart,
+  rsmp("holdout"), msr("classif.ce"), 2)
 
 resample(tsk("penguins"), lrn_rpart_tuned,
   rsmp("cv", folds = 5))$aggregate()
 ```
 
-To parallelize this experiment, we could either parallelize the outer CV or the inner CV.
-Let us assume we have four cores available and each job takes four seconds, and consider each option in turn.
-
-If we parallelize the outer five-fold CV (@fig-parallel-outer), all four cores would be utilized first with the computation of the first four resampling iterations and the computation of the fifth iteration has to wait.
+We can now either opt to parallelize the outer CV or the inner benchmarking.
+Let us assume we have a single CPU with four cores (C1 - C4) available and each inner holdout evaluation during tuning takes four seconds.
+If we parallelize the outer five-fold CV (@fig-parallel-outer), each of the four cores  would run one outer resampling first, the computation of the fifth iteration has to wait as there are no more available cores.
 
 ```{r technical-009, eval = FALSE}
 # Parallelize outer loop
 future::plan(list("multisession", "sequential"))
+
+# Alternative: skip specification of 2nd level, since future
+# sets all levels after the first to "sequential" by default
+future::plan("multisession")
 ```
 
-Assume that each fit during the inner resampling takes four seconds to compute and that there is no other significant overhead.
-Then, each of the four workers starts with the computation of an inner two-fold CV.
-As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on CPU1 **after** the first four iterations are finished after eight seconds.
-During the computation of the fifth outer resampling iteration, only CPU1 is utilized, the other three CPUs are idling.
-Even if we had set up the parallelization with `"multisession"` in both inner and outer CV, it would have the same result, the outer loop is parallelized while all subsequent loops default to sequential execution.
+This approach is illustrated in @fig-parallel-outer.
+Each of the four workers starts with the computation of a different inner benchmark, each of which runs sequentially and therefore takes 8 seconds on one worker.
+As there are more jobs than workers, the remaining fifth iteration of the outer resampling is queued on C1 **after** the first four iterations are finished after eight seconds.
+During the computation of the fifth outer resampling iteration, only C1 is busy, the other three cores are idle.
 
-In contrast, if we parallelize the inner two-fold CV (@fig-parallel-inner) then the outer loop would run sequentially and distribute the two computations for the inner resampling on two CPUs; meanwhile, CPU3 and CPU4 are idling.
+In contrast, if we parallelize the inner benchmark (@fig-parallel-inner) then the outer resampling runs sequentially: the five inner benchmarks are scheduled one after the other, each of which runs its two holdout evaluations in parallel on two cores; meanwhile, C3 and C4 are idle.
 
 ```{r technical-010, eval = FALSE}
 # Parallelize inner loop
@@ -303,28 +378,30 @@ future::plan(list("sequential", "multisession"))
 %%| fig-width: 6.5
 %%| fig-responsive: false
 %%| label: fig-parallel-outer
-%%| fig-cap: CPU utilization for four CPUs while parallelizing the outer five-fold CV with a sequential two-fold CV inside. Jobs are labeled as [iteration outer]-[iteration inner].
+%%| fig-cap: CPU utilization for four cores while parallelizing the outer five-fold CV with a sequentially executed inner benchmark inside. Jobs are labeled as [iteration outer]-[iteration inner].
+%%| fig-alt: A diagram visualizing the utilization of four different cores (on the y axis). The x represents the time. C1 runs for all 16 seconds and evaluates two outer resampling iterations.
+The remaining three cores each evaluate one outer resampling iteration and idle afterwards. Each evaluation of an outer resampling consists of two sequentially executed evaluations from the inner benchmark.
 gantt
     title CPU Utilization
     dateFormat  s
     axisFormat %S
-    section CPU1
+    section C1
     Iteration 1-1           :done, 0, 4s
     Iteration 1-2           :done, 4, 4s
     Iteration 5-1           :done, 8, 4s
     Iteration 5-2           :done, 12, 4s
 
-    section CPU2
+    section C2
     Iteration 2-1           :done, 0, 4s
     Iteration 2-2           :done, 4, 4s
     Idle                    :8, 8s
 
-    section CPU3
+    section C3
     Iteration 3-1           :done, 0, 4s
     Iteration 3-2           :done, 4, 4s
     Idle                    :8, 8s
 
-    section CPU4
+    section C4
     Iteration 4-1           :done, 0, 4s
     Iteration 4-2           :done, 4, 4s
     Idle                    :8, 8s
@@ -334,48 +411,50 @@ gantt
 %%| fig-width: 6.5
 %%| fig-responsive: false
 %%| label: fig-parallel-inner
-%%| fig-cap: CPU utilization for four CPUs while parallelizing the inner two-fold CV with a sequential five-fold CV outside. Jobs are labeled as [iteration outer]-[iteration inner].
+%%| fig-cap: CPU utilization for four cores while parallelizing the inner benchmarking (consisting of two holdout evaluations) with a sequential five-fold CV outside. Jobs are labeled as [iteration outer]-[iteration inner].
+%%| fig-alt: A diagram visualizing the utilization of four different cores (on the y axis). The x axis represents the time. C1 and C2 are each running five evaluations from the inner benchmark and are therefore utilized for 20 seconds. C3 and C4 are idling during the whole computation.
 gantt
     title CPU Utilization
     dateFormat  s
     axisFormat %S
-    section CPU1
+    section C1
     Iteration 1-1           :done, 0, 4s
     Iteration 2-1           :done, 4, 4s
     Iteration 3-1           :done, 8, 4s
     Iteration 4-1           :done, 12, 4s
     Iteration 5-1           :done, 16, 4s
 
-    section CPU2
+    section C2
     Iteration 1-2           :done, 0, 4s
     Iteration 2-2           :done, 4, 4s
     Iteration 3-2           :done, 8, 4s
     Iteration 4-2           :done, 12, 4s
     Iteration 5-2           :done, 16, 4s
 
-    section CPU3
+    section C3
     Idle                    :0, 20s
 
-    section CPU4
+    section C4
     Idle                    :0, 20s
 ```
 
-Both possibilities for parallelization are not exploiting the full potential of the four CPUs.
-With parallelization of the outer loop, all results are computed after 16 seconds, in contrast to parallelization of the inner loop where the results are only available after 20 seconds.
+In this example, both possibilities for parallelization are not exploiting the full potential of the four cores.
+With parallelization of the outer loop, all results are computed after 16 seconds, if we parallelize the inner loop we obtain them after 20 seconds, and in both cases some CPU cores remain idle for at least some of the time.
 
-It is possible to enable parallelization for both loops for nested parallelization, even on different parallelization backends, which can be useful in some distributed computing setups.
-In this case, the number of workers must be manually tweaked with `r ref("future::tweak")` so that the system does not get overburdened:
+`mlr3` and `future` make it possible to enable parallelization for both loops for nested parallelization, even on different parallelization backends, which can be useful in some distributed computing setups.
+Note that the detection of available cores does not work for such a nested parallelization and the number of workers must be manually set instead:
 
 ```{r technical-011, eval = FALSE}
 # Runs both loops in parallel
 future::plan(list(
   tweak("multisession", workers = 2),
-  tweak("multisession", workers = 4)
+  tweak("multisession", workers = 2)
 ))
 ```
 
-This example would run on eight cores on the local machine, parallelizing the outer resampling on two workers, and the inner resampling on four.
-For more background information about parallelization during tuning, see Section 6.7 of @hpo_practical.
+This example would run on up to four cores on the local machine: first, two new sessions would be spawned for the outer loop.
+Both new sessions then spawn two additional sessions each to evaluate the inner benchmark.
+Although two cores are still idle when the fifth outer resampling iteration runs, this approach reduces the total runtime to 12 seconds, which is optimal in this example.
 
 ### Parallelization of Predictions {#sec-parallel-predict}
 
