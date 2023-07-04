@@ -4,12 +4,10 @@
 \alias{link}
 \title{Create markdown and print-friendly link}
 \usage{
-link(url, text = NULL)
+link(url)
 }
 \arguments{
 \item{url}{URL to link to}
-
-\item{text}{Text to display in main text}
 }
 \description{
 Creates markdown link and footnote with full link
