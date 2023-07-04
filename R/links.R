@@ -12,25 +12,18 @@ update_db = function() {
 #' Creates a markdown link to a function reference.
 #'
 #' @param topic Name of the topic to link against.
-#' @param text Text to use for the link. Defaults to the topic name.
 #' @param index If `TRUE` calls `index`
 #' @param aside Passed to `index`
 #'
 #' @return (`character(1)`) markdown link.
 #' @export
-ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
+ref = function(topic, index = FALSE, aside = FALSE) {
 
   strip_parenthesis = function(x) sub("\\(\\)$", "", x)
 
   checkmate::assert_string(topic, pattern = "^[[:alnum:]._-]+(::[[:alnum:]._-]+)?(\\(\\))?$")
-  checkmate::assert_string(text, min.chars = 1L, null.ok = TRUE)
 
   topic = trimws(topic)
-  text = if (is.null(text)) {
-    topic
-  } else {
-    trimws(text)
-  }
 
   if (stringi::stri_detect_fixed(topic, "::")) {
     parts = strsplit(topic, "::", fixed = TRUE)[[1L]]
@@ -64,10 +57,10 @@ ref = function(topic, text = NULL, index = FALSE, aside = FALSE) {
     url = sprintf("https://www.rdocumentation.org/packages/%s/topics/%s", pkg, name)
   }
 
-  out = sprintf("[`%s`](%s)", text, url)
+  out = sprintf("[`%s`](%s)", topic, url)
 
   if (index || aside) {
-    out = paste0(out, index(main = NULL, index = text, aside = aside, code = TRUE))
+    out = paste0(out, index(main = NULL, index = topic, aside = aside, code = TRUE))
   }
 
   out
@@ -240,15 +233,10 @@ define = function(text) {
 #' Creates markdown link and footnote with full link
 #'
 #' @param url URL to link to
-#' @param text Text to display in main text
 #'
 #' @export
-link = function(url, text = NULL) {
-  if (is.null(text)) {
-    sprintf("[%s](%s)", url, url)
-  } else {
-    sprintf("[%s](%s)^[[%s](%s)]", text, url, url, url)
-  }
+link = function(url) {
+  sprintf("[%s](%s)", url, url)
 }
 
 #' @name paradox
