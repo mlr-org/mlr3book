@@ -4,130 +4,35 @@
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 [![Mattermost](https://img.shields.io/badge/chat-mattermost-orange.svg)](https://lmmisld-lmu-stats-slds.srv.mwn.de/mlr_invite/)
 
-Package to build the [mlr3 book](https://mlr3book.mlr-org.com) using [quarto](https://quarto.org).
+Repository to build the free, online version of *[Applied Machine Learning Using mlr3 in R](https://mlr3book.mlr-org.com)* using [quarto](https://quarto.org).
 
-## Rendered Versions
 
-- [HTML](https://mlr3book.mlr-org.com)
+## Read the book
 
-- [PDF](https://mlr3book.mlr-org.com/Applied-Machine-Learning-Using-mlr3-in-R.pdf)
+You can read the rendered version of the book in either:
 
-## Working on the book
+- [HTML](https://mlr3book.mlr-org.com); or
 
-1. Clone the `mlr-org/mlr3book` repository.
+- [PDF](https://mlr3book.mlr-org.com/Applied-Machine-Learning-Using-mlr3-in-R.pdf).
 
-1. Currently we need the latest quarto dev version to be able to render mermaid diagrams when rendering to pdf: https://quarto.org/docs/download/prerelease (we need >=1.3.283)
+## Render the book
 
-1. Call `make install` to initialize the renv virtual environment.
-   The file `book/renv.lock` records all packages needed to build the book.
+To render the book yourself, follow these steps:
 
-1. To build the book, run one of the following commands:
+1. Clone this repository (https://github.com/mlr-org/mlr3book.git)
+2. Install Quarto >=1.3.283 if needed
+3. Run `make serve` to render the book to HTML and preview on a local server or `make pdf` to render to PDF (other options are available and documented in the Makefile), note we use xelatex for rendering to PDF
 
-   ```bash
-   # HTML
-   quarto render book/ --to html
+## Contributing to the book
 
-   # PDF
-   quarto render book/ --to pdf
-   ```
+If you are making changes to the book please note the following:
 
-   These command use the virtual environment created by renv.
-
-1. If your change to the book requires a new R package, install the package in the renv environment.
-   For this, start an R session in the `book/` directory and install the package with `renv::install()`.
-   Then call `renv::snapshot()` to update `book/renv.lock`.
-   Commit `book/renv.lock` with your changes to a pull request.
-
-## Serve the book
-
-Alternatively, you "serve" the book via a local server:
-
-```bash
-quarto preview book/
-```
-
-The command above starts a service which automatically (re-)compiles the book sources in the background whenever a file is modified.
-
-## Makefile approach
-
-Alternatively, you can use the provided `Makefile` (c.f. see `make help`).
-This way, you can
-
-- install dependencies
-- build the HTML book -> `make html`
-- build the PDF book -> `make pdf`
-
-## File system structure
-
-The root directory is a regular R package.
-The book itself is in the subdirectory "book".
-
-## Style Guide
-
-### Lists
-
-For lists please use `*` and not `-`.
-
-### Chunk Names
-
-Chunks are named automatically as `[chapter-name]-#` by calling `name_chunks_mlr3book()`:
-
-```r
-mlr3book::name_chunks_mlr3book()
-```
-
-or alternatively executing `make names` from the terminal.
-
-### Figures
-
-You have to options to include a figure:
-
-1) Vector graphic
-  - In the `qmd`: `knitr::include_graphics("Figures/some_figure.svg")`
-  - Add `book/Figures/some_figure.svg` **and** `book/Figures/some_figure.pdf` to the repository.
-2) Pixel graphic
-  - In the `qmd`: `knitr::include_graphics("Figures/some_figure.png")`
-  - Add **only** `book/Figures/some_figure.png` to the repository.
-
-* Do not use markdown syntax `[](<figure>)` to include figures.
-* Do not include `pdf` in the `qmd`: `knitr::include_graphics("Figures/some_figure.pdf")`.
-
-#### Adding a new figure
-
-To add a new figure into the repository consider the following rules:
-
-* Add the file in the `book/images` folder without any subdirectory.
-* Store the original figure as a `svg` file if possible, i.e. if it is a vector graphic.
-  This allows us to re-use or modify images in the future.
-* `png` files should have reasonable resolution, i.e. the width of a pixel graphic should be between `400px` and `2000px`.
-  If a higher resolution is needed to obtain a readable plot you are probably doing something wrong, e.g. use a pixel graphic where you should use a vector graphic.
-* Please look at the file size.
-  - If your `pdf` or `svg` file is larger than `1MB` it probably contains unnecessary hidden content or unvectorized parts.
-  - If your `png` file is larger than `1MB` the resolution is probably too big.
-
-#### Adding a new mlr3 package
-
-This allows linking a package using \`r packagename\`.
-
-* Add the package to `db$hosted` in `R/zzz.R`
-* Export the package by adding a new entry in the end of `R\links.R`
-
-#### Further aspects
-
-* How do I convert `svg` to `pdf`?
-  - Use Inkscape or any other tool which does not convert to raster images.
-* How do I convert `pdf` to `svg`?
-  - Use Inkscape which allows you to also remove unwanted parts of the `pdf`.
-* Do not use screenshots!
-  - *Google Slides* allows `svg` export.
-  - *PDF* can be converted to `svg` and you can even cut parts.
-  - *HTML* can be converted to `svg`.
-* The difference between vector (`svg`) and pixel (`png`) graphics should be known.
-  - Attention: `svg` and `pdf` also support to include pixel graphics.
-    There is no guarantee that a `svg` or `pdf` is a pure vector graphic.
-    If you paste a pixel graphic (e.g. a screenshot) into Inkscape and save it as `svg` it does not magically become a vector graphic.
-
-### Spacing
-
-- Always start a new sentence on a new line, this keeps the diff readable.
-- Put an empty line before and after code blocks.
+* Our style guide is provided [here in the introduction](https://mlr3book.mlr-org.com/chapters/chapter1/introduction_and_overview.html#styleguide)
+* Where possible, figures in the HTML book should be svgs and figures in the PDF should be pdf. These should be included with `knitr::include_graphics()` or ideally with [include_multi_graphics()](https://github.com/mlr-org/mlr3book/blob/main/book/common/_utils.qmd).
+* If you add a new package dependency to the book, please follow the following steps to update the lockfile:
+  * Start an R session in the `book/` directory
+  * Activate the project with `renv::activate()`
+  * Restore the project environment with `renv::restore()`
+  * Run `renv::install()` to install the new package
+  * Update the Lockfile with `renv::snapshot()`
+  * Commit `book/renv.lock` with your changes and create a pull request.
