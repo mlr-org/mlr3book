@@ -142,99 +142,249 @@ rr$aggregate(msr("classif.acc"))
 
 ## Solutions to @sec-optimization
 
-1. Tune the `mtry`, `sample.fraction`, ` num.trees` hyperparameters of a random forest model (`lrn("regr.ranger")`) on the `"mtcars"` task.
-Use a simple random search with 50 evaluations and select a suitable batch size.
-Evaluate with a three-fold CV and the root mean squared error.
+1. Tune the `mtry`, `sample.fraction`, and `num.trees` hyperparameters of `lrn("regr.ranger")` on `tsk("mtcars")`.
+  Use a simple random search with 50 evaluations.
+  Evaluate with a three-fold CV and the root mean squared error.
+  Visualize the effects that each hyperparameter has on the performance via simple marginal plots, which plot a single hyperparameter versus the cross-validated MSE.
 
-```{r solutions-009}
-set.seed(4)
+```{r}
+library(mlr3verse)
+
+task = tsk("mtcars")
+
 learner = lrn("regr.ranger",
-  mtry.ratio      = to_tune(0, 1),
-  sample.fraction = to_tune(1e-1, 1),
-  num.trees       = to_tune(1, 2000)
+  mtry = to_tune(1, 10),
+  sample.fraction = to_tune(0.5, 1),
+  num.trees = to_tune(100, 500)
 )
 
 instance = ti(
-  task = tsk("mtcars"),
   learner = learner,
+  task = task,
   resampling = rsmp("cv", folds = 3),
-  measures = msr("regr.rmse"),
+  measure = msr("regr.rmse"),
   terminator = trm("evals", n_evals = 50)
 )
 
-tuner = tnr("random_search", batch_size = 10)
+
 
 tuner$optimize(instance)
+
+autoplot(instance, type = "marginal", cols_x = "mtry")
+autoplot(instance, type = "marginal", cols_x = "sample.fraction")
+autoplot(instance, type = "marginal", cols_x = "num.trees")
 ```
 
-2. Evaluate the performance of the model created in Question 1 with nested resampling.
-Use a holdout validation for the inner resampling and a three-fold CV for the outer resampling.
-Print the unbiased performance estimate of the model.
+2. Evaluate the performance of the model created in Exercise 1 with nested resampling.
+  Use a holdout validation for the inner resampling and a three-fold CV for the outer resampling.
 
-```{r solutions-010}
-set.seed(4)
+```{r}
+library(mlr3verse)
+
+task = tsk("mtcars")
+
 learner = lrn("regr.ranger",
-  mtry.ratio      = to_tune(0, 1),
-  sample.fraction = to_tune(1e-1, 1),
-  num.trees       = to_tune(1, 2000)
+  mtry = to_tune(1, 10),
+  sample.fraction = to_tune(0.5, 1),
+  num.trees = to_tune(100, 500)
 )
 
 at = auto_tuner(
-  tuner = tnr("random_search", batch_size = 10),
+  tuner = tnr("random_search", batch_size = 50),
   learner = learner,
   resampling = rsmp("holdout"),
   measure = msr("regr.rmse"),
   terminator = trm("evals", n_evals = 50)
 )
 
-task = tsk("mtcars")
-outer_resampling = rsmp("cv", folds = 3)
-rr = resample(task, at, outer_resampling, store_models = TRUE)
+rr = resample(task, at, rsmp("cv", folds = 3))
 
-rr$aggregate()
+rr$aggregate(msr("regr.rmse"))
 ```
 
-1. Tune and benchmark an XGBoost model against a logistic regression model on the `"spam"` task and determine which has the best Brier score.
-Use mlr3tuningspaces and nested resampling.
+3. Tune and benchmark an XGBoost model against a logistic regression (without tuning the latter) and determine which has the best Brier score.
+  Use `mlr3tuningspaces` and nested resampling, try to pick appropriate inner and outer resampling strategies that balance computational efficiency vs. stability of the results.
 
-```{r solutions-011}
-library(mlr3tuningspaces)
+```{r}
+library(mlr3verse)
 
-lrn_xgboost = lts(lrn("classif.xgboost", predict_type = "prob"))
+task = tsk("sonar")
+
+lrn_log_reg = lrn("classif.log_reg", predict_type = "prob")
 
 at_xgboost = auto_tuner(
-  tuner = tnr("random_search", batch_size = 1),
-  learner = lrn_xgboost,
-  resampling = rsmp("cv", folds = 3),
+  tuner = tnr("random_search", batch_size = 50),
+  learner = lts(lrn("classif.xgboost", predict_type = "prob")),
+  resampling = rsmp("cv", folds = 5),
   measure = msr("classif.bbrier"),
-  term_evals = 2,
+  terminator = trm("evals", n_evals = 50)
 )
-
-lrn_logreg = lrn("classif.log_reg", predict_type = "prob")
-
-at_logreg = auto_tuner(
-  tuner = tnr("random_search", batch_size = 1),
-  learner = lrn_logreg,
-  resampling = rsmp("cv", folds = 3),
-  measure = msr("classif.bbrier"),
-  term_evals = 2,
-)
-
-task = tsk("spam")
-outer_resampling = rsmp("cv", folds = 3)
 
 design = benchmark_grid(
   tasks = task,
-  learners = list(at_xgboost, at_logreg),
-  resamplings = outer_resampling
+  learners = list(lrn_log_reg, at_xgboost),
+  resamplings = rsmp("cv", folds = 3)
 )
 
-bmr = benchmark(design, store_models = TRUE)
+bmr = benchmark(design)
 
-bmr
+bmr$aggregate(msr("classif.bbrier"))
 ```
 
+4. (*) Write a function that implements an iterated random search procedure that drills down on the optimal configuration by applying random search to iteratively smaller search spaces.
+  Your function should have seven inputs: `task`, `learner`, `search_space`, `resampling`, `measure`, `random_search_stages`, and `random_search_size`.
+  You should only worry about programming this for fully numeric and bounded search spaces that have no dependencies.
+  In pseudo-code:
+    (1) Create a random design of size `random_search_size` from the given search space and evaluate the learner on it.
+    (2) Identify the best configuration.
+    (3) Create a smaller search space around this best config, where you define the new range for each parameter as: `new_range[i] = (best_conf[i] - 0.25 * current_range[i], best_conf[i] + 0.25*current_range[i])`.
+      Ensure that this `new_range` respects the initial bound of the original `search_space` by taking the `max()` of the new and old lower bound, and the `min()` of the new and the old upper bound ("clipping").
+    (4) Iterate the previous steps `random_search_stages` times and at the end return the best configuration you have ever evaluated.
 
+```{r}
+library(mlr3verse)
+library(mlr3misc)
+
+focus_search = function(task, learner, search_space, resampling, measure, random_search_stages, random_search_size) {
+
+  repeat {
+
+    # tune learner on random design
+    instance = tune(
+      tuner = tnr("random_search", batch_size = random_search_size),
+      learner = learner,
+      task = task,
+      resampling = resampling,
+      measure = measure,
+      search_space = search_space,
+      terminator = trm("evals", n_evals = random_search_size),
+    )
+
+    # identify the best configuration
+    best_config = instance$result_x_search_space
+
+    # narrow search space
+    walk(search_space$ids(), function(id) {
+      best = best_config[[id]]
+      lower = search_space$params[[id]]$lower
+      upper = search_space$params[[id]]$upper
+
+      new_lower = best - 0.25 * lower
+      new_upper = best + 0.25 * upper
+
+      if ("ParamInt" %in% class(search_space$params[[id]])) {
+        new_lower = round(new_lower)
+        new_upper = round(new_upper)
+      }
+
+      search_space$params[[id]]$lower = max(new_lower, lower)
+      search_space$params[[id]]$upper = min(new_upper, upper)
+    })
+
+    random_search_stages = random_search_stages - 1
+    if (!random_search_stages) return(best_config)
+  }
+}
+
+focus_search(
+  task = tsk("mtcars"),
+  learner = lrn("regr.xgboost"),
+  search_space = ps(
+    eta = p_dbl(lower = 0.01, upper = 0.5),
+    max_depth = p_int(lower = 1, upper = 10),
+    nrounds = p_int(lower = 10, upper = 100)
+  ),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("regr.rmse"),
+  random_search_stages = 2,
+  random_search_size = 50
+)
+```
+
+As a stretch goal, look into `mlr3tuning`'s internal source code and turn your function into an R6 class inheriting from the `Tuner` class -- test it out on a learner of your choice.
+
+```{r}
+library(R6)
+library(mlr3tuning)
+
+TunerFocusSearch = R6Class("TunerFocusSearch",
+  inherit = Tuner,
+  public = list(
+
+    initialize = function() {
+      param_set = ps(
+        random_search_stages = p_int(lower = 1L, tags = "required"),
+        random_search_size = p_int(lower = 1L, tags = "required")
+      )
+
+      param_set$values = list(random_search_stages = 10L, random_search_size = 50L)
+
+      super$initialize(
+        id = "focus_search",
+        param_set = param_set,
+        param_classes = c("ParamLgl", "ParamInt", "ParamDbl", "ParamFct"),
+        properties = c("dependencies", "single-crit", "multi-crit"),
+        label = "Focus Search",
+        man = "mlr3tuning::mlr_tuners_focus_search"
+      )
+    }
+  ),
+
+  private = list(
+    .optimize = function(inst) {
+      pv = self$param_set$values
+      search_space = inst$search_space
+
+       for (i in seq(pv$random_search_stages)) {
+
+        # evaluate random design
+        xdt = generate_design_random(search_space, pv$random_search_size)$data
+        inst$eval_batch(xdt)
+
+        # identify the best configuration
+        best_config = inst$archive$best(batch = i)
+
+        # narrow search space
+        walk(search_space$ids(), function(id) {
+          best = best_config[[id]]
+          lower = search_space$params[[id]]$lower
+          upper = search_space$params[[id]]$upper
+
+          new_lower = best - 0.25 * lower
+          new_upper = best + 0.25 * upper
+
+          if ("ParamInt" %in% class(search_space$params[[id]])) {
+            new_lower = round(new_lower)
+            new_upper = round(new_upper)
+          }
+
+          search_space$params[[id]]$lower = max(new_lower, lower)
+          search_space$params[[id]]$upper = min(new_upper, upper)
+        })
+      }
+    }
+  )
+)
+
+mlr_tuners$add("focus_search", TunerFocusSearch)
+
+instance = ti(
+  task = tsk("mtcars"),
+  learner = lrn("regr.xgboost"),
+  search_space = ps(
+    eta = p_dbl(lower = 0.01, upper = 0.5),
+    max_depth = p_int(lower = 1, upper = 10),
+    nrounds = p_int(lower = 10, upper = 100)
+  ),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("regr.rmse"),
+  terminator = trm("none")
+)
+
+tuner = tnr("focus_search", random_search_stages = 2, random_search_size = 50)
+
+tuner$optimize(instance)
+```
 
 ## Solutions to @sec-optimization-advanced
 
