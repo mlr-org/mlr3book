@@ -139,6 +139,66 @@ rr = resample(
 rr$aggregate(msr("classif.acc"))
 ```
 
+4. (*) Program your own ROC plotting function without using `mlr3`'s `autoplot()` function. The signature of your function should be `my_roc_plot(task, learner, train_indices, test_indices)`.
+  Your function should use the `$set_threshold()` method of  `Prediction`, as well as `mlr3measures`.
+  
+  
+```{r solutions-009}
+my_roc_plot = function(task, learner, train_indices, test_indices) {
+  
+  # Train learner, predict once.
+  learner$train(task, train_indices)
+  pred = learner$predict(task, test_indices)
+  # Positive class predictions from prediction matrix
+  pos_pred = pred$prob[, which(colnames(pred$prob) == task$positive)]
+
+  # Set grid of probabilities
+  prob_grid = seq(0, 1, 0.001)
+
+  # For each possible threshold, calculate TPR, FPR + aggregate to data.table
+  grid = data.table::rbindlist(lapply(prob_grid, \(thresh) {
+
+    pred$set_threshold(thresh)
+    
+    data.table::data.table(
+      thresh = thresh,
+      # y axis == sensitivity == TPR
+      tpr = mlr3measures::tpr(truth = pred$truth, response = pred$response, positive = task$positive),
+      # x axis == 1 - specificity == 1 - TNR == FPR
+      fpr = mlr3measures::fpr(truth = pred$truth, response = pred$response, positive = task$positive)
+    )
+  }))
+  
+  # Order descending by threshold to use ggplot2::geom_step
+  data.table::setorderv(grid, cols = "thresh", order = -1)
+  
+  ggplot2::ggplot(grid, ggplot2::aes(x = fpr, y = tpr)) +
+    ggplot2::geom_step(direction = "hv") +
+    #ggplot2::geom_line() +
+    ggplot2::geom_point() +
+    ggplot2::coord_equal() +
+    ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(
+      title = "My Custom ROC Curve",
+      subtitle = sprintf("%s on %s", learner$id, task$id),
+      x = "1 - Specificity", y = "Sensitivity",
+      caption = sprintf("n = %i. Test set: %i", task$nrow, length(test_indices))
+    )
+}
+
+# Setting up example task and learner for testing
+task = tsk("sonar")
+learner = lrn("classif.ranger", num.trees = 100, predict_type = "prob")
+split = partition(task)
+
+# Compare with prebuilt version in mlr3:
+my_roc_plot(task, learner, split$train, split$test)
+
+learner$train(task, split$train)
+pred = learner$predict(task, split$test)
+autoplot(pred, type = "roc")
+```
 
 ## Solutions to @sec-optimization
 
