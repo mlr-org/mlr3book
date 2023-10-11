@@ -238,12 +238,92 @@ bmr
 
 ## Solutions to @sec-optimization-advanced
 
-1. We first construct the objective function and optimization instance:
+1. Tune the `mtry`, `sample.fraction`, and `num.trees` hyperparameters of `lrn("regr.ranger")` on `tsk("mtcars")` and evaluate this with a three-fold CV and the root mean squared error (same as @sec-optimization, Exercise 1).
+Use `tnr("mbo")` with 50 evaluations.
+Compare this with the performance progress of a random search run from @sec-optimization, Exercise 1.
+Plot the progress of performance over iterations and visualize the spatial distribution of the evaluated hyperparameter configurations for both algorithms.
 
 ```{r}
-library(bbotk)
-library(mlr3mbo)
+library(mlr3verse)
+library(ggplot2)
 
+learner = lrn("regr.ranger",
+  mtry = to_tune(1, 10),
+  sample.fraction = to_tune(0.5, 1),
+  num.trees = to_tune(100, 500)
+)
+task = tsk("mtcars")
+resampling = rsmp("cv", folds = 3)$instantiate(task)
+measure = msr("regr.rmse")
+terminator = trm("evals", n_evals = 50)
+instance = ti(
+  learner = learner,
+  task = task,
+  resampling = resampling,
+  measure = measure,
+  terminator = terminator
+)
+tuner = tnr("random_search", batch_size = 50)
+tuner$optimize(instance)
+
+instance_mbo = ti(
+  learner = learner,
+  task = task,
+  resampling = resampling,
+  measure = measure,
+  terminator = terminator
+)
+tuner = tnr("mbo")
+tuner$optimize(instance_mbo)
+
+instance$archive$data[, iteration := seq_len(.N)]
+instance$archive$data[, best_rmse := cummin(regr.rmse)]
+instance$archive$data[, method := "Random Search"]
+instance_mbo$archive$data[, iteration := seq_len(.N)]
+instance_mbo$archive$data[, best_rmse := cummin(regr.rmse)]
+instance_mbo$archive$data[, method := "BO"]
+
+plot_data = rbind(instance$archive$data[, c("iteration", "best_rmse", "method")],
+  instance_mbo$archive$data[, c("iteration", "best_rmse", "method")])
+
+ggplot(aes(x = iteration, y = best_rmse, colour = method), data = plot_data) +
+  geom_step() +
+  theme_minimal()
+
+plot_data_sampling = rbind(
+  instance$archive$data[, c("mtry", "sample.fraction", "num.trees", "iteration", "method")],
+  instance_mbo$archive$data[, c("mtry", "sample.fraction", "num.trees", "iteration", "method")])
+
+ggplot(aes(x = num.trees, y = sample.fraction, shape = method, colour = iteration), data = plot_data_sampling) +
+  scale_colour_gradient(low = "black", high = "darkgrey") +
+  geom_point(size = 3) +
+  labs(colour = "Number of Evaluations", shape = "Method") +
+  facet_wrap(~ mtry, nrow = 2, ncol = 5, labeller = "label_both") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+ggplot(aes(x = num.trees, y = sample.fraction, colour = method, label = mtry), data = plot_data_sampling) +
+  scale_colour_manual(values = c("black", "darkgrey")) +
+  geom_point(size = 0) +
+  geom_text() +
+  guides(colour = guide_legend(title = "Method", override.aes = aes(label = "", size = 2))) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+2. Minimize the 2D Rastrigin function $f: [-5.12, 5.12] \times [-5.12, 5.12] \rightarrow \mathbb{R}$, $\mathbf{x} \mapsto 10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$, $D = 2$ via BO (standard sequential single-objective BO via `bayesopt_ego()`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `opt("nloptr")` as acquisition function optimizer.
+Use a budget of 40 function evaluations.
+Run this with both the "default" Gaussian process surrogate model with Matérn 5/2 kernel, and the "default" random forest surrogate model.
+Compare their anytime performance (similarly as in @fig-bayesian-sinusoidal_bo_rs).
+You can construct the surrogate models with default settings using:
+```{r}
+surrogate_gp = srlrn(default_gp())
+surrogate_rf = srlrn(default_rf())
+```
+
+```{r}
+library(mlr3verse)
+library(ggplot2)
 rastrigin = function(xdt) {
   D = ncol(xdt)
   y = 10 * D + rowSums(xdt^2 - (10 * cos(2 * pi * xdt)))
@@ -260,18 +340,9 @@ objective = ObjectiveRFunDt$new(
 instance = OptimInstanceSingleCrit$new(
   objective = objective,
   terminator = trm("evals", n_evals = 40))
-```
 
-Based on the different surrogate models, we can construct two optimizers:
-
-```{r}
-library(mlr3mbo)
-
-surrogate_gp = srlrn(lrn("regr.km", covtype = "matern5_2",
-  optim.method = "BFGS", control = list(trace = FALSE)))
-
-surrogate_rf = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
-  se.method = "jack"))
+surrogate_gp = srlrn(default_gp())
+surrogate_rf = srlrn(default_rf())
 
 acq_function = acqf("cb", lambda = 1)
 
@@ -288,29 +359,22 @@ optimizer_rf = opt("mbo",
   loop_function = bayesopt_ego,
   surrogate = surrogate_rf,
   acq_function = acq_function,
-  acq_optimizer = acq_optimizer)
-```
+  acq_optimizer = acq_optimizer
+)
 
-We then evaluate the given initial design on the instance and optimize it with the first BO algorithm using a Gaussian Process as surrogate model:
-
-```{r, output=FALSE}
 initial_design = data.table(
   x1 = c(-3.95, 1.16, 3.72, -1.39, -0.11, 5.00, -2.67, 2.44),
-  x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46))
-
+  x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46)
+)
 instance$eval_batch(initial_design)
 
 optimizer_gp$optimize(instance)
 
 gp_data = instance$archive$data
 gp_data[, y_min := cummin(y)]
-gp_data[, nr_eval := seq_len(.N)]
+gp_data[, iteration := seq_len(.N)]
 gp_data[, surrogate := "Gaussian Process"]
-```
 
-Afterwards, we clear the instance, evaluate the initial design again and optimize the instance with the second BO algorithm using a random forest as surrogate model:
-
-```{r, output=FALSE}
 instance$archive$clear()
 
 instance$eval_batch(initial_design)
@@ -319,115 +383,72 @@ optimizer_rf$optimize(instance)
 
 rf_data = instance$archive$data
 rf_data[, y_min := cummin(y)]
-rf_data[, nr_eval := seq_len(.N)]
+rf_data[, iteration := seq_len(.N)]
 rf_data[, surrogate := "Random forest"]
-```
 
-We collect all data and visualize the anytime performance:
-
-```{r}
-library(ggplot2)
-library(viridisLite)
-all_data = rbind(gp_data, rf_data)
-ggplot(aes(x = nr_eval, y = y_min, colour = surrogate), data = all_data) +
+plot_data = rbind(gp_data, rf_data)
+ggplot(aes(x = iteration, y = y_min, colour = surrogate), data = plot_data) +
   geom_step() +
-  scale_colour_manual(values = viridis(2, end = 0.8)) +
+  scale_colour_manual(values = c("black", "darkgrey")) +
   labs(y = "Best Observed Function Value", x = "Number of Function Evaluations",
        colour = "Surrogate Model") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
 
-2. We first construct the non-parallelized objective function and the optimization instance:
+3. Minimize the following function: $f: [-10, 10] \rightarrow \mathbb{R}^2, x \mapsto \left(x^2, (x - 2)^2\right)$ with respect to both objectives.
+Use the ParEGO algorithm.
+Construct the objective function using the `r ref("ObjectiveRFunMany")` class.
+Terminate the optimization after a runtime of 100 evals.
+Plot the resulting Pareto front and compare it to the analytical solution, $y_2 = \left(\sqrt{y_1}-2\right)^2$ with $y_1$ ranging from $0$ to $4$.
 
 ```{r}
-schaffer1 = function(xss) {
+library(mlr3verse)
+library(ggplot2)
+fun = function(xss) {
   evaluations = lapply(xss, FUN = function(xs) {
-    Sys.sleep(5)
-    list(y1 = xs$x, y2 = (xs$x - 2)^2)
+    list(y1 = xs$x ^ 2, y2 = (xs$x - 2)^2)
   })
   rbindlist(evaluations)
 }
 
 objective = ObjectiveRFunMany$new(
-  fun = schaffer1,
+  fun = fun,
   domain = ps(x = p_dbl(lower = -10, upper = 10)),
   codomain = ps(y1 = p_dbl(tags = "minimize"), y2 = p_dbl(tags = "minimize")),
   id = "schaffer1")
 
 instance = OptimInstanceMultiCrit$new(
   objective = objective,
-  terminator = trm("run_time", secs = 60))
-```
+  terminator = trm("evals", n_evals = 100)
+)
 
-Using the surrogate, acquisition function and acquisition function optimizer that are provided, we can proceed to optimize the instance via ParEGO:
-
-```{r}
-surrogate = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
-  se.method = "jack"))
+surrogate = default_rf()
 
 acq_function = acqf("ei")
 
-acq_optimizer = acqo(opt("random_search", batch_size = 100),
-  terminator = trm("evals", n_evals = 100))
+acq_optimizer = acqo(opt("nloptr", algorithm = "NLOPT_GN_ORIG_DIRECT"),
+  terminator = trm("stagnation", iters = 100, threshold = 1e-5))
 
 optimizer = opt("mbo",
   loop_function = bayesopt_parego,
-  surrogate = surrogate,
-  acq_function = acq_function,
-  acq_optimizer = acq_optimizer,
-  args = list(q = 4))
-```
+  surrogate = surrogate, acq_function =
+  acq_function,
+  acq_optimizer = acq_optimizer
+)
 
-```{r, output=FALSE}
 optimizer$optimize(instance)
+
+true_pareto = data.table(y1 = seq(from = 0, to = 4, length.out = 1001))
+true_pareto[, y2 := (sqrt(y1) - 2) ^2]
+
+ggplot(aes(x = y1, y = y2), data = instance$archive$best()) +
+  geom_point() +
+  geom_line(data = true_pareto, colour = "darkgrey") +
+  geom_step(direction = "hv") +
+  labs(x = expression(y[1]), y = expression(y[2])) +
+  theme_minimal()
 ```
-
-We observe that 12 points were evaluated in total (which makes sense as the objective function evaluation is not yet parallelized and the overhead of each function evaluation is given by 5 seconds).
-While the points are appropriately evaluated in batches of size `q = 4` (with the initial design automatically constructed as the first batch), we do not experience any acceleration of the optimization process unless the function evaluation is explicitly parallelized.
-
-```{r}
-nrow(instance$archive$data)
-instance$archive$data[, c("x", "timestamp", "batch_nr")]
-```
-
-We now parallelize the evaluation of the objective function and proceed to optimize the instance again:
-
-```{r}
-library(future)
-library(future.apply)
-plan("multisession", workers = 4)
-
-schaffer1_parallel = function(xss) {
-  evaluations = future_lapply(xss, FUN = function(xs) {
-    Sys.sleep(5)
-    list(y1 = xs$x, y2 = (xs$x - 2)^2)
-  })
-  rbindlist(evaluations)
-}
-
-objective_parallel = ObjectiveRFunMany$new(
-  fun = schaffer1_parallel,
-  domain = ps(x = p_dbl(lower = -10, upper = 10)),
-  codomain = ps(y1 = p_dbl(tags = "minimize"), y2 = p_dbl(tags = "minimize")),
-  id = "schaffer1_parallel")
-
-instance_parallel = OptimInstanceMultiCrit$new(
-  objective = objective_parallel,
-  terminator = trm("run_time", secs = 60))
-```
-
-```{r, output=FALSE}
-optimizer$optimize(instance_parallel)
-```
-
-By parallelizing the evaluation of the objective function we used our compute resources much more efficiently and evaluated many more points:
-
-```{r}
-nrow(instance_parallel$archive$data)
-instance_parallel$archive$data[, c("x", "timestamp", "batch_nr")]
-```
-
 
 
 
