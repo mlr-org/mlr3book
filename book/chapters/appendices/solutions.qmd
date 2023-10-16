@@ -428,35 +428,41 @@ nrow(instance_parallel$archive$data)
 instance_parallel$archive$data[, c("x", "timestamp", "batch_nr")]
 ```
 
-
-
-
 ## Solutions to @sec-feature-selection
 
-1. Calculate a correlation filter on the `"mtcars"` task.
+1. Compute the correlation filter scores on `tsk("mtcars")` and use the filter to select the five features most strongly correlated with the target.
+  Resample `lrn("regr.kknn")` on both the full dataset and the reduced one, and compare both performances based on 10-fold CV with respect to MSE.
+  NB: Here, we have performed the feature filtering outside of CV, which is generally not a good idea as it biases the CV performance estimation.
+  To do this properly, filtering should be embedded inside the CV via pipelines -- try to come back to this exercise after you read @sec-pipelines-nonseq to implement this with less bias.
 
-```{r solutions-012}
+```{r}
 library(mlr3verse)
-filter = flt("correlation")
 
 task = tsk("mtcars")
+
+filter = flt("correlation")
+
 filter$calculate(task)
 
-as.data.table(filter)
+task$select(names(head(filter$scores, 5)))
+
+design = benchmark_grid(
+  tasks = list(task, tsk("mtcars")),
+  learners = lrn("regr.kknn"),
+  resamplings = rsmp("cv", folds = 10)
+)
+
+bmr = benchmark(design)
+bmr$aggregate(msr("regr.mse"))
 ```
 
-2. Use the filter from the first exercise to select the five best features in the `mtcars` dataset.
+2. Apply backward selection to `tsk("penguins")` with `lrn("classif.rpart")` and holdout resampling by the classification accuracy measure.
+  Compare the results with those in @sec-fs-wrapper-example by also running the forward selection from that section.
+  Do the selected features differ?
+  Which feature selection method reports a higher classification accuracy in its `$result`?
 
-```{r solutions-013}
-keep = names(head(filter$scores, 5))
-task$select(keep)
-task$feature_names
-```
-
-3. Apply a backward selection to `tsk("penguins")` with `lrn("classif.rpart")` and holdout resampling by the measure classification accuracy. Compare the results with those in @sec-fs-wrapper-example.
-
-```{r solutions-014}
-library(mlr3fselect)
+```{r}
+library(mlr3verse)
 
 instance = fselect(
   fselector = fs("sequential", strategy = "sbs"),
@@ -465,72 +471,197 @@ instance = fselect(
   resampling = rsmp("holdout"),
   measure = msr("classif.acc")
 )
-as.data.table(instance$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-instance$result_feature_set
+
+instance$result
 ```
 
-Answer the following questions:
+3. There is a problem in the performance comparison in Exercise 2 as feature selection is performed on the test-set.
+  Change the process by applying forward feature selection with `auto_fselector()`.
+  Compare the performance to backward feature selection from Exercise 2 using nested resampling.
 
-  a. Do the selected features differ?
+```{r}
+library(mlr3verse)
 
-Yes, the backward selection selects more features.
-
-  b. Which feature selection method achieves a higher classification accuracy?
-
-In this example, the backwards example performs slightly better, but this depends heavily on the random seed and could look different in another run.
-
-  c. Are the accuracy values in b) directly comparable? If not, what has to be changed to make them comparable?
-
-No, they are not comparable because the holdout sampling called with `rsmp("holdout")` creates a different holdout set for the two runs. A fair comparison would create a single resampling instance and use it for both feature selections (see @sec-performance for details):
-
-```{r solutions-015}
-resampling = rsmp("holdout")
-resampling$instantiate(tsk("penguins"))
-
-instance_sfs = fselect(
+afs_sfs = auto_fselector(
   fselector = fs("sequential", strategy = "sfs"),
-  task =  tsk("penguins"),
   learner = lrn("classif.rpart"),
-  resampling = resampling,
+  resampling = rsmp("cv", folds = 5),
   measure = msr("classif.acc")
 )
-instance_sbs = fselect(
+
+afs_sbs = auto_fselector(
   fselector = fs("sequential", strategy = "sbs"),
-  task =  tsk("penguins"),
   learner = lrn("classif.rpart"),
-  resampling = resampling,
+  resampling = rsmp("cv", folds = 5),
   measure = msr("classif.acc")
-)
-as.data.table(instance_sfs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-as.data.table(instance_sbs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-```
-
-Alternatively, one could automate the feature selection and perform a benchmark between the two wrapped learners.
-
-4. Automate the feature selection as in @sec-autofselect with `tsk("spam")` and `lrn("classif.log_reg")`.
-
-```{r solutions-016, warning=FALSE}
-library(mlr3fselect)
-library(mlr3learners)
-
-at = auto_fselector(
-  fselector = fs("random_search"),
-  learner = lrn("classif.log_reg"),
-  resampling = rsmp("holdout"),
-  measure = msr("classif.acc"),
-  terminator = trm("evals", n_evals = 50)
 )
 
 design = benchmark_grid(
-  task = tsk("spam"),
-  learner = list(at, lrn("classif.log_reg")),
-  resampling = rsmp("cv", folds = 3)
+  tasks = tsk("penguins"),
+  learners = list(afs_sfs, afs_sbs),
+  resamplings = rsmp("cv", folds = 3)
 )
 
 bmr = benchmark(design)
+bmr$aggregate(msr("classif.acc"))
+```
 
-aggr = bmr$aggregate(msrs(c("classif.acc", "time_train")))
-as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
+4. (*) Write a feature selection algorithm that is a hybrid of a filter and a wrapper method.
+  This search algorithm should compute filter scores for all features and then perform a forward search.
+  But instead of tentatively adding all remaining features to the current feature set, it should only stochastically try a subset of the available features.
+  Features with high filter scores should be added with higher probability.
+  Start by coding a stand-alone R method for this search (based on a learner, task, resampling, performance measure and some control settings).
+
+```{r}
+library(mlr3verse)
+library(data.table)
+
+task = tsk("sonar")
+learner = lrn("classif.rpart")
+resampling = rsmp("cv", folds = 3)
+measure = msr("classif.acc")
+filter = flt("auc")
+n = 5
+max_features = 10
+
+
+filter_forward_selection_search = function(task, learner, resampling, measure, filter, n, max_features) {
+  features = task$feature_names
+
+  # calculate filter scores
+  filter$calculate(task)
+  scores = filter$scores
+
+  result_features = character(0)
+  while(max_features > length(result_features)) {
+
+    # select n features to try
+    filter_features = sample(names(scores), size = min(n, length(scores)), prob = scores)
+
+    # create feature matrix
+    states = matrix(FALSE, ncol = length(features), nrow = length(filter_features))
+
+    # add filter features to matrix
+    for (i in seq_along(filter_features)) {
+      states[i, which(features %in% filter_features[i])] = TRUE
+    }
+
+    # add already selected features to matrix
+    states[, which(features %in% result_features)] = TRUE
+
+    # convert matrix to design
+    design = setnames(as.data.table(states), features)
+
+    # evaluate feature combinations
+    instance = fselect(
+      fselector = fs("design_points", design = design, batch_size = nrow(design)),
+      task =  task,
+      learner = learner,
+      resampling = resampling,
+      measure = measure
+    )
+
+    # current best set
+    result_features = instance$result_feature_set
+
+    # remove selected features from scores
+    scores = scores[!names(scores) %in% result_features]
+  }
+
+  result_features
+}
+
+filter_forward_selection_search(task, learner, resampling, measure, filter, n, max_features)
+```
+
+Then, as a stretch goal, see if you can implement this as an R6 class inheriting from `FSelector`.
+
+```{r}
+library(R6)
+library(checkmate)
+library(mlr3verse)
+library(mlr3fselect)
+library(data.table)
+
+FSelectorSequentialFilter = R6Class("FSelectorSequentialFilter",
+  inherit = FSelector,
+  public = list(
+
+    #' @description
+    #' Creates a new instance of this [R6][R6::R6Class] class.`
+    initialize = function() {
+      param_set = ps(
+        filter = p_uty(tags = "required"),
+        n = p_int(lower = 1, tags = "required"),
+        max_features = p_int(lower = 1)
+      )
+
+      super$initialize(
+        id = "filter_sequential",
+        param_set = param_set,
+        properties = "single-crit",
+        label = "Sequential Filter Search",
+        man = "mlr3fselect::mlr_fselectors_sequential"
+      )
+    }
+  ),
+  private = list(
+    .optimize = function(inst) {
+      pv = self$param_set$values
+      features = inst$archive$cols_x
+      max_features = pv$max_features %??% length(features)
+
+      # calculate filter scores
+      pv$filter$calculate(inst$objective$task)
+      scores = pv$filter$scores
+
+      result_features = character(0)
+      while(max_features > length(result_features)) {
+
+        # select n features to try
+        filter_features = sample(names(scores), size = min(pv$n, length(scores)), prob = scores)
+
+        # create feature matrix
+        states = matrix(FALSE, ncol = length(features), nrow = length(filter_features))
+
+        # add filter features to matrix
+        for (i in seq_along(filter_features)) {
+          states[i, which(features %in% filter_features[i])] = TRUE
+        }
+
+        # add already selected features to matrix
+        states[, which(features %in% result_features)] = TRUE
+
+        # convert matrix to design
+        design = setnames(as.data.table(states), features)
+
+        # evaluate feature combinations
+        inst$eval_batch(design)
+
+        # current best set
+        res = inst$archive$best(batch = inst$archive$n_batch)
+        result_features = features[as.logical(res[, features, with = FALSE])]
+
+        # remove selected features from scores
+        scores = scores[!names(scores) %in% result_features]
+      }
+    }
+  )
+)
+
+mlr_fselectors$add("sequential_filter", FSelectorSequentialFilter)
+
+instance = fselect(
+  fselector = fs(
+    "sequential_filter",
+    filter = flt("auc"),
+    n = 5,
+    max_features = 10),
+  task =  tsk("sonar"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.acc")
+)
 ```
 
 ## Solutions to @sec-pipelines
