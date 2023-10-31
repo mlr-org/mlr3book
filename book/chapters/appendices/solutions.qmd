@@ -82,13 +82,15 @@ Use five repeats of three folds each.
 Calculate the MSE for each iteration and visualize the result.
 Finally, calculate the aggregated performance score.
 
+We start by instantiating our task and learner as usual:
+
 ```{r}
 set.seed(3)
 task = tsk("mtcars")
 learner = lrn("regr.rpart")
 ```
 
-We can instantiate a temporary resampling on the task to illustrate how it assigns observations across the 5 repeats (`rep`) and 3 folds:
+We can instantiate a temporary resampling on the task to illustrate how it assigns observations across the 5 repeats (column `rep`) and 3 folds:
 
 ```{r}
 resampling = rsmp("repeated_cv", repeats = 5, folds = 3)
@@ -96,20 +98,32 @@ resampling$instantiate(task)
 resampling$instance
 ```
 
-Note that `resample()` automatically instantiates the resampling for us, so we pass an new object to it that has not been instantiated yet:
+Note that `resample()` automatically instantiates the resampling for us, so we pass a new resampling to it that has not been instantiated yet:
 
 ```{r}
 resampling = rsmp("repeated_cv", repeats = 5, folds = 3)
-
 rr = resample(task, learner, resampling)
 ```
 
-Now we can `$score()` the resampling and visualize the results, which we can do either manually or using `autoplot()`:
+Now we can `$score()` the resampling with the MSE measure across each of the 5x3 resampling iterations:
 
 ```{r}
 scores = rr$score(msr("regr.mse"))
 scores
+```
 
+We could manually calculate these scores of course, as `rr` contains all the individual predictions.
+The `$predictions()` method contains a list of predictions for each iteration, which we can use to calculate the MSE for the first iteration like this:
+
+```{r}
+preds = rr$predictions()
+pred_1 = as.data.table(preds[[1]])
+pred_1[, list(rmse = mean((truth - response)^2))]
+```
+
+To visualize the results, we can use `ggplot2` directly on the `scores` object, which behaves like any other `data.table`:
+
+```{r}
 library(ggplot2)
 # Barchart of the per-iteration scores
 ggplot(scores, aes(x = iteration, y = regr.mse)) +
@@ -117,14 +131,14 @@ ggplot(scores, aes(x = iteration, y = regr.mse)) +
   theme_minimal()
 
 # Boxplot of the scores
-ggplot(scores, aes(y = regr.mse)) +
+ggplot(scores, aes(x = regr.mse)) +
   geom_boxplot() +
-  scale_x_continuous(breaks = 0, labels = NULL) +
+  scale_y_continuous(breaks = 0, labels = NULL) +
   theme_minimal()
 ```
 
-The `autoplot()` function provides some defaults for plots.  
-Note that it internally scores the resampling using the MSE for regression:
+Alternatively, the `autoplot()` function provides some defaults for plots for the `ResampleResult` object.  
+Note that it internally scores the resampling using the MSE for regression tasks per default.
 
 ```{r}
 autoplot(rr)
@@ -144,8 +158,8 @@ Which learner appears to perform best? How confident are you in your conclusion?
 Think about the stability of results and investigate this by re-rerunning the experiment with different seeds.
 What can be done to improve this?
 
-First we set a seed, instantiate our learners with their initial parameters, setting the `predict_type = "prob"` once for all of them and setting the `nrounds` parameter for XGBoost to 100.
-We also construct a resampling object for 5-fold CV:
+First we instantiate our learners with their initial parameters, setting the `predict_type = "prob"` once for all of them using `lrns()`.
+We then set the `nrounds` parameter for XGBoost to 100 and construct a resampling object for 5-fold CV:
 
 ```{r}
 set.seed(3)
@@ -154,11 +168,10 @@ task = tsk("spam")
 learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"),
                 predict_type = "prob")
 learners$classif.xgboost$param_set$values$nrounds = 100
-
 resampling = rsmp("cv", folds = 5)
 ```
 
-We could have alternatively instantiated the learners like this, but would have to repeat the `predict_type = "prop"` argument multiple times.
+We could have alternatively instantiated the learners like this, but would have needed to repeat the `predict_type = "prob"` argument multiple times.
 
 ```{r, eva=FALSE}
 learners = list(
@@ -168,8 +181,7 @@ learners = list(
 )
 ```
 
-
-Next we can construct a benchmark design grid:
+Next we can construct a benchmark design grid with the instantiated objects using `benchmark_grid()`:
 
 ```{r}
 design = benchmark_grid(
@@ -182,7 +194,7 @@ design
 
 To perform the benchmark, we use the aptly named `benchmark()` function:
 
-```{r}
+```{r, warning=FALSE}
 bmr = benchmark(design)
 bmr
 ```
@@ -193,13 +205,13 @@ And visualize the results as a boxplot:
 autoplot(bmr, measure = msr("classif.auc"))
 ```
 
-In this example, XGBoost outperforms `ranger`, and both outperform logistic regression.
+In this example,`lrn("classif.xgboost")` outperforms `lrn("classif.ranger")`, and both outperform `lrn("classif.log_reg")`.
 Naturally this is only a visual inspection of the results --- proper statistical testing of benchmark results can be conducted using the `mlr3benchmark` package, but for the purposes of this exercise a plot suffices.
 
-When we re-run the same experiment with a different seed, we get a slightly different result:
+When we re-run the same experiment with a different seed, we get a slightly different result.
 
-```{r}
-set.seed(30)
+```{r, warning=FALSE}
+set.seed(3235)
 resampling = rsmp("cv", folds = 5)
 design = benchmark_grid(
   tasks = task,
@@ -210,12 +222,12 @@ bmr = benchmark(design)
 autoplot(bmr, measure = msr("classif.auc"))
 ```
 
-The overall trend remains the same, however.
-While logistic regression does not have any hyperparameters to tune, and Random Forest learners generally perform well without much tuning, the XGBoost learner does generally require tuning to achieve good results.
-Here, we applied ranger with its initial parameters and only evaluated one configuration for XGBoost, so we can not make any broad generalizations based on these results.
-Tuning is even more important for XGBoost, as the `nrounds` parameter is initialized to 1, which effectively reduces this learner to a single decision tree.
-See @sec-optimization for more details on hyperparameter tuning.
-
+The overall trend remains about the same, but do we trust these results?
+Note that we applied both `lrn("classif.log_reg")` and `lrn("classif.ranger")` with their initial parameters.
+While `lrn("classif.log_reg")` does not have any hyperparameters to tune, `lrn("classif.ranger")` does have several, at least one of which is usually tuned (`mtry`).
+In case of `lrn("classif.xgboost")` however, we arbitrarily chose `nrounds = 100` rather than using the learner with its initial value of `nrounds = 1`, which would be equivalent to a single tree decision tree.
+To make any generalizations based on this experiment, we need to properly tune all relevant hyperparmeters in a systematic way.
+We cover this and more in @sec-optimization.
 
 3. A colleague reports a 93.1% classification accuracy using `lrn("classif.rpart")` on `tsk("penguins_simple")`.
 You want to reproduce their results and ask them about their resampling strategy.
@@ -306,7 +318,7 @@ my_roc_plot = function(task, learner, train_indices, test_indices) {
 }
 ```
 
-We try our function using the `sonar` task and the `ranger` learner with 100 trees.
+We try our function using `tsk("sonar")` and `lrn("classif.ranger")` learner with 100 trees.
 We set `predict_type = "prob"` since we need probability predictions to apply thresholds, rather than hard class predictions.
 
 ```{r}
