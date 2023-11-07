@@ -763,98 +763,6 @@ We simply convert the `date` feature into a numeric timestamp so that `glmnet` c
 We create one additional feature as the distance to downtown Seattle.
 This improves the average error of our model by a further 1600$.
 
-
-## Solutions to @sec-special
-
-1. Run a benchmark experiment on the `"german_credit"` task with algorithms: `lrn("classif.featureless")`, `lrn("classif.log_reg")`, `lrn("classif.ranger")`. Tune the `lrn("classif.featureless")` model using `tunetreshold` and `learner_cv`. Use two-fold CV and evaluate with `msr("classif.costs", costs = costs)` where you should make the parameter `costs` so that the cost of a true positive is -10, the cost of a true negative is -1, the cost of a false positive is 2, and the cost of a false negative is 3. Use `set.seed(11)` to make sure you get the same results as us. Are your results surprising?
-
-```{r solutions-017}
-library(mlr3verse)
-set.seed(11)
-
-costs = matrix(c(-10, 3, 2, -1), nrow = 2, dimnames =
-  list("Predicted Credit" = c("good", "bad"),
-    Truth = c("good", "bad")))
-msr_costs = msr("classif.costs", costs = costs)
-
-gr = po("learner_cv", lrn("classif.featureless", predict_type = "prob")) %>>%
-  po("tunethreshold", measure = msr_costs)
-task = tsk("german_credit")
-learners = list(as_learner(gr), lrn("classif.log_reg"), lrn("classif.ranger"))
-bmr = benchmark(benchmark_grid(task, learners, rsmp("cv", folds = 2)))
-bmr$aggregate(msr_costs)[, c(4, 7)]
-```
-
-2. Train and predict a survival forest using `rfsrc` (from `mlr3extralearners`). Run this experiment using `task = tsk("rats"); split = partition(task)`. Evaluate your model with the RCLL measure.
-```{r solutions-018}
-library(mlr3verse)
-library(mlr3proba)
-library(mlr3extralearners)
-set.seed(11)
-
-task = tsk("rats")
-split = partition(task)
-
-lrn("surv.rfsrc")$
-  train(task, split$train)$
-  predict(task, split$test)$
-  score(msr("surv.rcll"))
-```
-
-3. Estimate the density of the `tsk("precip")` data using `lrn("dens.logspline")` (from `mlr3extralearners`). Run this experiment using `task = tsk("precip"); split = partition(task)`. Evaluate your model with the logloss measure.
-```{r solutions-019}
-library(mlr3verse)
-library(mlr3proba)
-library(mlr3extralearners)
-set.seed(11)
-
-task = tsk("precip")
-split = partition(task)
-
-lrn("dens.logspline")$
-  train(task, split$train)$
-  predict(task, split$test)$
-  score(msr("dens.logloss"))
-```
-
-4. Run a benchmark clustering experiment on the `wine` dataset without a label column. Compare the performance of `"clust.kmeans"` learner with `k` equal to 2, 3 and 4 using the silhouette measure. Use insample resampling technique. What value of `k` would you choose based on the silhouette scores?
-
-```{r solutions-020}
-library(mlr3)
-library(mlr3cluster)
-set.seed(11)
-learners = list(
-  lrn("clust.kmeans", centers = 2L, id = "k-means, k=2"),
-  lrn("clust.kmeans", centers = 3L, id = "k-means, k=3"),
-  lrn("clust.kmeans", centers = 4L, id = "k-means, k=4")
-)
-
-task = as_task_clust(tsk("wine")$data()[, -1])
-measure = msr("clust.silhouette")
-bmr = benchmark(benchmark_grid(task, learners, rsmp("insample")))
-bmr$aggregate(measure)[, c(4, 7)]
-```
-
-Based on the silhouette score, we can choose `k = 2`.
-
-5. Run a (spatially) unbiased classification benchmark experiment on the `"ecuador"` task with a featureless learner and xgboost, evaluate with the binary Brier score.
-
-You can use any resampling method from `r mlr3spatiotempcv`, in this solution we use 4-fold spatial environmental blocking.
-
-```{r solutions-021}
-library(mlr3verse)
-library(mlr3spatial)
-library(mlr3spatiotempcv)
-set.seed(11)
-learners = lrns(paste0("classif.", c("xgboost", "featureless")),
-  predict_type = "prob")
-rsmp_sp = rsmp("spcv_env", folds = 4)
-design = benchmark_grid(tsk("ecuador"), learners, rsmp_sp)
-bmr = benchmark(design)
-bmr$aggregate(msr("classif.bbrier"))[, c(4, 7)]
-```
-
-
 ## Solutions to @sec-technical
 
 1. Consider the following example where you resample a learner (debug learner, sleeps for 3 seconds during `$train()`) on 4 workers using the multisession backend:
@@ -1061,6 +969,128 @@ ranger_ceteris = predict_profile(ranger_exp, player_1)
 plot(ranger_ceteris, variables = num_features) +
   ggtitle("Ceteris paribus for R. Lewandowski", " ")
 ```
+
+## Solutions to @sec-special
+
+1. Run a benchmark experiment on `tsk("german_credit")` with `lrn("classif.featureless")`, `lrn("classif.log_reg")`, and `lrn("classif.ranger")`. Tune the prediction thresholds of all learners by encapsulating them in a `po("learner_cv")` (with two-fold CV), followed by a `po("tunethreshold")`. Use `msr("classif.costs", costs = costs)`, where the `costs` matrix is as follows: true positive is `-10`, true negative is `-1`, false positive is `2`, and false negative is `3`. Use this measure in `po("tunethreshold")` and when evaluating your benchmark experiment.
+
+```{r, message=FALSE, warning=FALSE}
+set.seed(1)
+# Load task and learners
+tsk_german = tsk("german_credit")
+learners = lrns(c("classif.featureless", "classif.log_reg",
+  "classif.ranger"), predict_type = "prob")
+
+# Create costs matrix
+costs = matrix(c(-10, 3, 2, -1), nrow = 2,
+  dimnames = list("Predicted Credit" = c("good", "bad"),
+                    Truth = c("good", "bad")))
+costs
+```
+
+Our cost matrix is as expected so we can plug it into our measure and setup our pipeline.
+
+```{r results='hide'}
+# Create measure
+meas_costs = msr("classif.costs", costs = costs)
+
+# Create a function to wrap learners in internal cross-validation
+#  to tune the threshold
+pipe = function(l) {
+  po("learner_cv", l, resampling.folds = 2) %>>%
+    po("tunethreshold", measure = meas_costs)
+}
+
+# Benchmark
+learners = lapply(learners, pipe)
+design = benchmark_grid(tsk_german, learners, rsmp("holdout"))
+bmr = benchmark(design)$aggregate(meas_costs)
+```
+
+Now exploring our results...
+
+```{r}
+bmr[, .(learner_id, classif.costs)]
+```
+
+Based on these results, the logistic regression performs the best with the greatest increase to costs, however the difference is only marginal compared to the other learners.
+
+2. Train and test a survival forest using `lrn("surv.rfsrc")` (from `mlr3extralearners`). Run this experiment using `tsk("rats")` and `partition()`. Evaluate your model with the RCLL measure.
+
+```{r}
+# Get learners
+library(mlr3extralearners)
+# Get survival models
+library(mlr3proba)
+set.seed(1)
+# Use partition to split data and test our model
+tsk_rats = tsk("rats")
+splits = partition(tsk_rats)
+learner = lrn("surv.rfsrc")
+prediction = learner$train(tsk_rats, splits$train)$predict(tsk_rats, splits$test)
+prediction$score(msr("surv.rcll"))
+```
+
+The right-censored logloss provides a measure of predictive accuracy, but it is quite hard to interpret it without comparison to another model.
+To yield a more informative value, we could either compute the RCLL for an uninformed baseline like the Kaplan-Meier estimator, or we could use the `ERV` (explained residual variation) parameter in the measure, which returns the RCLL as a percentage increase in performance compared to an uninformed baseline (in this case the Kaplan-Meier estimator):
+
+```{r}
+lrn("surv.kaplan")$
+  train(tsk_rats, splits$train)$
+  predict(tsk_rats, splits$test)$
+  score(msr("surv.rcll"))
+
+prediction$score(msr("surv.rcll", ERV = TRUE),
+  task = tsk_rats, train_set = splits$train)
+```
+
+Now we can see that our model is only marginally better than the Kaplan-Meier baseline (a 2% performance increase).
+
+3. Estimate the density of the "precip" task from the `mlr3proba` package using `lrn("dens.hist")`, evaluate your estimation with the logloss measure. As a stretch goal, look into the documentation of `distr6` to learn how to analyse your estimated distribution further.
+
+```{r}
+# Get density models
+library(mlr3proba)
+set.seed(1)
+# Run experiment
+tsk_precip = tsk("precip")
+learner = lrn("dens.hist")
+prediction = learner$train(tsk_precip)$predict(tsk_precip)
+prediction
+prediction$score(msr("dens.logloss"))
+```
+
+As before the logloss is not too informative by itself but as the Histogram is itself a baseline, we can use this value for comparison to more sophisticated models. To learn more about our predicted distribution, we could use `distr6` to summarise the distribution and to compute values such as the pdf and cdf:
+
+```{r}
+prediction$distr$summary()
+# pdf evaluated at `50`
+prediction$distr$pdf(50)
+```
+
+4. Run a benchmark clustering experiment on the "wine" dataset without a label column. Compare the performance of k-means learner with `k` equal to `2`, `3` and `4` using the silhouette measure and the insample resampling technique. What value of `k` would you choose based on the silhouette scores?
+
+```{r, messages=FALSE, warnings=FALSE}
+set.seed(1)
+# Load clustering models and tasks
+library(mlr3cluster)
+# Create the clustering dataset by extracting only the features from the
+#  wine task
+tsk_wine = tsk("wine")
+tsk_wine = as_task_clust(tsk_wine$data(cols = tsk_wine$feature_names))
+# Create learners and ensure they have unique IDs
+learners = c(
+  lrn("clust.kmeans", centers = 2, id = "K=2"),
+  lrn("clust.kmeans", centers = 3, id = "K=3"),
+  lrn("clust.kmeans", centers = 4, id = "K=4")
+)
+# Benchmark
+meas = msr("clust.silhouette")
+design = benchmark_grid(tsk_wine, learners, rsmp("insample"))
+benchmark(design)$aggregate(meas)[, .(learner_id, clust.silhouette)]
+```
+
+We can see that we get the silhouette closest to `1` with `K=2` so we might use this value for future experiments.
 
 ## Solutions to @sec-fairness
 
