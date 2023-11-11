@@ -111,59 +111,181 @@ By lowering the threshold, we can reduce the false negative rate.
 
 ## Solutions to @sec-performance
 
-1. Apply the "bootstrap" resampling strategy on `tsk("mtcars")` and evaluate the performance of `lrn("classif.rpart")`.
-Use 100 replicates and a sampling ratio of 80%.
+1. Apply a repeated cross-validation resampling strategy on `tsk("mtcars")` and evaluate the performance of `lrn("regr.rpart")`.
+Use five repeats of three folds each.
 Calculate the MSE for each iteration and visualize the result.
 Finally, calculate the aggregated performance score.
 
-```{r solutions-006}
+We start by instantiating our task and learner as usual:
+
+```{r}
 set.seed(3)
 task = tsk("mtcars")
 learner = lrn("regr.rpart")
-resampling = rsmp("bootstrap", repeats = 100, ratio = 0.8)
+```
 
+We can instantiate a temporary resampling on the task to illustrate how it assigns observations across the 5 repeats (column `rep`) and 3 folds:
+
+```{r}
+resampling = rsmp("repeated_cv", repeats = 5, folds = 3)
+resampling$instantiate(task)
+resampling$instance
+```
+
+Note instantiating manually is not necessary when using `resample()`, as it automatically instantiates the resampling for us, so we pass it a new resampling which has not been instantiated:
+
+```{r}
+resampling = rsmp("repeated_cv", repeats = 5, folds = 3)
 rr = resample(task, learner, resampling)
-rr$score(msr("regr.mse"))
-autoplot(rr)
-# Alternatively: Histogram
-autoplot(rr, type = "histogram")
+```
 
+Now we can `$score()` the resampling with the MSE measure across each of the 5x3 resampling iterations:
+
+```{r}
+scores = rr$score(msr("regr.mse"))
+scores
+```
+
+We can manually calculate these scores since `rr` contains all the individual predictions.
+The `$predictions()` method returns a list of predictions for each iteration, which we can use to calculate the MSE for the first iteration:
+
+```{r}
+preds = rr$predictions()
+pred_1 = as.data.table(preds[[1]])
+pred_1[, list(rmse = mean((truth - response)^2))]
+```
+
+To visualize the results, we can use `ggplot2` directly on the `scores` object, which behaves like any other `data.table`:
+
+```{r}
+library(ggplot2)
+# Barchart of the per-iteration scores
+ggplot(scores, aes(x = iteration, y = regr.mse)) +
+  geom_col() +
+  theme_minimal()
+
+# Boxplot of the scores
+ggplot(scores, aes(x = regr.mse)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = 0, labels = NULL) +
+  theme_minimal()
+```
+
+Alternatively, the `autoplot()` function provides defaults for the `ResampleResult` object.  
+Note that it internally scores the resampling using the MSE for regression tasks per default.
+
+```{r}
+autoplot(rr)
+autoplot(rr, type = "histogram")
+```
+
+The aggregate score is the mean of the MSE scores across all iterations, which we can calculate using `$aggregate()` or by manually averaging the scores we stored before:
+
+```{r}
+mean(scores$regr.mse)
 rr$aggregate(msr("regr.mse"))
 ```
 
 
-2. Use `tsk("spam")` and five-fold CV to benchmark Random forest (`lrn("classif.ranger")`), Logistic Regression (`lrn("classif.log_reg")`), and XGBoost (`lrn("classif.xgboost")`) with respect to AUC.
-Which learner appears to do best? How confident are you in your conclusion?
-How would you improve upon this?
+2. Use `tsk("spam")` and five-fold CV to benchmark `lrn("classif.ranger")`, `lrn("classif.log_reg")`, and `lrn("classif.xgboost", nrounds = 100)` with respect to AUC.
+Which learner appears to perform best? How confident are you in your conclusion?
+Think about the stability of results and investigate this by re-rerunning the experiment with different seeds.
+What can be done to improve this?
 
-```{r solutions-007, warning=FALSE}
+First we instantiate our learners with their initial parameters, setting the `predict_type = "prob"` once for all of them using `lrns()`.
+We then set the `nrounds` parameter for XGBoost to 100 and construct a resampling object for 5-fold CV:
+
+```{r}
 set.seed(3)
-design = benchmark_grid(
-  tasks = tsk("spam"),
-  learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"),
-                  predict_type = "prob"),
-  resamplings = rsmp("cv", folds = 5)
-)
 
-bmr = benchmark(design)
-
-mlr3viz::autoplot(bmr, measure = msr("classif.auc"))
+task = tsk("spam")
+learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"),
+                predict_type = "prob")
+learners$classif.xgboost$param_set$values$nrounds = 100
+resampling = rsmp("cv", folds = 5)
 ```
 
-This is only a small example for a benchmark workflow, but without tuning (see @sec-optimization), the results are naturally not suitable to make any broader statements about the superiority of either learner for this task.
+We could have alternatively instantiated the learners like this, but would have needed to repeat the `predict_type = "prob"` argument multiple times.
 
+```{r, eva=FALSE}
+learners = list(
+  lrn("classif.ranger", predict_type = "prob"),
+  lrn("classif.log_reg", predict_type = "prob"),
+  lrn("classif.xgboost", nrounds = 100, predict_type = "prob")
+)
+```
 
-3. A colleague claims to have achieved a 93.1% classification accuracy using `lrn("classif.rpart")` on `tsk("penguins_simple")`.
+Next we can construct a benchmark design grid with the instantiated objects using `benchmark_grid()`:
+
+```{r}
+design = benchmark_grid(
+  tasks = task,
+  learners = learners,
+  resamplings = resampling
+)
+design
+```
+
+To perform the benchmark, we use the aptly named `benchmark()` function:
+
+```{r, warning=FALSE}
+bmr = benchmark(design)
+bmr
+```
+
+And visualize the results as a boxplot:
+
+```{r}
+autoplot(bmr, measure = msr("classif.auc"))
+```
+
+In this example,`lrn("classif.xgboost")` outperforms `lrn("classif.ranger")`, and both outperform `lrn("classif.log_reg")`.
+Naturally this is only a visual inspection of the results --- proper statistical testing of benchmark results can be conducted using the `mlr3benchmark` package, but for the purposes of this exercise a plot suffices.
+
+When we re-run the same experiment with a different seed, we get a slightly different result.
+
+```{r, warning=FALSE}
+set.seed(3235)
+resampling = rsmp("cv", folds = 5)
+design = benchmark_grid(
+  tasks = task,
+  learners = learners,
+  resamplings = resampling
+)
+bmr = benchmark(design)
+autoplot(bmr, measure = msr("classif.auc"))
+```
+
+The overall trend remains about the same, but do we trust these results?
+Note that we applied both `lrn("classif.log_reg")` and `lrn("classif.ranger")` with their initial parameters.
+While `lrn("classif.log_reg")` does not have any hyperparameters to tune, `lrn("classif.ranger")` does have several, at least one of which is usually tuned (`mtry`).
+In case of `lrn("classif.xgboost")` however, we arbitrarily chose `nrounds = 100` rather than using the learner with its initial value of `nrounds = 1`, which would be equivalent to a single tree decision tree.
+To make any generalizations based on this experiment, we need to properly tune all relevant hyperparmeters in a systematic way.
+We cover this and more in @sec-optimization.
+
+3. A colleague reports a 93.1% classification accuracy using `lrn("classif.rpart")` on `tsk("penguins_simple")`.
 You want to reproduce their results and ask them about their resampling strategy.
 They said they used a custom three-fold CV with folds assigned as `factor(task$row_ids %% 3)`.
 See if you can reproduce their results.
 
-```{r solutions-008}
+We make use of the `custom_cv` resampling strategy here:
+
+```{r}
 task = tsk("penguins_simple")
 rsmp_cv = rsmp("custom_cv")
+```
 
+We apply the rule to assign resampling folds we were provided with: Every third observation is assigned to the same fold:
+
+```{r}
 rsmp_cv$instantiate(task = task, f = factor(task$row_ids %% 3))
 
+str(rsmp_cv$instance)
+```
+
+We are now ready to conduct the resampling and aggregate results:
+
+```{r}
 rr = resample(
   task = task,
   learner = lrn("classif.rpart"),
@@ -173,6 +295,88 @@ rr = resample(
 rr$aggregate(msr("classif.acc"))
 ```
 
+Converting to percentages and rounding to one decimal place, we get the same result as our colleague!
+Luckily they kept track of their resampling to ensure their results were reproducible.
+
+4. (*) Program your own ROC plotting function without using `mlr3`'s `autoplot()` function. The signature of your function should be `my_roc_plot(task, learner, train_indices, test_indices)`.
+Your function should use the `$set_threshold()` method of  `Prediction`, as well as `mlr3measures`.
+
+Here is a function to calculate the true positive rate (TPR, *Sensitivity*) and false positive rate (FPR, *1 - Specificity*) in a loop across a grid of probabilities.
+These are set as thresholds with the `$set_threshold()` method of the `PredictionClassif` object.
+This way we construct the ROC curve by iteratively calculating its x and y values, after which we can use `geom_step()` to draw a step function.
+Note that we do not need to re-train the learner, we merely adjust the threshold applied to the predictions we made at the top of the function
+
+```{r}
+my_roc_plot = function(task, learner, train_indices, test_indices) {
+  # Train learner, predict once.
+  learner$train(task, train_indices)
+  pred = learner$predict(task, test_indices)
+  # Positive class predictions from prediction matrix
+  pos_pred = pred$prob[, which(colnames(pred$prob) == task$positive)]
+
+  # Set a grid of probabilities to evaluate at.
+  prob_grid = seq(0, 1, 0.001)
+
+  # For each possible threshold, calculate TPR,
+  # FPR + aggregate to data.table
+  grid = data.table::rbindlist(lapply(prob_grid, \(thresh) {
+    pred$set_threshold(thresh)
+    data.table::data.table(
+      thresh = thresh,
+      # y axis == sensitivity == TPR
+      tpr = mlr3measures::tpr(
+        truth = pred$truth, response = pred$response, 
+        positive = task$positive),
+      # x axis == 1 - specificity == 1 - TNR == FPR
+      fpr = mlr3measures::fpr(
+        truth = pred$truth, response = pred$response, 
+        positive = task$positive)
+    )
+  }))
+  
+  # Order descending by threshold to use ggplot2::geom_step
+  data.table::setorderv(grid, cols = "thresh", order = -1)
+  
+  ggplot2::ggplot(grid, ggplot2::aes(x = fpr, y = tpr)) +
+    # Step function starting with (h)orizontal, then (v)ertical
+    ggplot2::geom_step(direction = "hv") +
+    ggplot2::coord_equal() +
+    ggplot2::geom_abline(linetype = "dashed") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(
+      title = "My Custom ROC Curve",
+      subtitle = sprintf("%s on %s", learner$id, task$id),
+      x = "1 - Specificity", y = "Sensitivity",
+      caption = sprintf("n = %i. Test set: %i", task$nrow, length(test_indices))
+    )
+}
+```
+
+We try our function using `tsk("sonar")` and `lrn("classif.ranger")` learner with 100 trees.
+We set `predict_type = "prob"` since we need probability predictions to apply thresholds, rather than hard class predictions.
+
+```{r}
+set.seed(3)
+
+# Setting up example task and learner for testing
+task = tsk("sonar")
+learner = lrn("classif.ranger", num.trees = 100, predict_type = "prob")
+split = partition(task)
+
+my_roc_plot(task, learner, split$train, split$test)
+```
+
+We can compare it with the pre-built plot function in `mlr3viz`:
+
+```{r}
+learner$train(task, split$train)
+pred = learner$predict(task, split$test)
+autoplot(pred, type = "roc")
+```
+
+Note the slight discrepancy between the two curves.
+This is caused by some implementation differences used by the `precrec` which is used for this functionality in `mlr3viz`.
+There are different approaches to drawing ROC curves, and our implementation above is one of the simpler ones!
 
 ## Solutions to @sec-optimization
 
