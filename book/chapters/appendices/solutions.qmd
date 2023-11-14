@@ -846,7 +846,7 @@ instance_parallel$archive$data[, c("x", "timestamp", "batch_nr")]
   To do this properly, filtering should be embedded inside the CV via pipelines -- try to come back to this exercise after you read @sec-pipelines-nonseq to implement this with less bias.
 
 ```{r}
-library(mlr3verse)
+set.seed(1)
 
 task = tsk("mtcars")
 
@@ -854,7 +854,12 @@ filter = flt("correlation")
 
 filter$calculate(task)
 
+# sorted filter scores
+filter$scores
+
+# subset task to 5 most correlated features
 task$select(names(head(filter$scores, 5)))
+task
 
 design = benchmark_grid(
   tasks = list(task, tsk("mtcars")),
@@ -866,55 +871,86 @@ bmr = benchmark(design)
 bmr$aggregate(msr("regr.mse"))
 ```
 
+The `"mse"` is much lower on the filtered task.
+
 2. Apply backward selection to `tsk("penguins")` with `lrn("classif.rpart")` and holdout resampling by the classification accuracy measure.
   Compare the results with those in @sec-fs-wrapper-example by also running the forward selection from that section.
   Do the selected features differ?
   Which feature selection method reports a higher classification accuracy in its `$result`?
 
 ```{r}
-library(mlr3verse)
+set.seed(1)
 
-instance = fselect(
-  fselector = fs("sequential", strategy = "sbs"),
+fselector_sbs = fs("sequential", strategy = "sbs")
+
+instance_sbs = fsi(
   task =  tsk("penguins"),
   learner = lrn("classif.rpart"),
   resampling = rsmp("holdout"),
-  measure = msr("classif.acc")
+  measure = msr("classif.acc"),
+  terminator = trm("none")
 )
 
-instance$result
+fselector_sbs$optimize(instance_sbs)
+
+# optimization path sbs
+fselector_sbs$optimization_path(instance_sbs)
+
+instance_sbs$result
+
+fselector_sfs = fs("sequential", strategy = "sfs")
+
+instance_sfs = fsi(
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc"),
+  terminator = trm("none")
+)
+
+fselector_sfs$optimize(instance_sfs)
+
+# optimization path sfs
+fselector_sfs$optimization_path(instance_sfs)
+
+instance_sfs$result
 ```
+
+The sequential backward search selects 5 features, while the sequential forward search selects all features.
+The sequential backward search reports a higher classification accuracy.
 
 3. There is a problem in the performance comparison in Exercise 2 as feature selection is performed on the test-set.
   Change the process by applying forward feature selection with `auto_fselector()`.
   Compare the performance to backward feature selection from Exercise 2 using nested resampling.
 
 ```{r}
-library(mlr3verse)
+set.seed(1)
 
 afs_sfs = auto_fselector(
   fselector = fs("sequential", strategy = "sfs"),
   learner = lrn("classif.rpart"),
-  resampling = rsmp("cv", folds = 5),
+  resampling = rsmp("holdout"),
   measure = msr("classif.acc")
 )
 
 afs_sbs = auto_fselector(
   fselector = fs("sequential", strategy = "sbs"),
   learner = lrn("classif.rpart"),
-  resampling = rsmp("cv", folds = 5),
+  resampling = rsmp("holdout"),
   measure = msr("classif.acc")
 )
 
 design = benchmark_grid(
   tasks = tsk("penguins"),
   learners = list(afs_sfs, afs_sbs),
-  resamplings = rsmp("cv", folds = 3)
+  resamplings = rsmp("cv", folds = 5)
 )
 
 bmr = benchmark(design)
 bmr$aggregate(msr("classif.acc"))
 ```
+
+Now the sequential forward search selects yields a slightly higher classification accuracy.
 
 4. (*) Write a feature selection algorithm that is a hybrid of a filter and a wrapper method.
   This search algorithm should compute filter scores for all features and then perform a forward search.
