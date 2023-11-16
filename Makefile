@@ -15,7 +15,6 @@ help :
 
 install:
 	Rscript -e 'install.packages("renv")' \
-			-e 'renv::activate("book/")' \
 			-e 'renv::restore("book/", prompt = FALSE)'
 
 restore:
