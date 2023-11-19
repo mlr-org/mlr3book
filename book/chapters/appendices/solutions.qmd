@@ -12,124 +12,280 @@ aliases:
 
 ## Solutions to @sec-basics
 
-1. Set the seed to `124` then train a classification tree model with `lrn("classif.rpart")` and default hyperparameters on 80% of the data in the predefined `"sonar"` task. Evaluate the model's performance with the classification error measure on the remaining data. Also think about why we need to set the seed in this example.
-
-Set the seed, load the `"sonar"` task, then the classification tree with `predict_type = "prob"` (needed for exercise 3), and the required measure.
-
-```{r solutions-001}
-set.seed(124)
-task = tsk("sonar")
-learner = lrn("classif.rpart", predict_type = "prob")
-measure = msr("classif.ce")
-```
-
-Use `partition()` to split the dataset then train the model.
-We set the seed because `partition()` introduces an element of randomness when splitting the data.
+1. Train a classification model with the `classif.rpart` learner on the "Pima Indians Diabetes" dataset.
+  Do this without using `tsk("pima")`, and instead by constructing a task from the dataset in the `mlbench`-package: `data(PimaIndiansDiabetes2, package = "mlbench")`.
+  Make sure to define the `pos` outcome as positive class.
+  Train the model on a random 80% subset of the given data and evaluate its performance with the classification error measure on the remaining data.
+  (Note that the data set has NAs in its features.
+  You can either rely on `rpart`'s capability to handle them internally ('surrogate splits') or remove them from the initial `data.frame` by using `na.omit`).
 
 ```{r}
+set.seed(1)
+
+data(PimaIndiansDiabetes2, package = "mlbench")
+task = as_task_classif(PimaIndiansDiabetes2, target = "diabetes", positive = "pos")
 splits = partition(task, ratio = 0.8)
-learner$train(task, splits$train)
-```
+splits
 
-Once the model is trained, generate the predictions on the test set and score them.
+learner = lrn("classif.rpart" , predict_type = "prob")
+learner
 
-```{r solutions-002}
-prediction = learner$predict(task, splits$test)
+learner$train(task, row_ids = splits$train)
+learner$model
+
+prediction = learner$predict(task, row_ids = splits$test)
+as.data.table(prediction)
+
+measure = msr("classif.ce")
 prediction$score(measure)
 ```
 
-1. Calculate the true positive, false positive, true negative, and false negative rates of the predictions made by the model in exercise 1.
+2. Calculate the true positive, false positive, true negative, and false negative rates of the predictions made by the model in Exercise 1.
+  Try to solve this in two ways: (a) Using `mlr3measures`-predefined measure objects, and (b) without using `mlr3` tools by directly working on the ground truth and prediction vectors.
+  Compare the results.
 
-Using `$confusion`, generate a confusion matrix and extract the required statistics,
+```{r}
+# true positive rate
+prediction$score(msr("classif.tpr"))
 
-```{r solutions-003}
+# false positive rate
+prediction$score(msr("classif.fpr"))
+
+# true negative rate
+prediction$score(msr("classif.tnr"))
+
+# false negative rate
+prediction$score(msr("classif.fnr"))
+```
+
+```{r}
+# true positives
+TP = sum(prediction$truth == "pos" & prediction$response == "pos")
+
+# false positives
+FP = sum(prediction$truth == "neg" & prediction$response == "pos")
+
+# true negatives
+TN = sum(prediction$truth == "neg" & prediction$response == "neg")
+
+# false negatives
+FN = sum(prediction$truth == "pos" & prediction$response == "neg")
+
+# true positive rate
+TP / (TP + FN)
+
+# false positive rate
+FP / (FP + TN)
+
+# true negative rate
+TN / (TN + FP)
+
+# false negative rate
+FN / (FN + TP)
+```
+
+The results are the same.
+
+3. Change the threshold of the model from Exercise 1 such that the false negative rate is lower.
+  What is one reason you might do this in practice?
+
+```{r}
+# confusion matrix with threshold 0.5
 prediction$confusion
-```
 
-```{r solutions-004, echo=FALSE}
-confusion = as.data.frame(prediction$confusion)
+prediction$set_threshold(0.3)
 
-TP = confusion$Freq[1]
-FP = confusion$Freq[2]
-TN = confusion$Freq[4]
-FN = confusion$Freq[3]
-```
-
-Since the rows represent predictions (response) and the columns represent the ground truth values, the TP, FP, TN, and FN rates are as follows:
-
-- True Positive (TP) = `r TP`
-
-- False Positive (FP) = `r FP`
-
-- True Negative (TN) = `r TN`
-
-- False Positive (FN) = `r FN`
-
-1. Since in this case we want the model to predict the negative class more often, we will raise the threshold (note the `predict_type` for the learner must be `prob` for this to work).
-
-```{r solutions-005}
-# raise threshold from 0.5 default to 0.6
-prediction$set_threshold(0.6)
-
+# confusion matrix with threshold 0.3
 prediction$confusion
+
+# false positive rate
+prediction$score(msr("classif.fpr"))
+
+# false negative rate
+prediction$score(msr("classif.fnr"))
 ```
-One reason we might want the false positive rate to be lower than the false negative rate is if we felt it was worse for a positive prediction to be incorrect (meaning the true label was the negative label) than it was for a negative prediction to be incorrect (meaning the true label was the positive label).
+
+With a false negative rate of 0.38, we miss a lot of people who have diabetes but are predicted to not have it.
+This could give a false sense of security.
+By lowering the threshold, we can reduce the false negative rate.
 
 ## Solutions to @sec-performance
 
-1. Apply the "bootstrap" resampling strategy on `tsk("mtcars")` and evaluate the performance of `lrn("classif.rpart")`.
-Use 100 replicates and a sampling ratio of 80%.
+1. Apply a repeated cross-validation resampling strategy on `tsk("mtcars")` and evaluate the performance of `lrn("regr.rpart")`.
+Use five repeats of three folds each.
 Calculate the MSE for each iteration and visualize the result.
 Finally, calculate the aggregated performance score.
 
-```{r solutions-006}
+We start by instantiating our task and learner as usual:
+
+```{r}
 set.seed(3)
 task = tsk("mtcars")
 learner = lrn("regr.rpart")
-resampling = rsmp("bootstrap", repeats = 100, ratio = 0.8)
+```
 
+We can instantiate a temporary resampling on the task to illustrate how it assigns observations across the 5 repeats (column `rep`) and 3 folds:
+
+```{r}
+resampling = rsmp("repeated_cv", repeats = 5, folds = 3)
+resampling$instantiate(task)
+resampling$instance
+```
+
+Note instantiating manually is not necessary when using `resample()`, as it automatically instantiates the resampling for us, so we pass it a new resampling which has not been instantiated:
+
+```{r}
+resampling = rsmp("repeated_cv", repeats = 5, folds = 3)
 rr = resample(task, learner, resampling)
-rr$score(msr("regr.mse"))
-autoplot(rr)
-# Alternatively: Histogram
-autoplot(rr, type = "histogram")
+```
 
+Now we can `$score()` the resampling with the MSE measure across each of the 5x3 resampling iterations:
+
+```{r}
+scores = rr$score(msr("regr.mse"))
+scores
+```
+
+We can manually calculate these scores since `rr` contains all the individual predictions.
+The `$predictions()` method returns a list of predictions for each iteration, which we can use to calculate the MSE for the first iteration:
+
+```{r}
+preds = rr$predictions()
+pred_1 = as.data.table(preds[[1]])
+pred_1[, list(rmse = mean((truth - response)^2))]
+```
+
+To visualize the results, we can use `ggplot2` directly on the `scores` object, which behaves like any other `data.table`:
+
+```{r}
+library(ggplot2)
+# Barchart of the per-iteration scores
+ggplot(scores, aes(x = iteration, y = regr.mse)) +
+  geom_col() +
+  theme_minimal()
+
+# Boxplot of the scores
+ggplot(scores, aes(x = regr.mse)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = 0, labels = NULL) +
+  theme_minimal()
+```
+
+Alternatively, the `autoplot()` function provides defaults for the `ResampleResult` object.
+Note that it internally scores the resampling using the MSE for regression tasks per default.
+
+```{r}
+autoplot(rr)
+autoplot(rr, type = "histogram")
+```
+
+The aggregate score is the mean of the MSE scores across all iterations, which we can calculate using `$aggregate()` or by manually averaging the scores we stored before:
+
+```{r}
+mean(scores$regr.mse)
 rr$aggregate(msr("regr.mse"))
 ```
 
 
-2. Use `tsk("spam")` and five-fold CV to benchmark Random forest (`lrn("classif.ranger")`), Logistic Regression (`lrn("classif.log_reg")`), and XGBoost (`lrn("classif.xgboost")`) with respect to AUC.
-Which learner appears to do best? How confident are you in your conclusion?
-How would you improve upon this?
+2. Use `tsk("spam")` and five-fold CV to benchmark `lrn("classif.ranger")`, `lrn("classif.log_reg")`, and `lrn("classif.xgboost", nrounds = 100)` with respect to AUC.
+Which learner appears to perform best? How confident are you in your conclusion?
+Think about the stability of results and investigate this by re-rerunning the experiment with different seeds.
+What can be done to improve this?
 
-```{r solutions-007, warning=FALSE}
+First we instantiate our learners with their initial parameters, setting the `predict_type = "prob"` once for all of them using `lrns()`.
+We then set the `nrounds` parameter for XGBoost to 100 and construct a resampling object for 5-fold CV:
+
+```{r}
 set.seed(3)
-design = benchmark_grid(
-  tasks = tsk("spam"),
-  learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"),
-                  predict_type = "prob"),
-  resamplings = rsmp("cv", folds = 5)
-)
 
-bmr = benchmark(design)
-
-mlr3viz::autoplot(bmr, measure = msr("classif.auc"))
+task = tsk("spam")
+learners = lrns(c("classif.ranger", "classif.log_reg", "classif.xgboost"),
+                predict_type = "prob")
+learners$classif.xgboost$param_set$values$nrounds = 100
+resampling = rsmp("cv", folds = 5)
 ```
 
-This is only a small example for a benchmark workflow, but without tuning (see @sec-optimization), the results are naturally not suitable to make any broader statements about the superiority of either learner for this task.
+We could have alternatively instantiated the learners like this, but would have needed to repeat the `predict_type = "prob"` argument multiple times.
 
+```{r, eva=FALSE}
+learners = list(
+  lrn("classif.ranger", predict_type = "prob"),
+  lrn("classif.log_reg", predict_type = "prob"),
+  lrn("classif.xgboost", nrounds = 100, predict_type = "prob")
+)
+```
 
-3. A colleague claims to have achieved a 93.1% classification accuracy using `lrn("classif.rpart")` on `tsk("penguins_simple")`.
+Next we can construct a benchmark design grid with the instantiated objects using `benchmark_grid()`:
+
+```{r}
+design = benchmark_grid(
+  tasks = task,
+  learners = learners,
+  resamplings = resampling
+)
+design
+```
+
+To perform the benchmark, we use the aptly named `benchmark()` function:
+
+```{r, warning=FALSE}
+bmr = benchmark(design)
+bmr
+```
+
+And visualize the results as a boxplot:
+
+```{r}
+autoplot(bmr, measure = msr("classif.auc"))
+```
+
+In this example,`lrn("classif.xgboost")` outperforms `lrn("classif.ranger")`, and both outperform `lrn("classif.log_reg")`.
+Naturally this is only a visual inspection of the results --- proper statistical testing of benchmark results can be conducted using the `mlr3benchmark` package, but for the purposes of this exercise a plot suffices.
+
+When we re-run the same experiment with a different seed, we get a slightly different result.
+
+```{r, warning=FALSE}
+set.seed(3235)
+resampling = rsmp("cv", folds = 5)
+design = benchmark_grid(
+  tasks = task,
+  learners = learners,
+  resamplings = resampling
+)
+bmr = benchmark(design)
+autoplot(bmr, measure = msr("classif.auc"))
+```
+
+The overall trend remains about the same, but do we trust these results?
+Note that we applied both `lrn("classif.log_reg")` and `lrn("classif.ranger")` with their initial parameters.
+While `lrn("classif.log_reg")` does not have any hyperparameters to tune, `lrn("classif.ranger")` does have several, at least one of which is usually tuned (`mtry`).
+In case of `lrn("classif.xgboost")` however, we arbitrarily chose `nrounds = 100` rather than using the learner with its initial value of `nrounds = 1`, which would be equivalent to a single tree decision tree.
+To make any generalizations based on this experiment, we need to properly tune all relevant hyperparmeters in a systematic way.
+We cover this and more in @sec-optimization.
+
+3. A colleague reports a 93.1% classification accuracy using `lrn("classif.rpart")` on `tsk("penguins_simple")`.
 You want to reproduce their results and ask them about their resampling strategy.
 They said they used a custom three-fold CV with folds assigned as `factor(task$row_ids %% 3)`.
 See if you can reproduce their results.
 
-```{r solutions-008}
+We make use of the `custom_cv` resampling strategy here:
+
+```{r}
 task = tsk("penguins_simple")
 rsmp_cv = rsmp("custom_cv")
+```
 
+We apply the rule to assign resampling folds we were provided with: Every third observation is assigned to the same fold:
+
+```{r}
 rsmp_cv$instantiate(task = task, f = factor(task$row_ids %% 3))
 
+str(rsmp_cv$instance)
+```
+
+We are now ready to conduct the resampling and aggregate results:
+
+```{r}
 rr = resample(
   task = task,
   learner = lrn("classif.rpart"),
@@ -139,102 +295,356 @@ rr = resample(
 rr$aggregate(msr("classif.acc"))
 ```
 
+Converting to percentages and rounding to one decimal place, we get the same result as our colleague!
+Luckily they kept track of their resampling to ensure their results were reproducible.
+
+4. (*) Program your own ROC plotting function without using `mlr3`'s `autoplot()` function. The signature of your function should be `my_roc_plot(task, learner, train_indices, test_indices)`.
+Your function should use the `$set_threshold()` method of  `Prediction`, as well as `mlr3measures`.
+
+Here is a function to calculate the true positive rate (TPR, *Sensitivity*) and false positive rate (FPR, *1 - Specificity*) in a loop across a grid of probabilities.
+These are set as thresholds with the `$set_threshold()` method of the `PredictionClassif` object.
+This way we construct the ROC curve by iteratively calculating its x and y values, after which we can use `geom_step()` to draw a step function.
+Note that we do not need to re-train the learner, we merely adjust the threshold applied to the predictions we made at the top of the function
+
+```{r}
+my_roc_plot = function(task, learner, train_indices, test_indices) {
+  # Train learner, predict once.
+  learner$train(task, train_indices)
+  pred = learner$predict(task, test_indices)
+  # Positive class predictions from prediction matrix
+  pos_pred = pred$prob[, which(colnames(pred$prob) == task$positive)]
+
+  # Set a grid of probabilities to evaluate at.
+  prob_grid = seq(0, 1, 0.001)
+
+  # For each possible threshold, calculate TPR,
+  # FPR + aggregate to data.table
+  grid = data.table::rbindlist(lapply(prob_grid, \(thresh) {
+    pred$set_threshold(thresh)
+    data.table::data.table(
+      thresh = thresh,
+      # y axis == sensitivity == TPR
+      tpr = mlr3measures::tpr(
+        truth = pred$truth, response = pred$response,
+        positive = task$positive),
+      # x axis == 1 - specificity == 1 - TNR == FPR
+      fpr = mlr3measures::fpr(
+        truth = pred$truth, response = pred$response,
+        positive = task$positive)
+    )
+  }))
+
+  # Order descending by threshold to use ggplot2::geom_step
+  data.table::setorderv(grid, cols = "thresh", order = -1)
+
+  ggplot2::ggplot(grid, ggplot2::aes(x = fpr, y = tpr)) +
+    # Step function starting with (h)orizontal, then (v)ertical
+    ggplot2::geom_step(direction = "hv") +
+    ggplot2::coord_equal() +
+    ggplot2::geom_abline(linetype = "dashed") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(
+      title = "My Custom ROC Curve",
+      subtitle = sprintf("%s on %s", learner$id, task$id),
+      x = "1 - Specificity", y = "Sensitivity",
+      caption = sprintf("n = %i. Test set: %i", task$nrow, length(test_indices))
+    )
+}
+```
+
+We try our function using `tsk("sonar")` and `lrn("classif.ranger")` learner with 100 trees.
+We set `predict_type = "prob"` since we need probability predictions to apply thresholds, rather than hard class predictions.
+
+```{r}
+set.seed(3)
+
+# Setting up example task and learner for testing
+task = tsk("sonar")
+learner = lrn("classif.ranger", num.trees = 100, predict_type = "prob")
+split = partition(task)
+
+my_roc_plot(task, learner, split$train, split$test)
+```
+
+We can compare it with the pre-built plot function in `mlr3viz`:
+
+```{r}
+learner$train(task, split$train)
+pred = learner$predict(task, split$test)
+autoplot(pred, type = "roc")
+```
+
+Note the slight discrepancy between the two curves.
+This is caused by some implementation differences used by the `precrec` which is used for this functionality in `mlr3viz`.
+There are different approaches to drawing ROC curves, and our implementation above is one of the simpler ones!
 
 ## Solutions to @sec-optimization
 
-1. Tune the `mtry`, `sample.fraction`, ` num.trees` hyperparameters of a random forest model (`lrn("regr.ranger")`) on the `"mtcars"` task.
-Use a simple random search with 50 evaluations and select a suitable batch size.
-Evaluate with a three-fold CV and the root mean squared error.
+1. Tune the `mtry`, `sample.fraction`, and `num.trees` hyperparameters of `lrn("regr.ranger")` on `tsk("mtcars")`.
+  Use a simple random search with 50 evaluations.
+  Evaluate with a three-fold CV and the root mean squared error.
+  Visualize the effects that each hyperparameter has on the performance via simple marginal plots, which plot a single hyperparameter versus the cross-validated MSE.
 
-```{r solutions-009}
-set.seed(4)
+```{r}
+set.seed(1)
+
+task = tsk("mtcars")
+
 learner = lrn("regr.ranger",
-  mtry.ratio      = to_tune(0, 1),
-  sample.fraction = to_tune(1e-1, 1),
-  num.trees       = to_tune(1, 2000)
+  mtry = to_tune(1, 10),
+  sample.fraction = to_tune(0.5, 1),
+  num.trees = to_tune(100, 500)
 )
 
 instance = ti(
-  task = tsk("mtcars"),
   learner = learner,
+  task = task,
   resampling = rsmp("cv", folds = 3),
-  measures = msr("regr.rmse"),
+  measure = msr("regr.rmse"),
   terminator = trm("evals", n_evals = 50)
 )
 
 tuner = tnr("random_search", batch_size = 10)
 
 tuner$optimize(instance)
+
+# all evaluations
+as.data.table(instance$archive)
+
+# best configuration
+instance$result
+
+# incumbent plot
+autoplot(instance, type = "incumbent")
+
+# marginal plots
+autoplot(instance, type = "marginal", cols_x = "mtry")
+autoplot(instance, type = "marginal", cols_x = "sample.fraction")
+autoplot(instance, type = "marginal", cols_x = "num.trees")
 ```
 
-2. Evaluate the performance of the model created in Question 1 with nested resampling.
-Use a holdout validation for the inner resampling and a three-fold CV for the outer resampling.
-Print the unbiased performance estimate of the model.
 
-```{r solutions-010}
-set.seed(4)
+2. Evaluate the performance of the model created in Exercise 1 with nested resampling.
+  Use a holdout validation for the inner resampling and a three-fold CV for the outer resampling.
+
+```{r}
+set.seed(1)
+
+task = tsk("mtcars")
+
 learner = lrn("regr.ranger",
-  mtry.ratio      = to_tune(0, 1),
-  sample.fraction = to_tune(1e-1, 1),
-  num.trees       = to_tune(1, 2000)
+  mtry = to_tune(1, 10),
+  sample.fraction = to_tune(0.5, 1),
+  num.trees = to_tune(100, 500)
 )
 
 at = auto_tuner(
-  tuner = tnr("random_search", batch_size = 10),
+  tuner = tnr("random_search", batch_size = 50),
   learner = learner,
   resampling = rsmp("holdout"),
   measure = msr("regr.rmse"),
   terminator = trm("evals", n_evals = 50)
 )
 
-task = tsk("mtcars")
-outer_resampling = rsmp("cv", folds = 3)
-rr = resample(task, at, outer_resampling, store_models = TRUE)
+rr = resample(task, at, rsmp("cv", folds = 3))
 
-rr$aggregate()
+rr$aggregate(msr("regr.rmse"))
 ```
 
-1. Tune and benchmark an XGBoost model against a logistic regression model on the `"spam"` task and determine which has the best Brier score.
-Use mlr3tuningspaces and nested resampling.
+The `"rmse"` is slightly higher than the one we obtained in Exercise 1.
+We see that the performance estimated while tuning overestimates the true performance
 
-```{r solutions-011}
-library(mlr3tuningspaces)
+3. Tune and benchmark an XGBoost model against a logistic regression (without tuning the latter) and determine which has the best Brier score.
+  Use `mlr3tuningspaces` and nested resampling, try to pick appropriate inner and outer resampling strategies that balance computational efficiency vs. stability of the results.
 
+```{r}
+#| warning: false
+set.seed(1)
+
+task = tsk("sonar")
+lrn_log_reg = lrn("classif.log_reg", predict_type = "prob")
+
+# load xgboost learner with search space
 lrn_xgboost = lts(lrn("classif.xgboost", predict_type = "prob"))
 
+# search space for xgboost
+lrn_xgboost$param_set$search_space()
+
 at_xgboost = auto_tuner(
-  tuner = tnr("random_search", batch_size = 1),
+  tuner = tnr("random_search", batch_size = 50),
   learner = lrn_xgboost,
   resampling = rsmp("cv", folds = 3),
   measure = msr("classif.bbrier"),
-  term_evals = 2,
+  terminator = trm("evals", n_evals = 50)
 )
-
-lrn_logreg = lrn("classif.log_reg", predict_type = "prob")
-
-at_logreg = auto_tuner(
-  tuner = tnr("random_search", batch_size = 1),
-  learner = lrn_logreg,
-  resampling = rsmp("cv", folds = 3),
-  measure = msr("classif.bbrier"),
-  term_evals = 2,
-)
-
-task = tsk("spam")
-outer_resampling = rsmp("cv", folds = 3)
 
 design = benchmark_grid(
   tasks = task,
-  learners = list(at_xgboost, at_logreg),
-  resamplings = outer_resampling
+  learners = list(lrn_log_reg, at_xgboost),
+  resamplings = rsmp("cv", folds = 5)
 )
 
-bmr = benchmark(design, store_models = TRUE)
+bmr = benchmark(design)
 
-bmr
+bmr$aggregate(msr("classif.bbrier"))
 ```
 
+We use the `r ref("lts()")` function from the `r mlr3tuningspaces` package to load the `lrn("classif.xgboost")` with a search space.
+The learner is wrapped in an `r ref("auto_tuner()")`, which is then benchmarked against the `lrn("classif.log_reg")`.
 
+4. (*) Write a function that implements an iterated random search procedure that drills down on the optimal configuration by applying random search to iteratively smaller search spaces.
+  Your function should have seven inputs: `task`, `learner`, `search_space`, `resampling`, `measure`, `random_search_stages`, and `random_search_size`.
+  You should only worry about programming this for fully numeric and bounded search spaces that have no dependencies.
+  In pseudo-code:
+    (1) Create a random design of size `random_search_size` from the given search space and evaluate the learner on it.
+    (2) Identify the best configuration.
+    (3) Create a smaller search space around this best config, where you define the new range for each parameter as: `new_range[i] = (best_conf[i] - 0.25 * current_range[i], best_conf[i] + 0.25*current_range[i])`.
+      Ensure that this `new_range` respects the initial bound of the original `search_space` by taking the `max()` of the new and old lower bound, and the `min()` of the new and the old upper bound ("clipping").
+    (4) Iterate the previous steps `random_search_stages` times and at the end return the best configuration you have ever evaluated.
+
+```{r}
+library(mlr3misc)
+
+focus_search = function(task, learner, search_space, resampling, measure, random_search_stages, random_search_size) {
+
+  repeat {
+
+    # tune learner on random design
+    instance = tune(
+      tuner = tnr("random_search", batch_size = random_search_size),
+      learner = learner,
+      task = task,
+      resampling = resampling,
+      measure = measure,
+      search_space = search_space,
+      terminator = trm("evals", n_evals = random_search_size),
+    )
+
+    # identify the best configuration
+    best_config = instance$result_x_search_space
+
+    # narrow search space
+    walk(search_space$ids(), function(id) {
+      best = best_config[[id]]
+      lower = search_space$params[[id]]$lower
+      upper = search_space$params[[id]]$upper
+
+      new_lower = best - 0.25 * lower
+      new_upper = best + 0.25 * upper
+
+      if ("ParamInt" %in% class(search_space$params[[id]])) {
+        new_lower = round(new_lower)
+        new_upper = round(new_upper)
+      }
+
+      search_space$params[[id]]$lower = max(new_lower, lower)
+      search_space$params[[id]]$upper = min(new_upper, upper)
+    })
+
+    random_search_stages = random_search_stages - 1
+    if (!random_search_stages) return(best_config)
+  }
+}
+
+focus_search(
+  task = tsk("mtcars"),
+  learner = lrn("regr.xgboost"),
+  search_space = ps(
+    eta = p_dbl(lower = 0.01, upper = 0.5),
+    max_depth = p_int(lower = 1, upper = 10),
+    nrounds = p_int(lower = 10, upper = 100)
+  ),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("regr.rmse"),
+  random_search_stages = 2,
+  random_search_size = 50
+)
+```
+
+As a stretch goal, look into `mlr3tuning`'s internal source code and turn your function into an R6 class inheriting from the `Tuner` class -- test it out on a learner of your choice.
+
+```{r}
+library(R6)
+library(mlr3tuning)
+
+TunerFocusSearch = R6Class("TunerFocusSearch",
+  inherit = Tuner,
+  public = list(
+
+    initialize = function() {
+      param_set = ps(
+        random_search_stages = p_int(lower = 1L, tags = "required"),
+        random_search_size = p_int(lower = 1L, tags = "required")
+      )
+
+      param_set$values = list(random_search_stages = 10L, random_search_size = 50L)
+
+      super$initialize(
+        id = "focus_search",
+        param_set = param_set,
+        param_classes = c("ParamLgl", "ParamInt", "ParamDbl", "ParamFct"),
+        properties = c("dependencies", "single-crit", "multi-crit"),
+        label = "Focus Search",
+        man = "mlr3tuning::mlr_tuners_focus_search"
+      )
+    }
+  ),
+
+  private = list(
+    .optimize = function(inst) {
+      pv = self$param_set$values
+      search_space = inst$search_space
+
+       for (i in seq(pv$random_search_stages)) {
+
+        # evaluate random design
+        xdt = generate_design_random(search_space, pv$random_search_size)$data
+        inst$eval_batch(xdt)
+
+        # identify the best configuration
+        best_config = inst$archive$best(batch = i)
+
+        # narrow search space
+        walk(search_space$ids(), function(id) {
+          best = best_config[[id]]
+          lower = search_space$params[[id]]$lower
+          upper = search_space$params[[id]]$upper
+
+          new_lower = best - 0.25 * lower
+          new_upper = best + 0.25 * upper
+
+          if ("ParamInt" %in% class(search_space$params[[id]])) {
+            new_lower = round(new_lower)
+            new_upper = round(new_upper)
+          }
+
+          search_space$params[[id]]$lower = max(new_lower, lower)
+          search_space$params[[id]]$upper = min(new_upper, upper)
+        })
+      }
+    }
+  )
+)
+
+mlr_tuners$add("focus_search", TunerFocusSearch)
+
+instance = ti(
+  task = tsk("mtcars"),
+  learner = lrn("regr.xgboost"),
+  search_space = ps(
+    eta = p_dbl(lower = 0.01, upper = 0.5),
+    max_depth = p_int(lower = 1, upper = 10),
+    nrounds = p_int(lower = 10, upper = 100)
+  ),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("regr.rmse"),
+  terminator = trm("none")
+)
+
+tuner = tnr("focus_search", random_search_stages = 2, random_search_size = 50)
+
+tuner$optimize(instance)
+```
 
 ## Solutions to @sec-optimization-advanced
 
@@ -243,9 +653,16 @@ Use `tnr("mbo")` with 50 evaluations.
 Compare this with the performance progress of a random search run from @sec-optimization, Exercise 1.
 Plot the progress of performance over iterations and visualize the spatial distribution of the evaluated hyperparameter configurations for both algorithms.
 
+We first construct the learner, task, resampling, measure and terminator and then the instance.
+
 ```{r}
 library(mlr3mbo)
+library(bbotk)
+library(data.table)
 library(ggplot2)
+library(viridisLite)
+
+set.seed(5)
 
 learner = lrn("regr.ranger",
   mtry = to_tune(1, 10),
@@ -253,19 +670,28 @@ learner = lrn("regr.ranger",
   num.trees = to_tune(100, 500)
 )
 task = tsk("mtcars")
-resampling = rsmp("cv", folds = 3)$instantiate(task)
+resampling = rsmp("cv", folds = 3)
 measure = msr("regr.rmse")
 terminator = trm("evals", n_evals = 50)
-instance = ti(
+instance_rs = ti(
   learner = learner,
   task = task,
   resampling = resampling,
   measure = measure,
   terminator = terminator
 )
-tuner = tnr("random_search", batch_size = 50)
-tuner$optimize(instance)
+```
 
+Using a random search results in the following final performance:
+
+```{r, warning = FALSE}
+tuner = tnr("random_search", batch_size = 50)
+tuner$optimize(instance_rs)
+```
+
+We then construct a new instance and optimize it via Bayesian Optimization (BO) using `tnr("mbo")` in its default configuration (see also `r ref("mbo_defaults")`):
+
+```{r, warning = FALSE}
 instance_mbo = ti(
   learner = learner,
   task = task,
@@ -275,41 +701,53 @@ instance_mbo = ti(
 )
 tuner = tnr("mbo")
 tuner$optimize(instance_mbo)
+```
 
-instance$archive$data[, iteration := seq_len(.N)]
-instance$archive$data[, best_rmse := cummin(regr.rmse)]
-instance$archive$data[, method := "Random Search"]
+We then add relevant information to the archives of the instances so that we can combine their data and use this data for generating the desired plots.
+
+```{r}
+instance_rs$archive$data[, iteration := seq_len(.N)]
+instance_rs$archive$data[, best_rmse := cummin(regr.rmse)]
+instance_rs$archive$data[, method := "Random Search"]
 instance_mbo$archive$data[, iteration := seq_len(.N)]
 instance_mbo$archive$data[, best_rmse := cummin(regr.rmse)]
 instance_mbo$archive$data[, method := "BO"]
 
-plot_data = rbind(instance$archive$data[, c("iteration", "best_rmse", "method")],
+plot_data = rbind(instance_rs$archive$data[, c("iteration", "best_rmse", "method")],
   instance_mbo$archive$data[, c("iteration", "best_rmse", "method")])
 
 ggplot(aes(x = iteration, y = best_rmse, colour = method), data = plot_data) +
   geom_step() +
-  theme_minimal()
-
-plot_data_sampling = rbind(
-  instance$archive$data[, c("mtry", "sample.fraction", "num.trees", "iteration", "method")],
-  instance_mbo$archive$data[, c("mtry", "sample.fraction", "num.trees", "iteration", "method")])
-
-ggplot(aes(x = num.trees, y = sample.fraction, shape = method, colour = iteration), data = plot_data_sampling) +
-  scale_colour_gradient(low = "black", high = "darkgrey") +
-  geom_point(size = 3) +
-  labs(colour = "Number of Evaluations", shape = "Method") +
-  facet_wrap(~ mtry, nrow = 2, ncol = 5, labeller = "label_both") +
+  scale_colour_manual(values = viridis(2, end = 0.8)) +
+  labs(x = "Number of Configurations", y = "Best regr.rmse", colour = "Method") +
   theme_minimal() +
   theme(legend.position = "bottom")
+```
+
+We see that BO manages to slightly outperform the random search.
+Ideally, we would replicate running both optimizers multiple times with different random seeds and visualize their average performance along with a dispersion measure to properly take randomness of the optimization process into account.
+
+To visualize the spatial distribution of the evaluated hyperparameter configurations we will plot for each evaluated configuration the number of trees on the x-axis and the sample fraction on the y-axis.
+The label of each point corresponds to the mtry parameter directly.
+
+```{r}
+plot_data_sampling = rbind(
+  instance_rs$archive$data[, c("mtry", "sample.fraction", "num.trees", "iteration", "method")],
+  instance_mbo$archive$data[, c("mtry", "sample.fraction", "num.trees", "iteration", "method")])
 
 ggplot(aes(x = num.trees, y = sample.fraction, colour = method, label = mtry), data = plot_data_sampling) +
-  scale_colour_manual(values = c("black", "darkgrey")) +
+  scale_colour_manual(values = viridis(2, end = 0.8)) +
   geom_point(size = 0) +
   geom_text() +
   guides(colour = guide_legend(title = "Method", override.aes = aes(label = "", size = 2))) +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
+
+We observe that the random search samples uniformly at random -- as expected.
+BO, however, focuses on regions of the search space with a high number of trees between 350 and 400, a high sample fraction and mtry values of around 5 to 8.
+This is also the region where the final result returned by the BO is located.
+Nevertheless, BO also explores the search space, i.e., along the line of a high sample fraction close to 1.
 
 2. Minimize the 2D Rastrigin function $f: [-5.12, 5.12] \times [-5.12, 5.12] \rightarrow \mathbb{R}$, $\mathbf{x} \mapsto 10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$, $D = 2$ via BO (standard sequential single-objective BO via `bayesopt_ego()`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `opt("nloptr")` as acquisition function optimizer.
 Use a budget of 40 function evaluations.
@@ -321,10 +759,10 @@ surrogate_gp = srlrn(default_gp())
 surrogate_rf = srlrn(default_rf())
 ```
 
-```{r}
-library(mlr3mbo)
-library(ggplot2)
+We first construct the function, making use of efficient evaluation operating on a `data.table` directly.
+We then wrap this function in the corresponding `r ref("ObjectiveRFunDt")` objective class and construct the instance.
 
+```{r}
 rastrigin = function(xdt) {
   D = ncol(xdt)
   y = 10 * D + rowSums(xdt^2 - (10 * cos(2 * pi * xdt)))
@@ -341,7 +779,11 @@ objective = ObjectiveRFunDt$new(
 instance = OptimInstanceSingleCrit$new(
   objective = objective,
   terminator = trm("evals", n_evals = 40))
+```
 
+We then construct the surrogates as well as the acquisition function and acquisition function optimizer (we will terminate the acquisition function optimization once optimization process stagnates by `1e-5` over the last 100 iterations) and construct the two BO optimizers.
+
+```{r}
 surrogate_gp = srlrn(default_gp())
 surrogate_rf = srlrn(default_rf())
 
@@ -362,20 +804,30 @@ optimizer_rf = opt("mbo",
   acq_function = acq_function,
   acq_optimizer = acq_optimizer
 )
+```
 
+We will use the following initial design for both optimizers:
+
+```{r}
 initial_design = data.table(
   x1 = c(-3.95, 1.16, 3.72, -1.39, -0.11, 5.00, -2.67, 2.44),
   x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46)
 )
 instance$eval_batch(initial_design)
+```
 
+We then proceed to optimize the instance with each of the two optimizers and make sure to extract the relevant data from the archive of the instance.
+
+```{r, warning = FALSE}
 optimizer_gp$optimize(instance)
 
 gp_data = instance$archive$data
 gp_data[, y_min := cummin(y)]
 gp_data[, iteration := seq_len(.N)]
 gp_data[, surrogate := "Gaussian Process"]
+```
 
+```{r, warning = FALSE}
 instance$archive$clear()
 
 instance$eval_batch(initial_design)
@@ -386,16 +838,23 @@ rf_data = instance$archive$data
 rf_data[, y_min := cummin(y)]
 rf_data[, iteration := seq_len(.N)]
 rf_data[, surrogate := "Random forest"]
+```
 
+We then combine the data and use it to generate the desired plot:
+
+```{r}
 plot_data = rbind(gp_data, rf_data)
 ggplot(aes(x = iteration, y = y_min, colour = surrogate), data = plot_data) +
   geom_step() +
-  scale_colour_manual(values = c("black", "darkgrey")) +
+  scale_colour_manual(values = viridis(2, end = 0.8)) +
   labs(y = "Best Observed Function Value", x = "Number of Function Evaluations",
        colour = "Surrogate Model") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
+
+As expected, we observe that the BO algorithm witht he Gaussian Process surrogate appears to outperform the random forest surrogate counterpart.
+However, ideally we would replicate running each version using different random seeds and visualize the average performance along with some dispersion measure to properly take randomness of the optimization process into account.
 
 3. Minimize the following function: $f: [-10, 10] \rightarrow \mathbb{R}^2, x \mapsto \left(x^2, (x - 2)^2\right)$ with respect to both objectives.
 Use the ParEGO algorithm.
@@ -403,10 +862,12 @@ Construct the objective function using the `r ref("ObjectiveRFunMany")` class.
 Terminate the optimization after a runtime of 100 evals.
 Plot the resulting Pareto front and compare it to the analytical solution, $y_2 = \left(\sqrt{y_1}-2\right)^2$ with $y_1$ ranging from $0$ to $4$.
 
-```{r}
-library(mlr3mbo)
-library(ggplot2)
+We first construct the function, wrap it in the objective and then create the instance.
+As a surrogate we will use a random forest.
+ParEGO is a scalarization based multi-objective BO algorithm and therefore we use the Expected Improvement as acquisition function.
+We will use the same acquisition function optimizer as earlier.
 
+```{r}
 fun = function(xss) {
   evaluations = lapply(xss, FUN = function(xs) {
     list(y1 = xs$x ^ 2, y2 = (xs$x - 2)^2)
@@ -424,7 +885,13 @@ instance = OptimInstanceMultiCrit$new(
   objective = objective,
   terminator = trm("evals", n_evals = 100)
 )
+```
 
+As a surrogate we will use a random forest.
+ParEGO is a scalarization based multi-objective BO algorithm and therefore we use the Expected Improvement as acquisition function.
+We will use the same acquisition functon optimizer as earlier.
+
+```{r}
 surrogate = srlrn(default_rf())
 
 acq_function = acqf("ei")
@@ -434,13 +901,20 @@ acq_optimizer = acqo(opt("nloptr", algorithm = "NLOPT_GN_ORIG_DIRECT"),
 
 optimizer = opt("mbo",
   loop_function = bayesopt_parego,
-  surrogate = surrogate, acq_function =
-  acq_function,
+  surrogate = surrogate,
+  acq_function = acq_function,
   acq_optimizer = acq_optimizer
 )
+```
 
+We then optimize the instance.
+
+```{r, warning = FALSE}
 optimizer$optimize(instance)
+```
+Finally, we visualize the resulting Pareto front (in black) and its analytical counterpart (in darkgrey).
 
+```{r}
 true_pareto = data.table(y1 = seq(from = 0, to = 4, length.out = 1001))
 true_pareto[, y2 := (sqrt(y1) - 2) ^2]
 
@@ -452,108 +926,276 @@ ggplot(aes(x = y1, y = y2), data = instance$archive$best()) +
   theme_minimal()
 ```
 
-
-
 ## Solutions to @sec-feature-selection
 
-1. Calculate a correlation filter on the `"mtcars"` task.
+1. Compute the correlation filter scores on `tsk("mtcars")` and use the filter to select the five features most strongly correlated with the target.
+  Resample `lrn("regr.kknn")` on both the full dataset and the reduced one, and compare both performances based on 10-fold CV with respect to MSE.
+  NB: Here, we have performed the feature filtering outside of CV, which is generally not a good idea as it biases the CV performance estimation.
+  To do this properly, filtering should be embedded inside the CV via pipelines -- try to come back to this exercise after you read @sec-pipelines-nonseq to implement this with less bias.
 
-```{r solutions-012}
-library(mlr3verse)
-filter = flt("correlation")
+```{r}
+set.seed(1)
 
 task = tsk("mtcars")
+
+filter = flt("correlation")
+
 filter$calculate(task)
 
-as.data.table(filter)
-```
+# sorted filter scores
+filter$scores
 
-2. Use the filter from the first exercise to select the five best features in the `mtcars` dataset.
-
-```{r solutions-013}
-keep = names(head(filter$scores, 5))
-task$select(keep)
-task$feature_names
-```
-
-3. Apply a backward selection to `tsk("penguins")` with `lrn("classif.rpart")` and holdout resampling by the measure classification accuracy. Compare the results with those in @sec-fs-wrapper-example.
-
-```{r solutions-014}
-library(mlr3fselect)
-
-instance = fselect(
-  fselector = fs("sequential", strategy = "sbs"),
-  task =  tsk("penguins"),
-  learner = lrn("classif.rpart"),
-  resampling = rsmp("holdout"),
-  measure = msr("classif.acc")
-)
-as.data.table(instance$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-instance$result_feature_set
-```
-
-Answer the following questions:
-
-  a. Do the selected features differ?
-
-Yes, the backward selection selects more features.
-
-  b. Which feature selection method achieves a higher classification accuracy?
-
-In this example, the backwards example performs slightly better, but this depends heavily on the random seed and could look different in another run.
-
-  c. Are the accuracy values in b) directly comparable? If not, what has to be changed to make them comparable?
-
-No, they are not comparable because the holdout sampling called with `rsmp("holdout")` creates a different holdout set for the two runs. A fair comparison would create a single resampling instance and use it for both feature selections (see @sec-performance for details):
-
-```{r solutions-015}
-resampling = rsmp("holdout")
-resampling$instantiate(tsk("penguins"))
-
-instance_sfs = fselect(
-  fselector = fs("sequential", strategy = "sfs"),
-  task =  tsk("penguins"),
-  learner = lrn("classif.rpart"),
-  resampling = resampling,
-  measure = msr("classif.acc")
-)
-instance_sbs = fselect(
-  fselector = fs("sequential", strategy = "sbs"),
-  task =  tsk("penguins"),
-  learner = lrn("classif.rpart"),
-  resampling = resampling,
-  measure = msr("classif.acc")
-)
-as.data.table(instance_sfs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-as.data.table(instance_sbs$result)[, .(bill_depth, bill_length, body_mass, classif.acc)]
-```
-
-Alternatively, one could automate the feature selection and perform a benchmark between the two wrapped learners.
-
-4. Automate the feature selection as in @sec-autofselect with `tsk("spam")` and `lrn("classif.log_reg")`.
-
-```{r solutions-016, warning=FALSE}
-library(mlr3fselect)
-library(mlr3learners)
-
-at = auto_fselector(
-  fselector = fs("random_search"),
-  learner = lrn("classif.log_reg"),
-  resampling = rsmp("holdout"),
-  measure = msr("classif.acc"),
-  terminator = trm("evals", n_evals = 50)
-)
+# subset task to 5 most correlated features
+task$select(names(head(filter$scores, 5)))
+task
 
 design = benchmark_grid(
-  task = tsk("spam"),
-  learner = list(at, lrn("classif.log_reg")),
-  resampling = rsmp("cv", folds = 3)
+  tasks = list(task, tsk("mtcars")),
+  learners = lrn("regr.kknn"),
+  resamplings = rsmp("cv", folds = 10)
 )
 
 bmr = benchmark(design)
+bmr$aggregate(msr("regr.mse"))
+```
 
-aggr = bmr$aggregate(msrs(c("classif.acc", "time_train")))
-as.data.table(aggr)[, .(learner_id, classif.acc, time_train)]
+The `"mse"` is much lower on the filtered task.
+
+2. Apply backward selection to `tsk("penguins")` with `lrn("classif.rpart")` and holdout resampling by the classification accuracy measure.
+  Compare the results with those in @sec-fs-wrapper-example by also running the forward selection from that section.
+  Do the selected features differ?
+  Which feature selection method reports a higher classification accuracy in its `$result`?
+
+```{r}
+set.seed(1)
+
+fselector_sbs = fs("sequential", strategy = "sbs")
+
+instance_sbs = fsi(
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc"),
+  terminator = trm("none")
+)
+
+fselector_sbs$optimize(instance_sbs)
+
+# optimization path sbs
+fselector_sbs$optimization_path(instance_sbs)
+
+instance_sbs$result
+
+fselector_sfs = fs("sequential", strategy = "sfs")
+
+instance_sfs = fsi(
+  task =  tsk("penguins"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc"),
+  terminator = trm("none")
+)
+
+fselector_sfs$optimize(instance_sfs)
+
+# optimization path sfs
+fselector_sfs$optimization_path(instance_sfs)
+
+instance_sfs$result
+```
+
+The sequential backward search selects 5 features, while the sequential forward search selects all features.
+The sequential backward search reports a higher classification accuracy.
+
+3. There is a problem in the performance comparison in Exercise 2 as feature selection is performed on the test-set.
+  Change the process by applying forward feature selection with `auto_fselector()`.
+  Compare the performance to backward feature selection from Exercise 2 using nested resampling.
+
+```{r}
+set.seed(1)
+
+afs_sfs = auto_fselector(
+  fselector = fs("sequential", strategy = "sfs"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc")
+)
+
+afs_sbs = auto_fselector(
+  fselector = fs("sequential", strategy = "sbs"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("holdout"),
+  measure = msr("classif.acc")
+)
+
+design = benchmark_grid(
+  tasks = tsk("penguins"),
+  learners = list(afs_sfs, afs_sbs),
+  resamplings = rsmp("cv", folds = 5)
+)
+
+bmr = benchmark(design)
+bmr$aggregate(msr("classif.acc"))
+```
+
+Now the sequential forward search selects yields a slightly higher classification accuracy.
+
+4. (*) Write a feature selection algorithm that is a hybrid of a filter and a wrapper method.
+  This search algorithm should compute filter scores for all features and then perform a forward search.
+  But instead of tentatively adding all remaining features to the current feature set, it should only stochastically try a subset of the available features.
+  Features with high filter scores should be added with higher probability.
+  Start by coding a stand-alone R method for this search (based on a learner, task, resampling, performance measure and some control settings).
+
+```{r}
+library(mlr3verse)
+library(data.table)
+
+task = tsk("sonar")
+learner = lrn("classif.rpart")
+resampling = rsmp("cv", folds = 3)
+measure = msr("classif.acc")
+filter = flt("auc")
+n = 5
+max_features = 10
+
+
+filter_forward_selection_search = function(task, learner, resampling, measure, filter, n, max_features) {
+  features = task$feature_names
+
+  # calculate filter scores
+  filter$calculate(task)
+  scores = filter$scores
+
+  result_features = character(0)
+  while(max_features > length(result_features)) {
+
+    # select n features to try
+    filter_features = sample(names(scores), size = min(n, length(scores)), prob = scores)
+
+    # create feature matrix
+    states = matrix(FALSE, ncol = length(features), nrow = length(filter_features))
+
+    # add filter features to matrix
+    for (i in seq_along(filter_features)) {
+      states[i, which(features %in% filter_features[i])] = TRUE
+    }
+
+    # add already selected features to matrix
+    states[, which(features %in% result_features)] = TRUE
+
+    # convert matrix to design
+    design = setnames(as.data.table(states), features)
+
+    # evaluate feature combinations
+    instance = fselect(
+      fselector = fs("design_points", design = design, batch_size = nrow(design)),
+      task =  task,
+      learner = learner,
+      resampling = resampling,
+      measure = measure
+    )
+
+    # current best set
+    result_features = instance$result_feature_set
+
+    # remove selected features from scores
+    scores = scores[!names(scores) %in% result_features]
+  }
+
+  result_features
+}
+
+filter_forward_selection_search(task, learner, resampling, measure, filter, n, max_features)
+```
+
+Then, as a stretch goal, see if you can implement this as an R6 class inheriting from `FSelector`.
+
+```{r}
+library(R6)
+library(checkmate)
+library(mlr3verse)
+library(mlr3fselect)
+library(data.table)
+
+FSelectorSequentialFilter = R6Class("FSelectorSequentialFilter",
+  inherit = FSelector,
+  public = list(
+
+    #' @description
+    #' Creates a new instance of this [R6][R6::R6Class] class.`
+    initialize = function() {
+      param_set = ps(
+        filter = p_uty(tags = "required"),
+        n = p_int(lower = 1, tags = "required"),
+        max_features = p_int(lower = 1)
+      )
+
+      super$initialize(
+        id = "filter_sequential",
+        param_set = param_set,
+        properties = "single-crit",
+        label = "Sequential Filter Search",
+        man = "mlr3fselect::mlr_fselectors_sequential"
+      )
+    }
+  ),
+  private = list(
+    .optimize = function(inst) {
+      pv = self$param_set$values
+      features = inst$archive$cols_x
+      max_features = pv$max_features %??% length(features)
+
+      # calculate filter scores
+      pv$filter$calculate(inst$objective$task)
+      scores = pv$filter$scores
+
+      result_features = character(0)
+      while(max_features > length(result_features)) {
+
+        # select n features to try
+        filter_features = sample(names(scores), size = min(pv$n, length(scores)), prob = scores)
+
+        # create feature matrix
+        states = matrix(FALSE, ncol = length(features), nrow = length(filter_features))
+
+        # add filter features to matrix
+        for (i in seq_along(filter_features)) {
+          states[i, which(features %in% filter_features[i])] = TRUE
+        }
+
+        # add already selected features to matrix
+        states[, which(features %in% result_features)] = TRUE
+
+        # convert matrix to design
+        design = setnames(as.data.table(states), features)
+
+        # evaluate feature combinations
+        inst$eval_batch(design)
+
+        # current best set
+        res = inst$archive$best(batch = inst$archive$n_batch)
+        result_features = features[as.logical(res[, features, with = FALSE])]
+
+        # remove selected features from scores
+        scores = scores[!names(scores) %in% result_features]
+      }
+    }
+  )
+)
+
+mlr_fselectors$add("sequential_filter", FSelectorSequentialFilter)
+
+instance = fselect(
+  fselector = fs(
+    "sequential_filter",
+    filter = flt("auc"),
+    n = 5,
+    max_features = 10),
+  task =  tsk("sonar"),
+  learner = lrn("classif.rpart"),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.acc")
+)
 ```
 
 ## Solutions to @sec-pipelines
