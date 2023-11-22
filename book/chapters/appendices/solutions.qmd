@@ -800,37 +800,37 @@ system.time(resample(task, learner, resampling))
 If possible, the number of resampling iterations should be an integer multiple of the number of workers.
 Therefore, a simple adaptation either increases the number of folds for improved accuracy of the error estimate or reduces the number of folds for improved runtime.
 
-2. Create a new custom classification measure (either using methods demonstrated in @sec-extending or with `msr("classif.costs")` which scores predictions using the mean over the following classification costs:
+2. Create a new custom binary classification measure (either using methods demonstrated in @sec-extending or with `msr("classif.costs")`) which scores ("prob"-type) predictions.
+  This measure should compute the absolute difference between the predicted probability for the positive class and a 0-1 encoding of the ground truth and then average these values across the test set.
+  Test this with `classif.log_reg` on `tsk(“sonar”)`.
 
-* If the learner predicted label "A" and the truth is "A", assign score 0
-* If the learner predicted label "B" and the truth is "B", assign score 0
-* If the learner predicted label "A" and the truth is "B", assign score 1
-* If the learner predicted label "B" and the truth is "A", assign score 10
-
-The rules can easily be translated to R code where we expect `truth` and `prediction` to be factor vectors of the same length with levels `"A"` and `"B"`:
+The rules can easily be translated to R code where we first convert the truth vector into 0-1 encoded matrix, calculate the absolute different with the predicted probabilities, and then average the results.
 
 ```{r solutions-023}
-costsens = function(truth, prediction) {
-    score = numeric(length(truth))
-    score[truth == "A" & prediction == "B"] = 10
-    score[truth == "B" & prediction == "A"] = 1
-
-    mean(score)
+mae_prob = function(truth, prob) {
+  # convert truth to 0-1 encoded matrix
+  truth_mat = model.matrix(~ truth - 1)
+  # set the column names correctly
+  colnames(truth_mat) = levels(truth)
+  # ensure same order of columns and
+  prob = prob[, levels(truth)]
+  # average the mean absolute difference
+  mean(abs(truth_mat - prob))
 }
 ```
 
 This function can be embedded in the `Measure` class accordingly.
 
 ```{r solutions-024}
-MeasureCustom = R6::R6Class("MeasureCustom",
+MeasureMaeProb = R6::R6Class("MeasureMaeProb",
   inherit = mlr3::MeasureClassif, # classification measure
   public = list(
     initialize = function() { # initialize class
       super$initialize( # initialize method of parent class
-        id = "custom", # unique ID
+        id = "mae_prob", # unique ID
         packages = character(), # no dependencies
         properties = character(), # no special properties
-        predict_type = "response", # measures response prediction
+        predict_type = "prob", # measures probability prediction
         range = c(0, Inf), # results in values between [0, Inf)
         minimize = TRUE # smaller values are better
       )
@@ -840,22 +840,114 @@ MeasureCustom = R6::R6Class("MeasureCustom",
   private = list(
     .score = function(prediction, ...) { # define score as private method
       # call loss function
-      costsens(prediction$truth, prediction$response)
+      mae_prob(prediction$truth, prediction$prob)
     }
   )
 )
 ```
 
-An alternative (as pointed to by the hint) can be constructed by first translating the rules to a matrix of misclassification costs, and then feeding this matrix to the constructor of `msr("classif.costs")`:
+Because this is a custom class that is not available in the `mlr_measures` dictionary, we have to create a new instance using the `$new()` constructor.
 
-```{r solutions-025}
-# truth in columns, prediction in rows
-C = matrix(c(0, 10, 1, 0), nrow = 2)
-rownames(C) = colnames(C) = c("A", "B")
-C
-
-msr("classif.costs", costs = C)
+```{r}
+msr_mae_prob = MeasureMaeProb$new()
+msr_mae_prob
 ```
+
+
+To try this measure, we resample a logistic regression on the sonar task using 3-fold cross-validation.
+
+```{r}
+
+learner = lrn("classif.log_reg", predict_type = "prob") # otherwise our meausre does not work
+task = tsk("sonar")
+rr = resample(task, learner, rsmp("cv", folds = 3))
+```
+
+We now score the resample result using our custom measure and `msr("classif.acc")`.
+
+```{r}
+rr$score(list(msr_mae_prob, msr("classif.acc")))
+```
+
+In this case, there is a clear relationship between the accuracy and the mean absolute error of the probabilities.
+
+
+3. "Tune" the `error_train` hyperparameter of the `classif.debug` learner on a continuous interval from 0 to 1, using a simple fallback learner.
+  Tune for 50 iterations using random search and holdout resampling.
+  Inspect the resulting archive and find out which evaluations resulted in an error, and which did not.
+  Now do the same in the interval 0.3 to 0.7.
+  Are your results surprising?
+
+```{r}
+lrn_debug = lrn("classif.debug",
+  error_train = to_tune(0, 1),
+  fallback = lrn("classif.rpart")
+)
+lrn_debug
+```
+
+We proceed with tuning the classification accuracy of the learner on the iris task.
+
+```{r}
+instance = tune(
+  learner =  lrn_debug,
+  task = tsk("iris"),
+  resampling = rsmp("holdout"),
+  tuner = tnr("random_search"),
+  measure = msr("classif.acc"),
+  term_evals = 50
+)
+instance
+```
+
+To find out which evaluations resulted in an error, we can inspect the `archive` slot of the instance, which we convert to a `data.table` for easier filtering.
+
+```{r}
+archive = as.data.table(instance$archive)
+archive[, c("error_train", "classif.acc", "errors")]
+```
+
+The evaluations with a higher `error_train` value tend to have a higher classification accuracy.
+
+```{r}
+archive[, .(accuracy = mean(classif.acc)), by = errors]
+```
+
+
+While this might be surprising at first, the explanation is that the fallback learner `lrn("classif.rpart")` is superior to the debug learner that simply predicts a random label.
+This means that calculating the best hyperparameter configuration will tend to have high values for the `error_train` parameter.
+The evaluated parameter configurations therefore not only have a direct influence through controlling the primary learner's behavior, but also an indirect effect through affecting the primary learner's error probability during training.
+
+```{r}
+instance$result_learner_param_vals
+```
+
+We repeat the same experiment for the tuning interval from 0.3 to 0.7.
+
+```{r}
+lrn_debug$param_set$set_values(
+  error_train = to_tune(0.3, 0.7)
+)
+
+instance = tune(
+  learner =  lrn_debug,
+  task = tsk("iris"),
+  resampling = rsmp("holdout"),
+  tuner = tnr("random_search"),
+  measure = msr("classif.acc"),
+  term_evals = 50
+)
+
+as.data.table(instance$archive)
+```
+
+The effect is now more subtle, but still present.
+
+We can learn various things from these experiments.
+First, the relationship between hyperparameters and performance measures can be diluted by errors.
+While this might be less of a problem for tuning methods like random or grid search, this can be a problem for more sophisticated methods like Bayesian optimization that rely on this relationship to propose new configurations.
+Second, the fallback learner should be chosen carefully and tend to give worse results than the learner to tune.
+Third, it is always a good idea to inspect the tuning archive after the optimization has finished.
 
 
 ## Solutions to @sec-large-benchmarking
