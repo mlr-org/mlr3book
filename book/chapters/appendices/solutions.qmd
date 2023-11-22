@@ -1112,8 +1112,8 @@ instance = fselect(
 
 ## Solutions to @sec-pipelines
 
-1. Concatenate the named PipeOps using `%>>%`.
-  To get a `r ref("Learner")` object, use `r ref("as_learner()")`
+1. Concatenate the PipeOps named in the exercise by using `%>>%`.
+  The resulting `r ref("Graph")` can then be converted to a `r ref("Learner")` by using `r ref("as_learner()")`.
 ```{r pipelines-001}
 library(mlr3pipelines)
 library(mlr3learners)
@@ -1122,16 +1122,24 @@ graph = po("imputeoor") %>>% po("scale") %>>% lrn("classif.log_reg")
 graph_learner = as_learner(graph)
 ```
 
-1. After training, the underlying `lrn("classif.log_reg")` can be accessed through the `$base_learner()` method.
-  Alternatively, the learner can be accessed explicitly using `po("learner")`.
-```{r pipelines-002}
+2. The `r ref("GraphLearner")` can be trained like any other `Learner` object, thereby filling in its `$model` field.
+  It is possible to access the `$state` of any `PipeOp` through this field: the states are named after the `PipeOp`'s `$id`.
+  The logistic regression model can then be extracted from the state of the `po("learner")` that contains the `lrn("classif.log_reg")`.
+```{r pipelines-002-0}
 graph_learner$train(tsk("pima"))
 
-# access the learner through the $base_learner() method
+# access the state of the po("learner") to get the model
+model = graph_learner$model$classif.log_reg$model
+coef(model)
+```
+  Alternatively, the underlying `lrn("classif.log_reg")` can be accessed through the `$base_learner()` method:
+```{r pipelines-002-1}
 model = graph_learner$base_learner()$model
 coef(model)
-
-# access the learner explicitly through the PipeOp
+```
+  As a third option, the trained `PipeOp` can be accessed through the `$graph_model` field of the `GraphLearner`.
+  The trained `PipeOp` has a `$learner_model` field, which contains the trained `Learner` object, which contains the model.
+```{r pipelines-002-2}
 pipeop = graph_learner$graph_model$pipeops$classif.log_reg
 model = pipeop$learner_model$model
 coef(model)
@@ -1160,51 +1168,204 @@ sd(age_column)
 
 ## Solutions to @sec-pipelines-nonseq
 
-1. To use `po("select")` to *remove*, instead of *keep*, a feature based on a pattern, use `r ref("selector_invert")` together with `r ref("selector_grep")`.
-  To remove the "`R`" class columns in @sec-pipelines-stack, the following `po("select")` could be used:
+1. Use the `po("pca")` replace numeric columns with their PCA transform.
+  To restrict this operator to only columns with missing values, the `affect_columns` with a fitting `r ref("Selector")` can be used:
+  The `selector_missing()`, which selects columns *with* missing values, combined with `selector_invert()`, which inverts the selection.
+  Since `po("pca")` only operates on numeric columns, it is not necessary to use a `Selector` to select numeric columns.
+```{r pipelines-004-0}
+graph = as_graph(po("pca",
+  affect_columns = selector_invert(selector_missing()))
+)
 
-```{r pipelines-004}
-po("select", selector = selector_invert(selector_grep("\\.R")))
+# apply the graph to the pima task
+graph_result = graph$train(tsk("pima"))
+
+# we get the following features
+graph_result[[1]]$feature_names
+
+# Compare with feature-columns of tsk("pima") with missing values:
+selector_missing()(tsk("pima"))
 ```
-which would have the benefit that it would keep the columns pertaining to all other classes, even if the `"sonar"` task had more target classes.
 
-2. A solution that does not need to specify the target classes at all is to use a custom `r ref("Selector")`, as was shown in @sec-pipelines-bagging:
+Alternatively, `po("select")` can be used to select the columns without missing values that are passed to `po("pca")`.
+Another `po("select")` can be used to select all the other columns.
+It is put in parallel with the first `po("select")` using `gunion()`.
+It is necessary to use different `$id` values for both `po("select")` to avoid a name clash in the `Graph`.
+To combine the output from both paths, `po("featureunion")` can be used.
+```{r pipelines-004-1}
+path1 = po("select", id = "select_non_missing",
+  selector = selector_invert(selector_missing())) %>>%
+    po("pca")
+path2 = po("select", id = "select_missing",
+  selector = selector_missing())
+graph = gunion(list(path1, path2)) %>>% po("featureunion")
+
+# apply the graph to the pima task
+graph_result = graph$train(tsk("pima"))
+graph_result[[1]]$feature_names
+```
+
+2. First, observe the feature names produced by the level 0 learners when applied to the `tsk("wine")` task:
+
+```{r pipelines-005-0}
+lrn_rpart = lrn("classif.rpart", predict_type = "prob")
+po_rpart_cv = po("learner_cv", learner = lrn_rpart,
+  resampling.folds = 2, id = "rpart_cv"
+)
+
+lrn_knn = lrn("classif.kknn", predict_type = "prob")
+po_knn_cv = po("learner_cv",
+  learner = lrn_knn,
+  resampling.folds = 2, id = "knn_cv"
+)
+
+# we restrict ourselves to two level 0 learners here to
+# focus on the essentials.
+
+gr_level_0 = gunion(list(po_rpart_cv, po_knn_cv))
+gr_combined = gr_level_0 %>>% po("featureunion")
+
+gr_combined$train(tsk("wine"))[[1]]$head()
+```
+
+To use `po("select")` to *remove*, instead of *keep*, a feature based on a pattern, use `r ref("selector_invert")` together with `r ref("selector_grep")`.
+  To remove the "`1`" class columns, i.e. all columns with names that end in "1", the following `po("select")` could be used:
+
+```{r pipelines-005-1}
+drop_one = po("select", selector = selector_invert(selector_grep("\\.1")))
+
+# Train it on the wine task with lrn("classif.multinom"):
+
+gr_stack = gr_combined %>>% drop_one %>>%
+  lrn("classif.multinom", trace = FALSE)
+
+glrn_stack = as_learner(gr_stack)
+
+glrn_stack$train(tsk("wine"))
+
+glrn_stack$base_learner()$model
+```
+
+3. A solution that does not need to specify the target classes at all is to use a custom `r ref("Selector")`, as was shown in @sec-pipelines-bagging:
 
 ```{r pipelines-005}
 selector_remove_one_prob_column = function(task) {
   class_removing = task$class_names[[1]]
   selector_use = selector_invert(selector_grep(paste0("\\.", class_removing)))
-
-selector_use(task)
+  selector_use(task)
 }
 ```
 Using this selector in @sec-pipelines-stack, one could use the resulting stacking learner on any classification task with arbitrary target classes.
+It can be used as an alternative to the `Selector` used in exercise 2:
+```{r pipelines-005-2}
+drop_one_alt = po("select", selector = selector_remove_one_prob_column)
 
-3. As the first hint states, two `po("imputelearner")` objects are necessary: one to impute missing values in factor columns using a classification learner, and another to impute missing values in numeric columns using a regression learner.
-  Additionally, `ppl("robustify")` is used along with the `r ref("ranger::ranger")`-based learners inside `po("imputelearner")` because the data passed to the imputation learners still contains missing values, which `ranger::ranger` cannot handle.
+# The same as above:
+gr_stack = gr_combined %>>% drop_one_alt %>>%
+  lrn("classif.multinom", trace = FALSE)
+glrn_stack = as_learner(gr_stack)
+glrn_stack$train(tsk("wine"))
 
-```{r pipelines-006}
-gr_impute_factors = po("imputelearner", id = "impute_factors",
-  learner = ppl("robustify", learner = lrn("classif.ranger")) %>>%
-    lrn("classif.ranger"),
-  affect_columns = selector_type("factor")
-)
-gr_impute_numerics = po("imputelearner", id = "impute_numerics",
-  learner = ppl("robustify", learner = lrn("regr.ranger")) %>>%
-    lrn("regr.ranger"),
-  affect_columns = selector_type(c("numeric", "integer"))
-)
-
-gr_impute = gr_impute_numerics %>>% gr_impute_factors
-
-imputed = gr_impute$train(tsk("penguins"))[[1]]
-
-# e.g. see how row 4 was imputed
-# original:
-tsk("penguins")$data(rows = 4)
-# imputed:
-imputed$data(rows = 4)
+# As before, the first class was dropped.
+glrn_stack$base_learner()$model
 ```
+
+4. We choose to use the following options for imputation, factor encoding, and model training.
+  Note the use of `pos()` and `lrns()`, which return lists of `PipeOp` and `Learner` objects, respectively.
+```{r pipelines-005-3}
+imputing = pos(c("imputeoor", "imputesample"))
+
+factor_encoding = pos(c("encode", "encodeimpact"))
+
+models = lrns(c("classif.rpart", "classif.log_reg", "classif.svm"))
+```
+
+Use the `ppl("branch")` pipeline to get `Graphs` with alternative path branching, controlled by its own hyperparameter.
+We need to give the `po("branch")` operators that are created here individual prefixes to avoid nameclashes when we put everything together.
+```{r pipelines-005-4}
+full_graph = ppl("branch",
+    prefix_branchops = "impute_", graphs = imputing
+  ) %>>% ppl("branch",
+    prefix_branchops = "encode_", graphs = factor_encoding
+  ) %>>% ppl("branch",
+    prefix_branchops = "model_", graphs = models
+  )
+
+full_graph$plot()
+```
+
+The easiest way to set up the search space for this pipeline is to use `to_tune()`.
+It is necessary to record the dependencies of the hyperparameters of the preprocessing and model `PipeOps` on the branch hyperparameters.
+For this, `to_tune()` needs to be applied to a `Domain` object -- `p_dbl()`, `p_fct()`, etc. -- that has its dependency declared using the `depends` argument.
+```{r pipelines-005-5}
+library("paradox")
+full_graph$param_set$set_values(
+  impute_branch.selection = to_tune(),
+  encode_branch.selection = to_tune(),
+  model_branch.selection = to_tune(),
+
+  encodeimpact.smoothing = to_tune(p_dbl(1e-3, 1e3, logscale = TRUE,
+    depends = encode_branch.selection == "encodeimpact")),
+  encode.method = to_tune(p_fct(c("one-hot", "poly"),
+    depends = encode_branch.selection == "encode")),
+
+  classif.rpart.cp = to_tune(p_dbl(0.001, 0.3, logscale = TRUE,
+    depends = model_branch.selection == "classif.rpart")),
+  classif.svm.cost = to_tune(p_dbl(1e-5, 1e5, logscale = TRUE,
+    depends = model_branch.selection == "classif.svm")),
+  classif.svm.gamma = to_tune(p_dbl(1e-5, 1e5, logscale = TRUE,
+    depends = model_branch.selection == "classif.svm"))
+)
+```
+
+We also set a few SVM kernel hyperparameters record their dependency on the model selection branch hyperparameter.
+We could record these dependencies in the `Graph`, using the `$add_dep()` method of the `r ref("ParamSet")`, but here we use the simpler approach of adding a single item search space component.
+```{r pipelines-005-5-1}
+full_graph$param_set$set_values(
+  classif.svm.type = to_tune(p_fct("C-classification",
+    depends = model_branch.selection == "classif.svm")),
+  classif.svm.kernel = to_tune(p_fct("radial",
+    depends = model_branch.selection == "classif.svm"))
+)
+```
+
+To turn this `Graph` into an AutoML-system, we use an `AutoTuner`.
+Here we use random search, but any other `Tuner` could be used.
+```{r pipelines-005-6}
+library("mlr3tuning")
+automl_at = auto_tuner(
+  tuner = tnr("random_search"),
+  learner = full_graph,
+  resampling = rsmp("cv", folds = 4),
+  measure = msr("classif.ce"),
+  term_evals = 30
+)
+```
+
+We can now benchmark this `AutoTuner` on a few tasks and compare it with the untuned random forest with out-of-range (OOR) imputation:
+```{r pipelines-005-7}
+#| warning: false
+learners = list(
+  automl_at,
+  as_learner(po("imputeoor") %>>% lrn("classif.ranger"))
+)
+learners[[1]]$id = "automl"
+learners[[2]]$id = "ranger"
+
+tasks = list(
+  tsk("breast_cancer"),
+  tsk("pima"),
+  tsk("sonar")
+)
+
+set.seed(123L)
+design = benchmark_grid(tasks, learners = learners, rsmp("cv", folds = 3))
+bmr = benchmark(design)
+
+bmr$aggregate()
+```
+
+The `AutoTuner` performs better than the untuned random forest on `r switch(1 + sum(bmr$aggregate()[, .SD[learner_id != "automl"][.SD[learner_id == "automl"], on = "task_id", i.classif.ce < classif.ce]]), "none of the tasks", "one task", "two tasks", "all tasks")`.
 
 ## Solutions for @sec-preprocessing
 
