@@ -5,7 +5,7 @@
 [![Mattermost](https://img.shields.io/badge/chat-mattermost-orange.svg)](https://lmmisld-lmu-stats-slds.srv.mwn.de/mlr_invite/)
 
 Repository to build the free, online version of *[Applied Machine Learning Using mlr3 in R](https://mlr3book.mlr-org.com)* using [quarto](https://quarto.org).
-You can buy a print copy of the book [here](https://www.routledge.com/Applied-Machine-Learning-Using-mlr3-in-R/Bischl-Sonabend-Kotthoff-Lang/p/book/9781032507545).
+You can buy a print copy of the book [here](https://www.routledge.com/Applied-Machine-Learning-Using-mlr3-in-R/Bischl-Sonabend-Kotthoff-Lang/p/book/9781032507545) - all profits from the book will go to the mlr organisation to support future maintenance and development of the mlr universe.
 
 
 ## Read the book
