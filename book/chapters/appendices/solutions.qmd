@@ -805,18 +805,18 @@ Therefore, a simple adaptation either increases the number of folds for improved
   This measure should compute the absolute difference between the predicted probability for the positive class and a 0-1 encoding of the ground truth and then average these values across the test set.
   Test this with `classif.log_reg` on `tsk(“sonar”)`.
 
-The rules can easily be translated to R code where we first convert the truth vector into 0-1 encoded matrix, calculate the absolute different with the predicted probabilities, and then average the results.
+The rules can easily be translated to R code where we first convert select the predicted probabilities for the positive class, 0-1 encode the truth vector and then calculate the mean absolute error between the two vectors.
 
 ```{r solutions-023}
-mae_prob = function(truth, prob) {
-  # convert truth to 0-1 encoded matrix
-  truth_mat = model.matrix(~ truth - 1)
-  # set the column names correctly
-  colnames(truth_mat) = levels(truth)
-  # ensure same order of columns
-  prob = prob[, levels(truth)]
-  # average the mean absolute difference
-  mean(abs(truth_mat - prob))
+mae_prob = function(truth, prob, task) {
+  # retrieve positive class from task
+  positive = task$positive
+  # select positive class probabilities
+  prob_positive = prob[, positive]
+  # obtain 0-1 encoding of truth
+  y = as.integer(truth == positive)
+  # average the absolute difference betwee 0-1 encoded truth and predicted probabilities
+  mean(abs(prob_positive - y))
 }
 ```
 
@@ -830,18 +830,18 @@ MeasureMaeProb = R6::R6Class("MeasureMaeProb",
       super$initialize( # initialize method of parent class
         id = "mae_prob", # unique ID
         packages = character(), # no dependencies
-        properties = character(), # no special properties
+        properties = "requires_task", # needs access to task for positive class
         predict_type = "prob", # measures probability prediction
-        range = c(0, Inf), # results in values between [0, Inf)
+        range = c(0, 1), # results in values between [0, 1]
         minimize = TRUE # smaller values are better
       )
     }
   ),
 
   private = list(
-    .score = function(prediction, ...) { # define score as private method
+    .score = function(prediction, task, ...) { # define score as private method
       # call loss function
-      mae_prob(prediction$truth, prediction$prob)
+      mae_prob(prediction$truth, prediction$prob, task)
     }
   )
 )
@@ -855,21 +855,25 @@ msr_mae_prob
 ```
 
 
-To try this measure, we resample a logistic regression on the sonar task using 3-fold cross-validation.
+To try this measure, we resample a logistic regression on the sonar task using five-fold cross-validation.
 
 ```{r}
 learner = lrn("classif.log_reg", predict_type = "prob") # otherwise our meausre does not work
 task = tsk("sonar")
-rr = resample(task, learner, rsmp("cv", folds = 3))
+rr = resample(task, learner, rsmp("cv", folds = 5))
 ```
 
 We now score the resample result using our custom measure and `msr("classif.acc")`.
 
 ```{r}
-rr$score(list(msr_mae_prob, msr("classif.acc")))
+score = rr$score(list(msr_mae_prob, msr("classif.acc")))
 ```
 
-In this case, there is a clear relationship between the accuracy and the mean absolute error of the probabilities.
+In this case, there is a clear relationship between the classification accuracy and our custom measure, i.e. the higher the accuracy, the lower the mean absolute error of the predicted probabilities.
+
+```{r}
+cor(score$mae_prob, score$classif.acc)
+```
 
 
 3. "Tune" the `error_train` hyperparameter of the `classif.debug` learner on a continuous interval from 0 to 1, using a simple classification tree as the fallback learner and the penguins task.
