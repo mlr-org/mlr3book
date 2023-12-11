@@ -766,6 +766,7 @@ This improves the average error of our model by a further 1600$.
 ## Solutions to @sec-technical
 
 1. Consider the following example where you resample a learner (debug learner, sleeps for 3 seconds during `$train()`) on 4 workers using the multisession backend:
+
 ```{r technical-050}
 task = tsk("penguins")
 learner = lrn("classif.debug", sleep_train = function() 3)
@@ -800,7 +801,7 @@ system.time(resample(task, learner, resampling))
 If possible, the number of resampling iterations should be an integer multiple of the number of workers.
 Therefore, a simple adaptation either increases the number of folds for improved accuracy of the error estimate or reduces the number of folds for improved runtime.
 
-2. Create a new custom binary classification measure (either using methods demonstrated in @sec-extending or with `msr("classif.costs")`) which scores ("prob"-type) predictions.
+2. Create a new custom binary classification measure which scores ("prob"-type) predictions.
   This measure should compute the absolute difference between the predicted probability for the positive class and a 0-1 encoding of the ground truth and then average these values across the test set.
   Test this with `classif.log_reg` on `tsk(“sonar”)`.
 
@@ -812,7 +813,7 @@ mae_prob = function(truth, prob) {
   truth_mat = model.matrix(~ truth - 1)
   # set the column names correctly
   colnames(truth_mat) = levels(truth)
-  # ensure same order of columns and
+  # ensure same order of columns
   prob = prob[, levels(truth)]
   # average the mean absolute difference
   mean(abs(truth_mat - prob))
@@ -857,7 +858,6 @@ msr_mae_prob
 To try this measure, we resample a logistic regression on the sonar task using 3-fold cross-validation.
 
 ```{r}
-
 learner = lrn("classif.log_reg", predict_type = "prob") # otherwise our meausre does not work
 task = tsk("sonar")
 rr = resample(task, learner, rsmp("cv", folds = 3))
@@ -872,11 +872,13 @@ rr$score(list(msr_mae_prob, msr("classif.acc")))
 In this case, there is a clear relationship between the accuracy and the mean absolute error of the probabilities.
 
 
-3. "Tune" the `error_train` hyperparameter of the `classif.debug` learner on a continuous interval from 0 to 1, using a simple fallback learner.
-  Tune for 50 iterations using random search and holdout resampling.
+3. "Tune" the `error_train` hyperparameter of the `classif.debug` learner on a continuous interval from 0 to 1, using a simple classification tree as the fallback learner and the penguins task.
+  Tune for 50 iterations using random search and 10-fold cross-validation.
   Inspect the resulting archive and find out which evaluations resulted in an error, and which did not.
   Now do the same in the interval 0.3 to 0.7.
   Are your results surprising?
+
+First, we create the learner that we want to tune, mark the relevant parameter for tuning and set the fallback learner to a classification tree.
 
 ```{r}
 lrn_debug = lrn("classif.debug",
@@ -886,13 +888,16 @@ lrn_debug = lrn("classif.debug",
 lrn_debug
 ```
 
-We proceed with tuning the classification accuracy of the learner on the iris task.
+This example is unusual, because we expect better results from the fallback classification tree than from the primary debug learner, which predicts the mode of the target distribution.
+Nonetheless it serves as a good example to illustrate the effects of training errors on the tuning results.
+
+We proceed with optimizing the classification accuracy of the learner on the penguings task.
 
 ```{r}
 instance = tune(
   learner =  lrn_debug,
-  task = tsk("iris"),
-  resampling = rsmp("holdout"),
+  task = tsk("penguins"),
+  resampling = rsmp("cv"),
   tuner = tnr("random_search"),
   measure = msr("classif.acc"),
   term_evals = 50
@@ -900,23 +905,24 @@ instance = tune(
 instance
 ```
 
-To find out which evaluations resulted in an error, we can inspect the `archive` slot of the instance, which we convert to a `data.table` for easier filtering.
+To find out which evaluations resulted in an error, we can inspect the `$archive` slot of the instance, which we convert to a `data.table` for easier filtering.
 
 ```{r}
 archive = as.data.table(instance$archive)
 archive[, c("error_train", "classif.acc", "errors")]
 ```
 
-The evaluations with a higher `error_train` value tend to have a higher classification accuracy.
+Below, we visualize the relationship between the error probabilty and the classification accuracy.
 
 ```{r}
-archive[, .(accuracy = mean(classif.acc)), by = errors]
+ggplot(data = archive, aes(x = error_train, y = classif.acc, color = errors)) +
+  geom_point() +
+  theme_minimal()
 ```
 
-
-While this might be surprising at first, the explanation is that the fallback learner `lrn("classif.rpart")` is superior to the debug learner that simply predicts a random label.
-This means that calculating the best hyperparameter configuration will tend to have high values for the `error_train` parameter.
-The evaluated parameter configurations therefore not only have a direct influence through controlling the primary learner's behavior, but also an indirect effect through affecting the primary learner's error probability during training.
+Higher values for `error_train` lead to more resampling iterations using the classification tree fallback learner and therefore to better classification accuracies.
+Therefore, the best found hyperparameter configurations will tend to have values of `error_train` close to 1.
+When multiple parameter configurations have the same test performance, the first one is chosen by `$result_learner_param_vals`.
 
 ```{r}
 instance$result_learner_param_vals
@@ -929,26 +935,36 @@ lrn_debug$param_set$set_values(
   error_train = to_tune(0.3, 0.7)
 )
 
-instance = tune(
+instance2 = tune(
   learner =  lrn_debug,
-  task = tsk("iris"),
-  resampling = rsmp("holdout"),
+  task = tsk("penguins"),
+  resampling = rsmp("cv"),
   tuner = tnr("random_search"),
   measure = msr("classif.acc"),
   term_evals = 50
 )
 
-as.data.table(instance$archive)
+archive2 = as.data.table(instance2)
+instance2
 ```
 
-The effect is now more subtle, but still present.
+As before, higher error probabilities during training lead to higher classification accuracies.
 
-We can learn various things from these experiments.
-First, the relationship between hyperparameters and performance measures can be diluted by errors.
-While this might be less of a problem for tuning methods like random or grid search, this can be a problem for more sophisticated methods like Bayesian optimization that rely on this relationship to propose new configurations.
-Second, the fallback learner should be chosen carefully and tend to give worse results than the learner to tune.
-Third, it is always a good idea to inspect the tuning archive after the optimization has finished.
+```{r}
+ggplot(data = archive, aes(x = error_train, y = classif.acc, color = errors)) +
+  geom_point() +
+  theme_minimal()
+```
 
+However, the best found configurations for the `error_train` parameter, now tend to be close to 0.7 instead of 1 as before.
+
+```{r}
+instance2$result_learner_param_vals
+```
+
+This demonstrates that when utilizing a fallback learner, the tuning results are influenced not only by the direct impact of the tuning parameters on the primary learner but also by their effect on its error probability.
+Therefore, it is always advisable to manually inspect the tuning results afterward.
+Note that in most real-world scenarios, the fallback learner performs worse than the primary learner, and thus the effects illustrated here are usually reversed.
 
 ## Solutions to @sec-large-benchmarking
 
