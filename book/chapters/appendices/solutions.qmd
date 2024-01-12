@@ -1679,8 +1679,7 @@ We can see that we get the silhouette closest to `1` with `K=2` so we might use 
 
 ## Solutions to @sec-fairness
 
-1. Load the `adult_train` task and try to build a first model.
-  Train a simple model and evaluate it on the `adult_test` task that is also available with `mlr3fairness`.
+1. Train a model of your choice on `tsk("adult_train")` and test it on `tsk("adult_test")`, use any measure of your choice to evaluate your predictions. Assume our goal is to achieve parity in false omission rates across the protected 'sex' attribute. Construct a fairness metric that encodes this and evaluate your model. To get a deeper understanding, look at the `r ref("groupwise_metrics")` function to obtain performance in each group.
 
 For now we simply load the data and look at the data.
 
@@ -1703,13 +1702,7 @@ prediction = learner$predict(tsk_adult_test)
 prediction$score()
 ```
 
-
-2. Assume our goal is to achieve parity in *false omission rates*.
-  Construct a fairness metric that encodes this and againg evaluate your model.
-  Construct a fairness metric that encodes this and evaluate your model.
-  In order to get a deeper understanding, look at the `groupwise_metrics` function to obtain performance in each group.
-
-The metric is available via the key `"fairness.fomr"`.
+The *false omission rate parity* metric is available via the key `"fairness.fomr"`.
 Note, that evaluating our prediction now requires that we also provide the task.
 
 ```{r}
@@ -1717,26 +1710,22 @@ msr_1 = msr("fairness.fomr")
 prediction$score(msr_1, tsk_adult_test)
 ```
 
+In addition, we can look at false omission rates in each group.
 The `groupwise_metrics` function creates a metric for each group specified in the `pta` column role:
 
 ```{r}
 tsk_adult_test$col_roles$pta
 ```
 
-```{r}
-msr_2 = groupwise_metrics(base_measure = msr("classif.fomr"), task = tsk_adult_test)
-```
-
 We can then use this metric to evaluate our model again.
 This gives us the false omission rates for male and female individuals separately.
 
 ```{r}
+msr_2 = groupwise_metrics(base_measure = msr("classif.fomr"), task = tsk_adult_test)
 prediction$score(msr_2, tsk_adult_test)
 ```
 
-1. Improve your model by employing pipelines that use pre- or post-processing methods for fairness.
-  Evaluate your model along the two metrics and visualize the results.
-  Compare the different models using an appropriate visualization.
+2. Improve your model by employing pipelines that use pre- or post-processing methods for fairness. Evaluate your model along the two metrics and visualize the resulting metrics. Compare the different models using an appropriate visualization.
 
 First we can again construct the learners above.
 ```{r}
@@ -1763,10 +1752,15 @@ fairness_accuracy_tradeoff(bmr, msr("fairness.fomr")) +
   scale_color_viridis_d("Learner") +
   theme_minimal()
 ```
+We can notice two main results:
 
-1. Add `"race"` as a second sensitive attribute to your dataset.
-  Add the information to your task and evaluate the initial model again. What changes?
-  Again study the `groupwise_metrics`.
+* We do not improve in the false omission rate by using fairness interventions.
+  One reason might be, that the interventions chosen do not optimize for the *false omission rate*,
+  but other metrics, e.g. *equalized odds*.
+* The spread between the different cross-validation iterations (small dots) is quite large,
+  estimates might come with a considerable error.
+
+3. Add "race" as a second sensitive attribute to your dataset. Add the information to your task and evaluate the initial model again. What changes? Again study the `groupwise_metrics`.
 
 This can be achieved by adding "race" to the `"pta"` col_role.
 
@@ -1780,10 +1774,10 @@ tsk_adult_test$set_col_roles("race", add_to = "pta")
 prediction$score(msr_1, tsk_adult_test)
 ```
 
-If we now evaluate for the intersection, we obtain a large deviation from `0`.
+Evaluating for the intersection, we obtain a large deviation from `0`.
 Note, that the metric by default computes the maximum discrepancy between all metrics for the non-binary case.
 
-If we now get the `groupwise_metrics`, we will get a metric for the intersection of each group.
+If we now compute the `groupwise_metrics`, we will get a metric for the intersection of each group.
 
 ```{r}
 msr_3 = groupwise_metrics(msr("classif.fomr"),  tsk_adult_train)
@@ -1795,14 +1789,45 @@ prediction$score(msr_3, tsk_adult_test)
 ```
 
 And we can see, that the reason might be, that the false omission rate for female Amer-Indian-Eskimo is at `1.0`!
-We can investigate this further by looking at actual counts:
+
+4. In this chapter we were unable to reduce bias in our experiment. Using everything you have learned in this book, see if you can successfully reduce bias in your model. Critically reflect on this exercise, why might this be a bad idea?
+
+Several problems with the existing metrics.
+
+We'll go through them one by one to deepen our understanding: 
+
+**Metric and evaluation**
+
+* In order for the fairness metric to be useful, we need to ensure that the data used for evaluation is representative and sufficiently large. 
+
+  We can investigate this further by looking at actual counts:
+  
+```{r}
+  table(tsk_adult_test$data(cols = c("race", "sex", "target")))
+```
+  
+  One of the reasons might be that there are only 3 individuals in the ">50k" category!
+  This is an often encountered problem, as error metrics have a large variance when samples are small.
+  Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
+   
+* We should question whether comparing the metric between all groups actually makes sense for the question we are trying to answer. Instead, we might want to observe the metric between two specific subgroups, in this case between individuals with `sex`: `Female` and `race`: `"Black"` or `"White`.
+
+First, we create a subset of only `sex`: `Female` and `race`: `"Black", "White`.
 
 ```{r}
-table(tsk_adult_test$data(cols = c("race", "sex", "target")))
+adult_subset = tsk_adult_test$clone()
+df = adult_subset$data()
+rows = seq_len(nrow(df))[df$race %in% c("Black", "White") & df$sex %in% c("Female")]
+adult_subset$filter(rows)
+adult_subset$set_col_roles("race", add_to = "pta")
+```
+And evaluate our measure again:
+
+```{r}
+prediction$score(msr_3, adult_subset)
 ```
 
-One of the reasons might be that there are only 3 individuals in the ">50k" category!
-This is an often encountered problem, as error metrics have a large variance when samples are small.
-Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
+We can see, that between women there is an even bigger discrepancy compared to men.
 
+* The bias mitigation strategies we employed do not optimize for the *false omission rate* metric, but other metrics instead. It might therefore be better to try to achieve fairness via other strategies, using different or more powerful models or tuning hyperparameters.
 :::
