@@ -33,7 +33,7 @@ If you are making changes to the book please note the following:
 
 When (non-trivial) changes and corrections are made to chapters that are are included in the first published edition of this book, these changes should be documented in the *Errata* appendix.
 When adding new chapters to the book not present in the published version, these should be marked as *Online Only* in their title.
-For such newly added chapters that are in early stages and have not been rigorously edited and reviewed,, these should be additionally marked as being a *Draft*.
+For such newly added chapters that are in early stages and have not been rigorously edited and reviewed, these should be additionally marked as being a *Draft*.
 
 * If you add a new package dependency to the book, please follow the following steps to update the lockfile:
   * Start an R session in the `book/` directory
