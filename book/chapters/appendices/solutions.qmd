@@ -1505,8 +1505,9 @@ This improves the average error of our model by a further 1600$.
 
 ## Solutions to @sec-technical
 
-1. Consider the following example where you resample a learner (debug learner, sleeps for 3 seconds during train) on 4 workers using the multisession backend:
-```{r technical-050, eval = FALSE}
+1. Consider the following example where you resample a learner (debug learner, sleeps for 3 seconds during `$train()`) on 4 workers using the multisession backend:
+
+```{r technical-050}
 task = tsk("penguins")
 learner = lrn("classif.debug", sleep_train = function() 3)
 resampling = rsmp("cv", folds = 6)
@@ -1519,12 +1520,12 @@ i. Assuming that the learner would actually calculate something and not just sle
 ii. Prove your point by measuring the elapsed time, e.g., using `r ref("system.time()")`.
 iii. What would you change in the setup and why?
 
-Not all CPUs would be utilized in the example.
-All 4 of them are occupied for the first 4 iterations of the cross validation.
+Not all CPUs would be utilized for the whole duration.
+All 4 of them are occupied for the first 4 iterations of the cross-validation.
 The 5th iteration, however, only runs in parallel to the 6th fold, leaving 2 cores idle.
 This is supported by the elapsed time of roughly 6 seconds for 6 jobs compared to also roughly 6 seconds for 8 jobs:
 
-```{r solutions-022, eval = FALSE}
+```{r solutions-022}
 task = tsk("penguins")
 learner = lrn("classif.debug", sleep_train = function() 3)
 
@@ -1540,72 +1541,176 @@ system.time(resample(task, learner, resampling))
 If possible, the number of resampling iterations should be an integer multiple of the number of workers.
 Therefore, a simple adaptation either increases the number of folds for improved accuracy of the error estimate or reduces the number of folds for improved runtime.
 
-2. Create a new custom classification measure (either using methods demonstrated in @sec-extending or with `msr("classif.costs")` which scores predictions using the mean over the following classification costs:
+2. Create a new custom binary classification measure which scores ("prob"-type) predictions.
+  This measure should compute the absolute difference between the predicted probability for the positive class and a 0-1 encoding of the ground truth and then average these values across the test set.
+  Test this with `classif.log_reg` on `tsk("sonar")`.
 
-* If the learner predicted label "A" and the truth is "A", assign score 0
-* If the learner predicted label "B" and the truth is "B", assign score 0
-* If the learner predicted label "A" and the truth is "B", assign score 1
-* If the learner predicted label "B" and the truth is "A", assign score 10
-
-The rules can easily be translated to R code where we expect `truth` and `prediction` to be factor vectors of the same length with levels `"A"` and `"B"`:
+The rules can easily be translated to R code where we first convert select the predicted probabilities for the positive class, 0-1 encode the truth vector and then calculate the mean absolute error between the two vectors.
 
 ```{r solutions-023}
-costsens = function(truth, prediction) {
-    score = numeric(length(truth))
-    score[truth == "A" & prediction == "B"] = 10
-    score[truth == "B" & prediction == "A"] = 1
-
-    mean(score)
+mae_prob = function(truth, prob, task) {
+  # retrieve positive class from task
+  positive = task$positive
+  # select positive class probabilities
+  prob_positive = prob[, positive]
+  # obtain 0-1 encoding of truth
+  y = as.integer(truth == positive)
+  # average the absolute difference
+  mean(abs(prob_positive - y))
 }
 ```
 
 This function can be embedded in the `Measure` class accordingly.
 
 ```{r solutions-024}
-MeasureCustom = R6::R6Class("MeasureCustom",
+MeasureMaeProb = R6::R6Class("MeasureMaeProb",
   inherit = mlr3::MeasureClassif, # classification measure
   public = list(
     initialize = function() { # initialize class
-      super$initialize(
-        id = "custom", # unique ID
+      super$initialize( # initialize method of parent class
+        id = "mae_prob", # unique ID
         packages = character(), # no dependencies
-        properties = character(), # no special properties
-        predict_type = "response", # measures response prediction
-        range = c(0, Inf), # results in values between (0, 1)
+        properties = "requires_task", # needs access to task for positive class
+        predict_type = "prob", # measures probability prediction
+        range = c(0, 1), # results in values between [0, 1]
         minimize = TRUE # smaller values are better
       )
     }
   ),
 
   private = list(
-    .score = function(prediction, ...) { # define score as private method
-      # define loss
-      costsens = function(truth, prediction) {
-        score = numeric(length(truth))
-        score[truth == "A" & prediction == "B"] = 10
-        score[truth == "B" & prediction == "A"] = 1
-
-        mean(score)
-      }
-
+    .score = function(prediction, task, ...) { # define score as private method
       # call loss function
-      costsens(prediction$truth, prediction$response)
+      mae_prob(prediction$truth, prediction$prob, task)
     }
   )
 )
 ```
 
-An alternative (as pointed to by the hint) can be constructed by first translating the rules to a matrix of misclassification costs, and then feeding this matrix to the constructor of `msr("classif.costs")`:
+Because this is a custom class that is not available in the `mlr_measures` dictionary, we have to create a new instance using the `$new()` constructor.
 
-```{r solutions-025}
-# truth in columns, prediction in rows
-C = matrix(c(0, 10, 1, 0), nrow = 2)
-rownames(C) = colnames(C) = c("A", "B")
-C
-
-msr("classif.costs", costs = C)
+```{r}
+msr_mae_prob = MeasureMaeProb$new()
+msr_mae_prob
 ```
 
+
+To try this measure, we resample a logistic regression on the sonar task using five-fold cross-validation.
+
+```{r}
+# predict_type is set to "prob", as otherwise our measure does not work
+learner = lrn("classif.log_reg", predict_type = "prob")
+task = tsk("sonar")
+rr = resample(task, learner, rsmp("cv", folds = 5))
+```
+
+We now score the resample result using our custom measure and `msr("classif.acc")`.
+
+```{r}
+score = rr$score(list(msr_mae_prob, msr("classif.acc")))
+```
+
+In this case, there is a clear relationship between the classification accuracy and our custom measure, i.e. the higher the accuracy, the lower the mean absolute error of the predicted probabilities.
+
+```{r}
+cor(score$mae_prob, score$classif.acc)
+```
+
+
+3. "Tune" the `error_train` hyperparameter of the `classif.debug` learner on a continuous interval from 0 to 1, using a simple classification tree as the fallback learner and the penguins task.
+  Tune for 50 iterations using random search and 10-fold cross-validation.
+  Inspect the resulting archive and find out which evaluations resulted in an error, and which did not.
+  Now do the same in the interval 0.3 to 0.7.
+  Are your results surprising?
+
+First, we create the learner that we want to tune, mark the relevant parameter for tuning and set the fallback learner to a classification tree.
+
+```{r}
+lrn_debug = lrn("classif.debug",
+  error_train = to_tune(0, 1),
+  fallback = lrn("classif.rpart")
+)
+lrn_debug
+```
+
+This example is unusual, because we expect better results from the fallback classification tree than from the primary debug learner, which predicts the mode of the target distribution.
+Nonetheless it serves as a good example to illustrate the effects of training errors on the tuning results.
+
+We proceed with optimizing the classification accuracy of the learner on the penguins task.
+
+```{r}
+instance = tune(
+  learner =  lrn_debug,
+  task = tsk("penguins"),
+  resampling = rsmp("cv"),
+  tuner = tnr("random_search"),
+  measure = msr("classif.acc"),
+  term_evals = 50
+)
+instance
+```
+
+To find out which evaluations resulted in an error, we can inspect the `$archive` slot of the instance, which we convert to a `data.table` for easier filtering.
+
+```{r}
+archive = as.data.table(instance$archive)
+archive[, c("error_train", "classif.acc", "errors")]
+```
+
+Below, we visualize the relationship between the error probabilty and the classification accuracy.
+
+```{r}
+ggplot(data = archive, aes(x = error_train, y = classif.acc, color = errors)) +
+  geom_point() +
+  theme_minimal()
+```
+
+Higher values for `error_train` lead to more resampling iterations using the classification tree fallback learner and therefore to better classification accuracies.
+Therefore, the best found hyperparameter configurations will tend to have values of `error_train` close to 1.
+When multiple parameter configurations have the same test performance, the first one is chosen by `$result_learner_param_vals`.
+
+```{r}
+instance$result_learner_param_vals
+```
+
+We repeat the same experiment for the tuning interval from 0.3 to 0.7.
+
+```{r}
+lrn_debug$param_set$set_values(
+  error_train = to_tune(0.3, 0.7)
+)
+
+instance2 = tune(
+  learner =  lrn_debug,
+  task = tsk("penguins"),
+  resampling = rsmp("cv"),
+  tuner = tnr("random_search"),
+  measure = msr("classif.acc"),
+  term_evals = 50
+)
+
+archive2 = as.data.table(instance2$archive)
+instance2
+```
+
+As before, higher error probabilities during training lead to higher classification accuracies.
+
+```{r}
+ggplot(data = archive2, aes(x = error_train, y = classif.acc, color = errors)) +
+  geom_point() +
+  theme_minimal()
+```
+
+However, the best found configurations for the `error_train` parameter, now tend to be close to 0.7 instead of 1 as before.
+
+```{r}
+instance2$result_learner_param_vals
+```
+
+
+This demonstrates that when utilizing a fallback learner, the tuning results are influenced not only by the direct impact of the tuning parameters on the primary learner but also by their effect on its error probability.
+Therefore, it is always advisable to manually inspect the tuning results afterward.
+Note that in most real-world scenarios, the fallback learner performs worse than the primary learner, and thus the effects illustrated here are usually reversed.
 
 ## Solutions to @sec-large-benchmarking
 
@@ -1843,8 +1948,7 @@ We can see that we get the silhouette closest to `1` with `K=2` so we might use 
 
 ## Solutions to @sec-fairness
 
-1. Load the `adult_train` task and try to build a first model.
-  Train a simple model and evaluate it on the `adult_test` task that is also available with `mlr3fairness`.
+1. Train a model of your choice on `tsk("adult_train")` and test it on `tsk("adult_test")`, use any measure of your choice to evaluate your predictions. Assume our goal is to achieve parity in false omission rates across the protected 'sex' attribute. Construct a fairness metric that encodes this and evaluate your model. To get a deeper understanding, look at the `r ref("groupwise_metrics")` function to obtain performance in each group.
 
 For now we simply load the data and look at the data.
 
@@ -1867,13 +1971,7 @@ prediction = learner$predict(tsk_adult_test)
 prediction$score()
 ```
 
-
-2. Assume our goal is to achieve parity in *false omission rates*.
-  Construct a fairness metric that encodes this and againg evaluate your model.
-  Construct a fairness metric that encodes this and evaluate your model.
-  In order to get a deeper understanding, look at the `groupwise_metrics` function to obtain performance in each group.
-
-The metric is available via the key `"fairness.fomr"`.
+The *false omission rate parity* metric is available via the key `"fairness.fomr"`.
 Note, that evaluating our prediction now requires that we also provide the task.
 
 ```{r}
@@ -1881,26 +1979,22 @@ msr_1 = msr("fairness.fomr")
 prediction$score(msr_1, tsk_adult_test)
 ```
 
+In addition, we can look at false omission rates in each group.
 The `groupwise_metrics` function creates a metric for each group specified in the `pta` column role:
 
 ```{r}
 tsk_adult_test$col_roles$pta
 ```
 
-```{r}
-msr_2 = groupwise_metrics(base_measure = msr("classif.fomr"), task = tsk_adult_test)
-```
-
 We can then use this metric to evaluate our model again.
 This gives us the false omission rates for male and female individuals separately.
 
 ```{r}
+msr_2 = groupwise_metrics(base_measure = msr("classif.fomr"), task = tsk_adult_test)
 prediction$score(msr_2, tsk_adult_test)
 ```
 
-1. Improve your model by employing pipelines that use pre- or post-processing methods for fairness.
-  Evaluate your model along the two metrics and visualize the results.
-  Compare the different models using an appropriate visualization.
+2. Improve your model by employing pipelines that use pre- or post-processing methods for fairness. Evaluate your model along the two metrics and visualize the resulting metrics. Compare the different models using an appropriate visualization.
 
 First we can again construct the learners above.
 ```{r}
@@ -1927,10 +2021,15 @@ fairness_accuracy_tradeoff(bmr, msr("fairness.fomr")) +
   scale_color_viridis_d("Learner") +
   theme_minimal()
 ```
+We can notice two main results:
 
-1. Add `"race"` as a second sensitive attribute to your dataset.
-  Add the information to your task and evaluate the initial model again. What changes?
-  Again study the `groupwise_metrics`.
+* We do not improve in the false omission rate by using fairness interventions.
+  One reason might be, that the interventions chosen do not optimize for the *false omission rate*,
+  but other metrics, e.g. *equalized odds*.
+* The spread between the different cross-validation iterations (small dots) is quite large,
+  estimates might come with a considerable error.
+
+3. Add "race" as a second sensitive attribute to your dataset. Add the information to your task and evaluate the initial model again. What changes? Again study the `groupwise_metrics`.
 
 This can be achieved by adding "race" to the `"pta"` col_role.
 
@@ -1944,10 +2043,10 @@ tsk_adult_test$set_col_roles("race", add_to = "pta")
 prediction$score(msr_1, tsk_adult_test)
 ```
 
-If we now evaluate for the intersection, we obtain a large deviation from `0`.
+Evaluating for the intersection, we obtain a large deviation from `0`.
 Note, that the metric by default computes the maximum discrepancy between all metrics for the non-binary case.
 
-If we now get the `groupwise_metrics`, we will get a metric for the intersection of each group.
+If we now compute the `groupwise_metrics`, we will get a metric for the intersection of each group.
 
 ```{r}
 msr_3 = groupwise_metrics(msr("classif.fomr"),  tsk_adult_train)
@@ -1959,14 +2058,45 @@ prediction$score(msr_3, tsk_adult_test)
 ```
 
 And we can see, that the reason might be, that the false omission rate for female Amer-Indian-Eskimo is at `1.0`!
-We can investigate this further by looking at actual counts:
+
+4. In this chapter we were unable to reduce bias in our experiment. Using everything you have learned in this book, see if you can successfully reduce bias in your model. Critically reflect on this exercise, why might this be a bad idea?
+
+Several problems with the existing metrics.
+
+We'll go through them one by one to deepen our understanding: 
+
+**Metric and evaluation**
+
+* In order for the fairness metric to be useful, we need to ensure that the data used for evaluation is representative and sufficiently large. 
+
+  We can investigate this further by looking at actual counts:
+  
+```{r}
+  table(tsk_adult_test$data(cols = c("race", "sex", "target")))
+```
+  
+  One of the reasons might be that there are only 3 individuals in the ">50k" category!
+  This is an often encountered problem, as error metrics have a large variance when samples are small.
+  Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
+   
+* We should question whether comparing the metric between all groups actually makes sense for the question we are trying to answer. Instead, we might want to observe the metric between two specific subgroups, in this case between individuals with `sex`: `Female` and `race`: `"Black"` or `"White`.
+
+First, we create a subset of only `sex`: `Female` and `race`: `"Black", "White`.
 
 ```{r}
-table(tsk_adult_test$data(cols = c("race", "sex", "target")))
+adult_subset = tsk_adult_test$clone()
+df = adult_subset$data()
+rows = seq_len(nrow(df))[df$race %in% c("Black", "White") & df$sex %in% c("Female")]
+adult_subset$filter(rows)
+adult_subset$set_col_roles("race", add_to = "pta")
+```
+And evaluate our measure again:
+
+```{r}
+prediction$score(msr_3, adult_subset)
 ```
 
-One of the reasons might be that there are only 3 individuals in the ">50k" category!
-This is an often encountered problem, as error metrics have a large variance when samples are small.
-Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
+We can see, that between women there is an even bigger discrepancy compared to men.
 
+* The bias mitigation strategies we employed do not optimize for the *false omission rate* metric, but other metrics instead. It might therefore be better to try to achieve fairness via other strategies, using different or more powerful models or tuning hyperparameters.
 :::
