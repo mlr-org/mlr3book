@@ -1461,137 +1461,124 @@ To use this kind of setup on real world data, one would need to take care of mak
 
 ## Solutions for @sec-preprocessing
 
-We will consider a similar prediction problem as throughout this section, using the King County Housing data instead (available with `tsk("kc_housing")`).
-To evaluate the models, we again use 10-fold cv and the mean absolute error.
-The learner we want to use is a elastic-net regression by `lrn("regr.glmnet")`.
+We will consider a prediction problem similar to the one from this chapter, but using the King County Housing regression data instead (available with `tsk("kc_housing")`).
+To evaluate the models, we again use 10-fold CV, mean absolute error and `lrn("regr.glmnet")`.
 For now we will ignore the `date` column and simply remove it:
 
-```{r, warning=FALSE, message=FALSE}
-kc_housing = tsk("kc_housing")
-kc_housing$select(setdiff(kc_housing$feature_names, "date"))
+```{r}
+set.seed(1)
+
+library("mlr3data")
+task = tsk("kc_housing")
+task$select(setdiff(task$feature_names, "date"))
 ```
 
 1. Have a look at the features, are there any features which might be problematic? If so, change or remove them.
+  Check the dataset and learner properties to understand which preprocessing steps you need to do.
 
-```{r, warning=FALSE, message=FALSE}
-summary(kc_housing)
+```{r}
+summary(task)
 ```
 
-
-`zipcode` should not really be interpreted as a numeric value, so we cast it to a factor.
+The `zipcode` should not be interpreted as a numeric value, so we cast it to a factor.
 We could argue to remove `lat` and `long` as handling them as linear effects is not necessarily a suitable, but we will keep them since `glmnet` performs internal feature selection anyways.
 
 ```{r, warning=FALSE, message=FALSE}
 zipencode = po("mutate", mutation = list(zipcode = ~ as.factor(zipcode)), id = "zipencode")
 ```
 
-2. Check the dataset and learner properties to understand which preprocessing steps you need to do.
+2. Build a suitable pipeline that allows `glmnet` to be trained on the dataset.
+  Construct a new `glmnet` model with `ppl("robustify")`.
+  Compare the two pipelines in a benchmark experiment.
 
 ```{r, warning=FALSE, message=FALSE}
-print(kc_housing)
-kc_housing$missings()
+lrn_glmnet = lrn("regr.glmnet")
 ```
 
-The data has missings and a categorical feature (since we are encoding the zipcode as a factor).
-
 ```{r, warning=FALSE, message=FALSE}
-glmnet = lrn("regr.glmnet")
-glmnet$properties
-glmnet$feature_types
-```
-
-`glmnet` does not support factors or missing values. So our pipeline needs to handle both.
-
-3. Build a suitable pipeline that allows glmnet to be trained on the dataset.
-
-```{r, warning=FALSE, message=FALSE}
-glmnet_preproc = GraphLearner$new(
+graph_preproc =
   zipencode %>>%
   po("fixfactors") %>>%
-    po("encodeimpact") %>>%
-    list(
-    po("missind",
-        type = "integer",
-        affect_columns = selector_type("integer")
-    ),
-    po("imputehist",
-        affect_columns = selector_type("integer")
-    )) %>>%
-    po("featureunion") %>>%
-    po("imputeoor",
-        affect_columns = selector_type("factor")
-    ) %>>%
-    glmnet,
-  id = "regr.glmnet_preproc")
+  po("encodeimpact") %>>%
+  list(
+    po("missind", type = "integer", affect_columns = selector_type("integer")),
+    po("imputehist", affect_columns = selector_type("integer"))) %>>%
+  po("featureunion") %>>%
+  po("imputeoor", affect_columns = selector_type("factor")) %>>%
+  lrn_glmnet
 
-log_glmnet_preproc = ppl("targettrafo", graph = glmnet_preproc)
-log_glmnet_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
-log_glmnet_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
-log_glmnet_preproc = GraphLearner$new(log_glmnet_preproc, id = "regr.log_glmnet_preproc")
+graph_preproc$plot()
 ```
 
+`glmnet` does not support factors or missing values.
+So our pipeline needs to handle both.
 First we fix the factor levels to ensure that all 70 zipcodes are fixed.
 We can consider 70 levels high cardinality, so we use impact encoding.
 We use the same imputation strategy as in @sec-preprocessing.
-Since the target is highly skewed, we also apply a log-transformation of the target.
-
-
-4. As a comparison, apply `pipeline_robustify` to glmnet and compare the results with your pipeline.
 
 ```{r, warning=FALSE, message=FALSE}
-glmnet_robustify = GraphLearner$new(
-    zipencode %>>%
-    mlr3pipelines::pipeline_robustify() %>>%
-      glmnet,
-    id = "regr.glmnet_robustify"
-)
+graph_robustify =
+  pipeline_robustify(task = task, learner = lrn_glmnet) %>>%
+  lrn_glmnet
 
-log_glmnet_robustify = ppl("targettrafo", graph = glmnet_robustify)
-log_glmnet_robustify$param_set$values$targetmutate.trafo = function(x) log(x)
-log_glmnet_robustify$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
-log_glmnet_robustify = GraphLearner$new(log_glmnet_robustify, id = "regr.log_glmnet_robustify")
-
-learners = list(
-  lrn("regr.featureless", robust = TRUE),
-  glmnet_preproc,
-  log_glmnet_preproc,
-  glmnet_robustify,
-  log_glmnet_robustify
-)
-
-set.seed(123L)
-cv10 = rsmp("cv")
-cv10$instantiate(kc_housing)
-
-design = benchmark_grid(kc_housing, learners = learners, cv10)
-bmr = benchmark(design)
-bmr$aggregate(measure = msr("regr.mae"))[, .(learner_id, regr.mae)]
+graph_robustify$plot()
 ```
 
-The log-transformed `glmnet` with impact encoding results in the best model, although only by a very small margin.
+```{r}
+glrn_preproc = as_learner(graph_preproc, id = "glmnet_preproc")
+glrn_robustify = as_learner(graph_robustify, id = "glmnet_robustify")
 
+design = benchmark_grid(
+  tasks = task,
+  learners = list(glrn_preproc, glrn_robustify),
+  resamplings = rsmp("cv", folds = 3)
+)
 
-5. Consider the `date` feature: How can you extract information from this feature that `glmnet` can use? Check how much this improves your pipeline.
-Also consider the spatial nature of the dataset: Can you extract an additional feature from the lat/long coordinates? (Hint: Downtown Seattle has lat/long coordinates `47.605`/`-122.334`).
+bmr = benchmark(design)
+bmr$aggregate(msr("regr.rmse"))
+```
+
+Our preprocessing pipeline performs slightly better than the robustified one.
+
+3. Now consider the `date` feature:
+  How can you extract information from this feature in a way that `glmnet` can use?
+  Does this improve the performance of your pipeline?
+  Finally, consider the spatial nature of the dataset.
+  Can you extract an additional feature from the lat / long coordinates?
+  (Hint: Downtown Seattle has lat/long coordinates `47.605`/`122.334`).
 
 ```{r, warning=FALSE, message=FALSE}
-extractors = po("mutate", mutation = list(
-  date = ~ as.numeric(date),
-  distance_downtown = ~ sqrt((lat - 47.605)^2 + (long  + 122.334)^2)))
+task = tsk("kc_housing")
 
-kc_housing_full = extractors$train(list(tsk("kc_housing")))[[1]]
-kc_housing_full$id = "kc_housing_feat_extr"
+graph_mutate =
+  po("mutate", mutation = list(
+    date = ~ as.numeric(date),
+    distance_downtown = ~ sqrt((lat - 47.605)^2 + (long  + 122.334)^2))) %>>%
+  zipencode %>>%
+  po("encodeimpact") %>>%
+  list(
+    po("missind", type = "integer", affect_columns = selector_type("integer")),
+    po("imputehist", affect_columns = selector_type("integer"))) %>>%
+  po("featureunion") %>>%
+  po("imputeoor", affect_columns = selector_type("factor")) %>>%
+  lrn_glmnet
 
+glrn_mutate = as_learner(graph_mutate)
 
-design_ext = benchmark_grid(kc_housing_full, learners = learners, cv10)
-bmr_ext = benchmark(design_ext)
-bmr$combine(bmr_ext)
-bmr$aggregate(measure = msr("regr.mae"))[, .(learner_id, task_id, regr.mae)]
+design = benchmark_grid(
+  tasks = task,
+  learners = glrn_mutate,
+  resamplings = rsmp("cv", folds = 3)
+)
+
+bmr_2 = benchmark(design)
+bmr$combine(bmr_2)
+bmr$aggregate(msr("regr.mae"))
 ```
 
 We simply convert the `date` feature into a numeric timestamp so that `glmnet` can handle the feature.
 We create one additional feature as the distance to downtown Seattle.
-This improves the average error of our model by a further 1600$.
+This improves the average error of our model by a further 1400$.
 
 ## Solutions to @sec-technical
 
@@ -2153,22 +2140,22 @@ And we can see, that the reason might be, that the false omission rate for femal
 
 Several problems with the existing metrics.
 
-We'll go through them one by one to deepen our understanding: 
+We'll go through them one by one to deepen our understanding:
 
 **Metric and evaluation**
 
-* In order for the fairness metric to be useful, we need to ensure that the data used for evaluation is representative and sufficiently large. 
+* In order for the fairness metric to be useful, we need to ensure that the data used for evaluation is representative and sufficiently large.
 
   We can investigate this further by looking at actual counts:
-  
+
 ```{r}
   table(tsk_adult_test$data(cols = c("race", "sex", "target")))
 ```
-  
+
   One of the reasons might be that there are only 3 individuals in the ">50k" category!
   This is an often encountered problem, as error metrics have a large variance when samples are small.
   Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
-   
+
 * We should question whether comparing the metric between all groups actually makes sense for the question we are trying to answer. Instead, we might want to observe the metric between two specific subgroups, in this case between individuals with `sex`: `Female` and `race`: `"Black"` or `"White`.
 
 First, we create a subset of only `sex`: `Female` and `race`: `"Black", "White`.
