@@ -648,12 +648,126 @@ tuner$optimize(instance)
 
 ## Solutions to @sec-optimization-advanced
 
-1. We first construct the objective function and optimization instance:
+1. Tune the `mtry`, `sample.fraction`, and `num.trees` hyperparameters of `lrn("regr.ranger")` on `tsk("mtcars")` and evaluate this with a three-fold CV and the root mean squared error (same as @sec-optimization, Exercise 1).
+Use `tnr("mbo")` with 50 evaluations.
+Compare this with the performance progress of a random search run from @sec-optimization, Exercise 1.
+Plot the progress of performance over iterations and visualize the spatial distribution of the evaluated hyperparameter configurations for both algorithms.
+
+We first construct the learner, task, resampling, measure and terminator and then the instance.
 
 ```{r}
-library(bbotk)
 library(mlr3mbo)
+library(bbotk)
+library(data.table)
+library(ggplot2)
+library(viridisLite)
 
+set.seed(5)
+
+learner = lrn("regr.ranger",
+  mtry = to_tune(1, 10),
+  sample.fraction = to_tune(0.5, 1),
+  num.trees = to_tune(100, 500)
+)
+task = tsk("mtcars")
+resampling = rsmp("cv", folds = 3)
+measure = msr("regr.rmse")
+terminator = trm("evals", n_evals = 50)
+instance_rs = ti(
+  learner = learner,
+  task = task,
+  resampling = resampling,
+  measure = measure,
+  terminator = terminator
+)
+```
+
+Using a random search results in the following final performance:
+
+```{r, warning = FALSE}
+tuner = tnr("random_search", batch_size = 50)
+tuner$optimize(instance_rs)
+```
+
+We then construct a new instance and optimize it via Bayesian Optimization (BO) using `tnr("mbo")` in its default configuration (see also `r ref("mbo_defaults")`):
+
+```{r, warning = FALSE}
+instance_bo = ti(
+  learner = learner,
+  task = task,
+  resampling = resampling,
+  measure = measure,
+  terminator = terminator
+)
+tuner = tnr("mbo")
+tuner$optimize(instance_bo)
+```
+
+We then add relevant information to the archives of the instances so that we can combine their data and use this data for generating the desired plots.
+
+```{r}
+instance_rs$archive$data[, iteration := seq_len(.N)]
+instance_rs$archive$data[, best_rmse := cummin(regr.rmse)]
+instance_rs$archive$data[, method := "Random Search"]
+instance_bo$archive$data[, iteration := seq_len(.N)]
+instance_bo$archive$data[, best_rmse := cummin(regr.rmse)]
+instance_bo$archive$data[, method := "BO"]
+
+plot_data = rbind(instance_rs$archive$data[, c("iteration", "best_rmse", "method")],
+  instance_bo$archive$data[, c("iteration", "best_rmse", "method")])
+
+ggplot(aes(x = iteration, y = best_rmse, colour = method), data = plot_data) +
+  geom_step() +
+  scale_colour_manual(values = viridis(2, end = 0.8)) +
+  labs(x = "Number of Configurations", y = "Best regr.rmse", colour = "Method") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+We see that BO manages to slightly outperform the random search.
+Ideally, we would replicate running both optimizers multiple times with different random seeds and visualize their average performance along with a dispersion measure to properly take randomness of the optimization process into account.
+We could even use the same first few random samples as the initial design in BO to allow for a fairer comparison.
+
+To visualize the spatial distribution of the evaluated hyperparameter configurations we will plot for each evaluated configuration the number of trees on the x-axis and the sample fraction on the y-axis.
+The label of each point corresponds to the mtry parameter directly.
+
+```{r}
+relevant_columns = c("mtry", "sample.fraction", "num.trees", "iteration", "method")
+plot_data_sampling = rbind(
+  instance_rs$archive$data[, ..relevant_columns, with = FALSE],
+  instance_bo$archive$data[, ..relevant_columns, with = FALSE])
+
+ggplot(
+    aes(x = num.trees, y = sample.fraction, colour = method, label = mtry),
+    data = plot_data_sampling
+  ) +
+  scale_colour_manual(values = viridis(2, end = 0.8)) +
+  geom_point(size = 0) +
+  geom_text() +
+  guides(colour = guide_legend(title = "Method", override.aes = aes(label = "", size = 2))) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+We observe that the random search samples uniformly at random -- as expected.
+BO, however, focuses on regions of the search space with a high number of trees between 350 and 400, a high sample fraction and mtry values of around 5 to 8.
+This is also the region where the final result returned by BO is located.
+Nevertheless, BO also explores the search space, i.e., along the line of a high sample fraction close to 1.
+
+2. Minimize the 2D Rastrigin function $f: [-5.12, 5.12] \times [-5.12, 5.12] \rightarrow \mathbb{R}$, $\mathbf{x} \mapsto 10 D+\sum_{i=1}^D\left[x_i^2-10 \cos \left(2 \pi x_i\right)\right]$, $D = 2$ via BO (standard sequential single-objective BO via `bayesopt_ego()`) using the lower confidence bound with `lambda = 1` as acquisition function and `"NLOPT_GN_ORIG_DIRECT"` via `opt("nloptr")` as acquisition function optimizer.
+Use a budget of 40 function evaluations.
+Run this with both the "default" Gaussian process surrogate model with Matérn 5/2 kernel, and the "default" random forest surrogate model.
+Compare their anytime performance (similarly as in @fig-bayesian-sinusoidal_bo_rs).
+You can construct the surrogate models with default settings using:
+```{r}
+surrogate_gp = srlrn(default_gp())
+surrogate_rf = srlrn(default_rf())
+```
+
+We first construct the function, making use of efficient evaluation operating on a `data.table` directly.
+We then wrap this function in the corresponding `r ref("ObjectiveRFunDt")` objective class and construct the instance.
+
+```{r}
 rastrigin = function(xdt) {
   D = ncol(xdt)
   y = 10 * D + rowSums(xdt^2 - (10 * cos(2 * pi * xdt)))
@@ -672,16 +786,11 @@ instance = OptimInstanceSingleCrit$new(
   terminator = trm("evals", n_evals = 40))
 ```
 
-Based on the different surrogate models, we can construct two optimizers:
+We then construct the surrogates as well as the acquisition function and acquisition function optimizer (we will terminate the acquisition function optimization once optimization process stagnates by `1e-5` over the last 100 iterations) and construct the two BO optimizers.
 
 ```{r}
-library(mlr3mbo)
-
-surrogate_gp = srlrn(lrn("regr.km", covtype = "matern5_2",
-  optim.method = "BFGS", control = list(trace = FALSE)))
-
-surrogate_rf = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
-  se.method = "jack"))
+surrogate_gp = srlrn(default_gp())
+surrogate_rf = srlrn(default_rf())
 
 acq_function = acqf("cb", lambda = 1)
 
@@ -698,29 +807,32 @@ optimizer_rf = opt("mbo",
   loop_function = bayesopt_ego,
   surrogate = surrogate_rf,
   acq_function = acq_function,
-  acq_optimizer = acq_optimizer)
+  acq_optimizer = acq_optimizer
+)
 ```
 
-We then evaluate the given initial design on the instance and optimize it with the first BO algorithm using a Gaussian Process as surrogate model:
+We will use the following initial design for both optimizers:
 
-```{r, output=FALSE}
+```{r}
 initial_design = data.table(
   x1 = c(-3.95, 1.16, 3.72, -1.39, -0.11, 5.00, -2.67, 2.44),
-  x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46))
-
+  x2 = c(1.18, -3.93, 3.74, -1.37, 5.02, -0.09, -2.65, 2.46)
+)
 instance$eval_batch(initial_design)
+```
 
+We then proceed to optimize the instance with each of the two optimizers and make sure to extract the relevant data from the archive of the instance.
+
+```{r, warning = FALSE}
 optimizer_gp$optimize(instance)
 
 gp_data = instance$archive$data
 gp_data[, y_min := cummin(y)]
-gp_data[, nr_eval := seq_len(.N)]
+gp_data[, iteration := seq_len(.N)]
 gp_data[, surrogate := "Gaussian Process"]
 ```
 
-Afterwards, we clear the instance, evaluate the initial design again and optimize the instance with the second BO algorithm using a random forest as surrogate model:
-
-```{r, output=FALSE}
+```{r, warning = FALSE}
 instance$archive$clear()
 
 instance$eval_batch(initial_design)
@@ -729,17 +841,15 @@ optimizer_rf$optimize(instance)
 
 rf_data = instance$archive$data
 rf_data[, y_min := cummin(y)]
-rf_data[, nr_eval := seq_len(.N)]
+rf_data[, iteration := seq_len(.N)]
 rf_data[, surrogate := "Random forest"]
 ```
 
-We collect all data and visualize the anytime performance:
+We then combine the data and use it to generate the desired plot:
 
 ```{r}
-library(ggplot2)
-library(viridisLite)
-all_data = rbind(gp_data, rf_data)
-ggplot(aes(x = nr_eval, y = y_min, colour = surrogate), data = all_data) +
+plot_data = rbind(gp_data, rf_data)
+ggplot(aes(x = iteration, y = y_min, colour = surrogate), data = plot_data) +
   geom_step() +
   scale_colour_manual(values = viridis(2, end = 0.8)) +
   labs(y = "Best Observed Function Value", x = "Number of Function Evaluations",
@@ -748,94 +858,74 @@ ggplot(aes(x = nr_eval, y = y_min, colour = surrogate), data = all_data) +
   theme(legend.position = "bottom")
 ```
 
-2. We first construct the non-parallelized objective function and the optimization instance:
+As expected, we observe that the BO algorithm with the Gaussian Process surrogate appears to outperform the random forest surrogate counterpart.
+However, ideally we would replicate running each algorithm using different random seeds and visualize the average performance along with some dispersion measure to properly take randomness of the optimization process into account.
+
+3. Minimize the following function: $f: [-10, 10] \rightarrow \mathbb{R}^2, x \mapsto \left(x^2, (x - 2)^2\right)$ with respect to both objectives.
+Use the ParEGO algorithm.
+Construct the objective function using the `r ref("ObjectiveRFunMany")` class.
+Terminate the optimization after a runtime of 100 evals.
+Plot the resulting Pareto front and compare it to the analytical solution, $y_2 = \left(\sqrt{y_1}-2\right)^2$ with $y_1$ ranging from $0$ to $4$.
+
+We first construct the function, wrap it in the objective and then create the instance.
 
 ```{r}
-schaffer1 = function(xss) {
+fun = function(xss) {
   evaluations = lapply(xss, FUN = function(xs) {
-    Sys.sleep(5)
-    list(y1 = xs$x, y2 = (xs$x - 2)^2)
+    list(y1 = xs$x ^ 2, y2 = (xs$x - 2)^2)
   })
   rbindlist(evaluations)
 }
 
 objective = ObjectiveRFunMany$new(
-  fun = schaffer1,
+  fun = fun,
   domain = ps(x = p_dbl(lower = -10, upper = 10)),
   codomain = ps(y1 = p_dbl(tags = "minimize"), y2 = p_dbl(tags = "minimize")),
   id = "schaffer1")
 
 instance = OptimInstanceMultiCrit$new(
   objective = objective,
-  terminator = trm("run_time", secs = 60))
+  terminator = trm("evals", n_evals = 100)
+)
 ```
 
-Using the surrogate, acquisition function and acquisition function optimizer that are provided, we can proceed to optimize the instance via ParEGO:
+As a surrogate we will use a random forest.
+ParEGO is a scalarization based multi-objective BO algorithm and therefore we use the Expected Improvement as acquisition function.
+We will use the same acquisition functon optimizer as earlier.
 
 ```{r}
-surrogate = srlrn(lrn("regr.ranger", num.trees = 10L, keep.inbag = TRUE,
-  se.method = "jack"))
+surrogate = srlrn(default_rf())
 
 acq_function = acqf("ei")
 
-acq_optimizer = acqo(opt("random_search", batch_size = 100),
-  terminator = trm("evals", n_evals = 100))
+acq_optimizer = acqo(opt("nloptr", algorithm = "NLOPT_GN_ORIG_DIRECT"),
+  terminator = trm("stagnation", iters = 100, threshold = 1e-5))
 
 optimizer = opt("mbo",
   loop_function = bayesopt_parego,
   surrogate = surrogate,
   acq_function = acq_function,
-  acq_optimizer = acq_optimizer,
-  args = list(q = 4))
+  acq_optimizer = acq_optimizer
+)
 ```
 
-```{r, output=FALSE}
+We then optimize the instance:
+
+```{r, warning = FALSE}
 optimizer$optimize(instance)
 ```
-
-We observe that 12 points were evaluated in total (which makes sense as the objective function evaluation is not yet parallelized and the overhead of each function evaluation is given by 5 seconds).
-While the points are appropriately evaluated in batches of size `q = 4` (with the initial design automatically constructed as the first batch), we do not experience any acceleration of the optimization process unless the function evaluation is explicitly parallelized.
+Finally, we visualize the resulting Pareto front (in black) and its analytical counterpart (in darkgrey).
 
 ```{r}
-nrow(instance$archive$data)
-instance$archive$data[, c("x", "timestamp", "batch_nr")]
-```
+true_pareto = data.table(y1 = seq(from = 0, to = 4, length.out = 1001))
+true_pareto[, y2 := (sqrt(y1) - 2) ^2]
 
-We now parallelize the evaluation of the objective function and proceed to optimize the instance again:
-
-```{r}
-library(future)
-library(future.apply)
-plan("multisession", workers = 4)
-
-schaffer1_parallel = function(xss) {
-  evaluations = future_lapply(xss, FUN = function(xs) {
-    Sys.sleep(5)
-    list(y1 = xs$x, y2 = (xs$x - 2)^2)
-  })
-  rbindlist(evaluations)
-}
-
-objective_parallel = ObjectiveRFunMany$new(
-  fun = schaffer1_parallel,
-  domain = ps(x = p_dbl(lower = -10, upper = 10)),
-  codomain = ps(y1 = p_dbl(tags = "minimize"), y2 = p_dbl(tags = "minimize")),
-  id = "schaffer1_parallel")
-
-instance_parallel = OptimInstanceMultiCrit$new(
-  objective = objective_parallel,
-  terminator = trm("run_time", secs = 60))
-```
-
-```{r, output=FALSE}
-optimizer$optimize(instance_parallel)
-```
-
-By parallelizing the evaluation of the objective function we used our compute resources much more efficiently and evaluated many more points:
-
-```{r}
-nrow(instance_parallel$archive$data)
-instance_parallel$archive$data[, c("x", "timestamp", "batch_nr")]
+ggplot(aes(x = y1, y = y2), data = instance$archive$best()) +
+  geom_point() +
+  geom_line(data = true_pareto, colour = "darkgrey") +
+  geom_step(direction = "hv") +
+  labs(x = expression(y[1]), y = expression(y[2])) +
+  theme_minimal()
 ```
 
 ## Solutions to @sec-feature-selection
@@ -1112,8 +1202,8 @@ instance = fselect(
 
 ## Solutions to @sec-pipelines
 
-1. Concatenate the named PipeOps using `%>>%`.
-  To get a `r ref("Learner")` object, use `r ref("as_learner()")`
+1. Concatenate the PipeOps named in the exercise by using `%>>%`.
+  The resulting `r ref("Graph")` can then be converted to a `r ref("Learner")` by using `r ref("as_learner()")`.
 ```{r pipelines-001}
 library(mlr3pipelines)
 library(mlr3learners)
@@ -1122,16 +1212,24 @@ graph = po("imputeoor") %>>% po("scale") %>>% lrn("classif.log_reg")
 graph_learner = as_learner(graph)
 ```
 
-1. After training, the underlying `lrn("classif.log_reg")` can be accessed through the `$base_learner()` method.
-  Alternatively, the learner can be accessed explicitly using `po("learner")`.
-```{r pipelines-002}
+2. The `r ref("GraphLearner")` can be trained like any other `Learner` object, thereby filling in its `$model` field.
+  It is possible to access the `$state` of any `PipeOp` through this field: the states are named after the `PipeOp`'s `$id`.
+  The logistic regression model can then be extracted from the state of the `po("learner")` that contains the `lrn("classif.log_reg")`.
+```{r pipelines-002-0}
 graph_learner$train(tsk("pima"))
 
-# access the learner through the $base_learner() method
+# access the state of the po("learner") to get the model
+model = graph_learner$model$classif.log_reg$model
+coef(model)
+```
+  Alternatively, the underlying `lrn("classif.log_reg")` can be accessed through the `$base_learner()` method:
+```{r pipelines-002-1}
 model = graph_learner$base_learner()$model
 coef(model)
-
-# access the learner explicitly through the PipeOp
+```
+  As a third option, the trained `PipeOp` can be accessed through the `$graph_model` field of the `GraphLearner`.
+  The trained `PipeOp` has a `$learner_model` field, which contains the trained `Learner` object, which contains the model.
+```{r pipelines-002-2}
 pipeop = graph_learner$graph_model$pipeops$classif.log_reg
 model = pipeop$learner_model$model
 coef(model)
@@ -1160,185 +1258,327 @@ sd(age_column)
 
 ## Solutions to @sec-pipelines-nonseq
 
-1. To use `po("select")` to *remove*, instead of *keep*, a feature based on a pattern, use `r ref("selector_invert")` together with `r ref("selector_grep")`.
-  To remove the "`R`" class columns in @sec-pipelines-stack, the following `po("select")` could be used:
+1. Use the `po("pca")` to replace numeric columns with their PCA transform.
+  To restrict this operator to only columns without missing values, the `affect_columns` with a fitting `r ref("Selector")` can be used:
+  The `selector_missing()`, which selects columns *with* missing values, combined with `selector_invert()`, which inverts the selection.
+  Since `po("pca")` only operates on numeric columns, it is not necessary to use a `Selector` to select numeric columns.
+```{r pipelines-004-0}
+graph = as_graph(po("pca",
+  affect_columns = selector_invert(selector_missing()))
+)
 
-```{r pipelines-004}
-po("select", selector = selector_invert(selector_grep("\\.R")))
+# apply the graph to the pima task
+graph_result = graph$train(tsk("pima"))
+
+# we get the following features
+graph_result[[1]]$feature_names
+
+# Compare with feature-columns of tsk("pima") with missing values:
+selector_missing()(tsk("pima"))
 ```
-which would have the benefit that it would keep the columns pertaining to all other classes, even if the `"sonar"` task had more target classes.
 
-2. A solution that does not need to specify the target classes at all is to use a custom `r ref("Selector")`, as was shown in @sec-pipelines-bagging:
+Alternatively, `po("select")` can be used to select the columns without missing values that are passed to `po("pca")`.
+Another `po("select")` can be used to select all the other columns.
+It is put in parallel with the first `po("select")` using `gunion()`.
+It is necessary to use different `$id` values for both `po("select")` to avoid a name clash in the `Graph`.
+To combine the output from both paths, `po("featureunion")` can be used.
+```{r pipelines-004-1}
+path1 = po("select", id = "select_non_missing",
+  selector = selector_invert(selector_missing())) %>>%
+    po("pca")
+path2 = po("select", id = "select_missing",
+  selector = selector_missing())
+graph = gunion(list(path1, path2)) %>>% po("featureunion")
+
+# apply the graph to the pima task
+graph_result = graph$train(tsk("pima"))
+graph_result[[1]]$feature_names
+```
+
+2. First, observe the feature names produced by the level 0 learners when applied to the `tsk("wine")` task:
+
+```{r pipelines-005-0}
+lrn_rpart = lrn("classif.rpart", predict_type = "prob")
+po_rpart_cv = po("learner_cv", learner = lrn_rpart,
+  resampling.folds = 2, id = "rpart_cv"
+)
+
+lrn_knn = lrn("classif.kknn", predict_type = "prob")
+po_knn_cv = po("learner_cv",
+  learner = lrn_knn,
+  resampling.folds = 2, id = "knn_cv"
+)
+
+# we restrict ourselves to two level 0 learners here to
+# focus on the essentials.
+
+gr_level_0 = gunion(list(po_rpart_cv, po_knn_cv))
+gr_combined = gr_level_0 %>>% po("featureunion")
+
+gr_combined$train(tsk("wine"))[[1]]$head()
+```
+
+To use `po("select")` to *remove*, instead of *keep*, a feature based on a pattern, use `r ref("selector_invert")` together with `r ref("selector_grep")`.
+  To remove the "`1`" class columns, i.e. all columns with names that end in "1", the following `po("select")` could be used:
+
+```{r pipelines-005-1}
+drop_one = po("select", selector = selector_invert(selector_grep("\\.1$")))
+
+# Train it on the wine task with lrn("classif.multinom"):
+
+gr_stack = gr_combined %>>% drop_one %>>%
+  lrn("classif.multinom", trace = FALSE)
+
+glrn_stack = as_learner(gr_stack)
+
+glrn_stack$train(tsk("wine"))
+
+glrn_stack$base_learner()$model
+```
+
+3. A solution that does not need to specify the target classes at all is to use a custom `r ref("Selector")`, as was shown in @sec-pipelines-bagging:
 
 ```{r pipelines-005}
 selector_remove_one_prob_column = function(task) {
   class_removing = task$class_names[[1]]
-  selector_use = selector_invert(selector_grep(paste0("\\.", class_removing)))
-
-selector_use(task)
+  selector_use = selector_invert(selector_grep(paste0("\\.", class_removing ,"$")))
+  selector_use(task)
 }
 ```
 Using this selector in @sec-pipelines-stack, one could use the resulting stacking learner on any classification task with arbitrary target classes.
+It can be used as an alternative to the `Selector` used in exercise 2:
+```{r pipelines-005-2}
+drop_one_alt = po("select", selector = selector_remove_one_prob_column)
 
-3. As the first hint states, two `po("imputelearner")` objects are necessary: one to impute missing values in factor columns using a classification learner, and another to impute missing values in numeric columns using a regression learner.
-  Additionally, `ppl("robustify")` is used along with the `r ref("ranger::ranger")`-based learners inside `po("imputelearner")` because the data passed to the imputation learners still contains missing values, which `ranger::ranger` cannot handle.
+# The same as above:
+gr_stack = gr_combined %>>% drop_one_alt %>>%
+  lrn("classif.multinom", trace = FALSE)
+glrn_stack = as_learner(gr_stack)
+glrn_stack$train(tsk("wine"))
 
-```{r pipelines-006}
-gr_impute_factors = po("imputelearner", id = "impute_factors",
-  learner = ppl("robustify", learner = lrn("classif.ranger")) %>>%
-    lrn("classif.ranger"),
-  affect_columns = selector_type("factor")
-)
-gr_impute_numerics = po("imputelearner", id = "impute_numerics",
-  learner = ppl("robustify", learner = lrn("regr.ranger")) %>>%
-    lrn("regr.ranger"),
-  affect_columns = selector_type(c("numeric", "integer"))
-)
-
-gr_impute = gr_impute_numerics %>>% gr_impute_factors
-
-imputed = gr_impute$train(tsk("penguins"))[[1]]
-
-# e.g. see how row 4 was imputed
-# original:
-tsk("penguins")$data(rows = 4)
-# imputed:
-imputed$data(rows = 4)
+# As before, the first class was dropped.
+glrn_stack$base_learner()$model
 ```
+
+4. We choose to use the following options for imputation, factor encoding, and model training.
+  Note the use of `pos()` and `lrns()`, which return lists of `PipeOp` and `Learner` objects, respectively.
+```{r pipelines-005-3}
+imputing = pos(c("imputeoor", "imputesample"))
+
+factor_encoding = pos(c("encode", "encodeimpact"))
+
+models = lrns(c("classif.rpart", "classif.log_reg", "classif.svm"))
+```
+
+Use the `ppl("branch")` pipeline to get `Graphs` with alternative path branching, controlled by its own hyperparameter.
+We need to give the `po("branch")` operators that are created here individual prefixes to avoid nameclashes when we put everything together.
+```{r pipelines-005-4}
+full_graph = ppl("branch",
+    prefix_branchops = "impute_", graphs = imputing
+  ) %>>% ppl("branch",
+    prefix_branchops = "encode_", graphs = factor_encoding
+  ) %>>% ppl("branch",
+    prefix_branchops = "model_", graphs = models
+  )
+
+full_graph$plot()
+```
+
+The easiest way to set up the search space for this pipeline is to use `to_tune()`.
+It is necessary to record the dependencies of the hyperparameters of the preprocessing and model `PipeOps` on the branch hyperparameters.
+For this, `to_tune()` needs to be applied to a `Domain` object -- `p_dbl()`, `p_fct()`, etc. -- that has its dependency declared using the `depends` argument.
+```{r pipelines-005-5}
+library("paradox")
+full_graph$param_set$set_values(
+  impute_branch.selection = to_tune(),
+  encode_branch.selection = to_tune(),
+  model_branch.selection = to_tune(),
+
+  encodeimpact.smoothing = to_tune(p_dbl(1e-3, 1e3, logscale = TRUE,
+    depends = encode_branch.selection == "encodeimpact")),
+  encode.method = to_tune(p_fct(c("one-hot", "poly"),
+    depends = encode_branch.selection == "encode")),
+
+  classif.rpart.cp = to_tune(p_dbl(0.001, 0.3, logscale = TRUE,
+    depends = model_branch.selection == "classif.rpart")),
+  classif.svm.cost = to_tune(p_dbl(1e-5, 1e5, logscale = TRUE,
+    depends = model_branch.selection == "classif.svm")),
+  classif.svm.gamma = to_tune(p_dbl(1e-5, 1e5, logscale = TRUE,
+    depends = model_branch.selection == "classif.svm"))
+)
+```
+
+We also set a few SVM kernel hyperparameters record their dependency on the model selection branch hyperparameter.
+We could record these dependencies in the `Graph`, using the `$add_dep()` method of the `r ref("ParamSet")`, but here we use the simpler approach of adding a single item search space component.
+```{r pipelines-005-5-1}
+full_graph$param_set$set_values(
+  classif.svm.type = to_tune(p_fct("C-classification",
+    depends = model_branch.selection == "classif.svm")),
+  classif.svm.kernel = to_tune(p_fct("radial",
+    depends = model_branch.selection == "classif.svm"))
+)
+```
+
+To turn this `Graph` into an AutoML-system, we use an `AutoTuner`.
+Here we use random search, but any other `Tuner` could be used.
+```{r pipelines-005-6}
+library("mlr3tuning")
+automl_at = auto_tuner(
+  tuner = tnr("random_search"),
+  learner = full_graph,
+  resampling = rsmp("cv", folds = 4),
+  measure = msr("classif.ce"),
+  term_evals = 30
+)
+```
+
+We can now benchmark this `AutoTuner` on a few tasks and compare it with the untuned random forest with out-of-range (OOR) imputation:
+```{r pipelines-005-7}
+#| warning: false
+learners = list(
+  automl_at,
+  as_learner(po("imputeoor") %>>% lrn("classif.ranger"))
+)
+learners[[1]]$id = "automl"
+learners[[2]]$id = "ranger"
+
+tasks = list(
+  tsk("breast_cancer"),
+  tsk("pima"),
+  tsk("sonar")
+)
+
+set.seed(123L)
+design = benchmark_grid(tasks, learners = learners, rsmp("cv", folds = 3))
+bmr = benchmark(design)
+
+bmr$aggregate()
+```
+
+The `AutoTuner` performs better than the untuned random forest on `r switch(1 + sum(bmr$aggregate()[, .SD[learner_id != "automl"][.SD[learner_id == "automl"], on = "task_id", i.classif.ce < classif.ce]]), "none of the tasks", "one task", "two tasks", "all tasks")`.
+This is, of course, a toy example to demonstrate the capabilities of `mlr3pipelines` in combination with the `mlr3tuning` package.
+To use this kind of setup on real world data, one would need to take care of making the process more robust, e.g. by using the `ppl("robustify")` pipeline, and by using fallback learners.
 
 ## Solutions for @sec-preprocessing
 
-We will consider a similar prediction problem as throughout this section, using the King County Housing data instead (available with `tsk("kc_housing")`).
-To evaluate the models, we again use 10-fold cv and the mean absolute error.
-The learner we want to use is a elastic-net regression by `lrn("regr.glmnet")`.
+We will consider a prediction problem similar to the one from this chapter, but using the King County Housing regression data instead (available with `tsk("kc_housing")`).
+To evaluate the models, we again use 10-fold CV, mean absolute error and `lrn("regr.glmnet")`.
 For now we will ignore the `date` column and simply remove it:
 
-```{r, warning=FALSE, message=FALSE}
-kc_housing = tsk("kc_housing")
-kc_housing$select(setdiff(kc_housing$feature_names, "date"))
+```{r}
+set.seed(1)
+
+library("mlr3data")
+task = tsk("kc_housing")
+task$select(setdiff(task$feature_names, "date"))
 ```
 
 1. Have a look at the features, are there any features which might be problematic? If so, change or remove them.
+  Check the dataset and learner properties to understand which preprocessing steps you need to do.
 
-```{r, warning=FALSE, message=FALSE}
-summary(kc_housing)
+```{r}
+summary(task)
 ```
 
-
-`zipcode` should not really be interpreted as a numeric value, so we cast it to a factor.
+The `zipcode` should not be interpreted as a numeric value, so we cast it to a factor.
 We could argue to remove `lat` and `long` as handling them as linear effects is not necessarily a suitable, but we will keep them since `glmnet` performs internal feature selection anyways.
 
 ```{r, warning=FALSE, message=FALSE}
 zipencode = po("mutate", mutation = list(zipcode = ~ as.factor(zipcode)), id = "zipencode")
 ```
 
-2. Check the dataset and learner properties to understand which preprocessing steps you need to do.
+2. Build a suitable pipeline that allows `glmnet` to be trained on the dataset.
+  Construct a new `glmnet` model with `ppl("robustify")`.
+  Compare the two pipelines in a benchmark experiment.
 
 ```{r, warning=FALSE, message=FALSE}
-print(kc_housing)
-kc_housing$missings()
+lrn_glmnet = lrn("regr.glmnet")
 ```
 
-The data has missings and a categorical feature (since we are encoding the zipcode as a factor).
-
 ```{r, warning=FALSE, message=FALSE}
-glmnet = lrn("regr.glmnet")
-glmnet$properties
-glmnet$feature_types
-```
-
-`glmnet` does not support factors or missing values. So our pipeline needs to handle both.
-
-3. Build a suitable pipeline that allows glmnet to be trained on the dataset.
-
-```{r, warning=FALSE, message=FALSE}
-glmnet_preproc = GraphLearner$new(
+graph_preproc =
   zipencode %>>%
   po("fixfactors") %>>%
-    po("encodeimpact") %>>%
-    list(
-    po("missind",
-        type = "integer",
-        affect_columns = selector_type("integer")
-    ),
-    po("imputehist",
-        affect_columns = selector_type("integer")
-    )) %>>%
-    po("featureunion") %>>%
-    po("imputeoor",
-        affect_columns = selector_type("factor")
-    ) %>>%
-    glmnet,
-  id = "regr.glmnet_preproc")
+  po("encodeimpact") %>>%
+  list(
+    po("missind", type = "integer", affect_columns = selector_type("integer")),
+    po("imputehist", affect_columns = selector_type("integer"))) %>>%
+  po("featureunion") %>>%
+  po("imputeoor", affect_columns = selector_type("factor")) %>>%
+  lrn_glmnet
 
-log_glmnet_preproc = ppl("targettrafo", graph = glmnet_preproc)
-log_glmnet_preproc$param_set$values$targetmutate.trafo = function(x) log(x)
-log_glmnet_preproc$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
-log_glmnet_preproc = GraphLearner$new(log_glmnet_preproc, id = "regr.log_glmnet_preproc")
+graph_preproc$plot()
 ```
 
+`glmnet` does not support factors or missing values.
+So our pipeline needs to handle both.
 First we fix the factor levels to ensure that all 70 zipcodes are fixed.
 We can consider 70 levels high cardinality, so we use impact encoding.
 We use the same imputation strategy as in @sec-preprocessing.
-Since the target is highly skewed, we also apply a log-transformation of the target.
-
-
-4. As a comparison, apply `pipeline_robustify` to glmnet and compare the results with your pipeline.
 
 ```{r, warning=FALSE, message=FALSE}
-glmnet_robustify = GraphLearner$new(
-    zipencode %>>%
-    mlr3pipelines::pipeline_robustify() %>>%
-      glmnet,
-    id = "regr.glmnet_robustify"
-)
+graph_robustify =
+  pipeline_robustify(task = task, learner = lrn_glmnet) %>>%
+  lrn_glmnet
 
-log_glmnet_robustify = ppl("targettrafo", graph = glmnet_robustify)
-log_glmnet_robustify$param_set$values$targetmutate.trafo = function(x) log(x)
-log_glmnet_robustify$param_set$values$targetmutate.inverter = function(x) list(response = exp(x$response))
-log_glmnet_robustify = GraphLearner$new(log_glmnet_robustify, id = "regr.log_glmnet_robustify")
-
-learners = list(
-  lrn("regr.featureless", robust = TRUE),
-  glmnet_preproc,
-  log_glmnet_preproc,
-  glmnet_robustify,
-  log_glmnet_robustify
-)
-
-set.seed(123L)
-cv10 = rsmp("cv")
-cv10$instantiate(kc_housing)
-
-design = benchmark_grid(kc_housing, learners = learners, cv10)
-bmr = benchmark(design)
-bmr$aggregate(measure = msr("regr.mae"))[, .(learner_id, regr.mae)]
+graph_robustify$plot()
 ```
 
-The log-transformed `glmnet` with impact encoding results in the best model, although only by a very small margin.
+```{r}
+glrn_preproc = as_learner(graph_preproc, id = "glmnet_preproc")
+glrn_robustify = as_learner(graph_robustify, id = "glmnet_robustify")
 
+design = benchmark_grid(
+  tasks = task,
+  learners = list(glrn_preproc, glrn_robustify),
+  resamplings = rsmp("cv", folds = 3)
+)
 
-5. Consider the `date` feature: How can you extract information from this feature that `glmnet` can use? Check how much this improves your pipeline.
-Also consider the spatial nature of the dataset: Can you extract an additional feature from the lat/long coordinates? (Hint: Downtown Seattle has lat/long coordinates `47.605`/`-122.334`).
+bmr = benchmark(design)
+bmr$aggregate(msr("regr.rmse"))
+```
+
+Our preprocessing pipeline performs slightly better than the robustified one.
+
+3. Now consider the `date` feature:
+  How can you extract information from this feature in a way that `glmnet` can use?
+  Does this improve the performance of your pipeline?
+  Finally, consider the spatial nature of the dataset.
+  Can you extract an additional feature from the lat / long coordinates?
+  (Hint: Downtown Seattle has lat/long coordinates `47.605`/`122.334`).
 
 ```{r, warning=FALSE, message=FALSE}
-extractors = po("mutate", mutation = list(
-  date = ~ as.numeric(date),
-  distance_downtown = ~ sqrt((lat - 47.605)^2 + (long  + 122.334)^2)))
+task = tsk("kc_housing")
 
-kc_housing_full = extractors$train(list(tsk("kc_housing")))[[1]]
-kc_housing_full$id = "kc_housing_feat_extr"
+graph_mutate =
+  po("mutate", mutation = list(
+    date = ~ as.numeric(date),
+    distance_downtown = ~ sqrt((lat - 47.605)^2 + (long  + 122.334)^2))) %>>%
+  zipencode %>>%
+  po("encodeimpact") %>>%
+  list(
+    po("missind", type = "integer", affect_columns = selector_type("integer")),
+    po("imputehist", affect_columns = selector_type("integer"))) %>>%
+  po("featureunion") %>>%
+  po("imputeoor", affect_columns = selector_type("factor")) %>>%
+  lrn_glmnet
 
+glrn_mutate = as_learner(graph_mutate)
 
-design_ext = benchmark_grid(kc_housing_full, learners = learners, cv10)
-bmr_ext = benchmark(design_ext)
-bmr$combine(bmr_ext)
-bmr$aggregate(measure = msr("regr.mae"))[, .(learner_id, task_id, regr.mae)]
+design = benchmark_grid(
+  tasks = task,
+  learners = glrn_mutate,
+  resamplings = rsmp("cv", folds = 3)
+)
+
+bmr_2 = benchmark(design)
+bmr$combine(bmr_2)
+bmr$aggregate(msr("regr.mae"))
 ```
 
 We simply convert the `date` feature into a numeric timestamp so that `glmnet` can handle the feature.
 We create one additional feature as the distance to downtown Seattle.
-This improves the average error of our model by a further 1600$.
+This improves the average error of our model by a further 1400$.
 
 ## Solutions to @sec-technical
 
@@ -1567,7 +1807,9 @@ library(mlr3)
 library(mlr3learners)
 set.seed(1)
 
-fifa20 = fifa[,5:42]
+feat_of_interest = c("age", "skill_ball_control", "skill_curve", "skill_dribbling",  "skill_fk_accuracy", "skill_long_passing", "value_eur")
+fifa20 = fifa[,feat_of_interest]
+
 task_fifa = as_task_regr(fifa20, target = "value_eur", id = "fifa20")
 
 learner = lrn("regr.ranger")
@@ -1575,7 +1817,7 @@ learner$train(task_fifa)
 learner$model
 ```
 
-2. Use the permutation importance method to calculate variable importance ranking. Which variable is the most important? Is it surprising?
+2. Use the permutation importance method to calculate feature importance ranking. Which feature is the most important? Do you find the results surprising?
 
 **With `iml`**
 
@@ -1583,7 +1825,7 @@ learner$model
 library(iml)
 model = Predictor$new(learner,
                 data = fifa20,
-                y = fifa$value_eur)
+                y = "value_eur")
 
 effect = FeatureImp$new(model,
                 loss = "rmse")
@@ -1595,7 +1837,7 @@ effect$plot()
 ```{r solutions-046, warning=FALSE, message=FALSE}
 library(DALEX)
 ranger_exp = DALEX::explain(learner,
-  data = fifa20,
+  data = fifa20[, setdiff(names(fifa20), "value_eur")],
   y = fifa$value_eur,
   label = "Fifa 2020",
   verbose = FALSE)
@@ -1605,33 +1847,31 @@ head(ranger_effect)
 plot(ranger_effect)
 ```
 
-3. Use the Partial Dependence profile to draw the global behavior of the model for this variable. Is it aligned with your expectations?
+3. Use the partial dependence plot/profile to draw the global behavior of the model for this feature. Is it aligned with your expectations?
 
 **With `iml`**
 
 ```{r solutions-047, warning=FALSE, message=FALSE}
-num_features = c("movement_reactions", "skill_ball_control", "age")
+impfeat = c("skill_ball_control")
 
-effect = FeatureEffects$new(model)
-plot(effect, features = num_features)
+effect = FeatureEffects$new(model, features = impfeat)
+plot(effect)
 ```
 
 **With `DALEX`**
 
 ```{r solutions-048, warning=FALSE, message=FALSE}
-num_features = c("movement_reactions", "skill_ball_control", "age")
+impfeat = c("skill_ball_control")
 
-ranger_profiles = model_profile(ranger_exp, variables = num_features)
+ranger_profiles = model_profile(ranger_exp, variables = impfeat)
 plot(ranger_profiles)
 ```
 
-4 Choose one of the football players. You can choose some well-known striker (e.g. Robert Lewandowski) or a well-known goalkeeper (e.g. Manuel Neuer). The following tasks are worth repeating for several different choices.
+4. Choose Robert Lewandowski as a specific example and calculate and plot the Shapley values. Which feature is locally the most important and has the strongest influence on his valuation as a soccer player?
 
 ```{r solutions-049, warning=FALSE, message=FALSE}
-player_1 = fifa["R. Lewandowski", 5:42]
+player_1 = fifa20["R. Lewandowski",]
 ```
-
-5. For the selected footballer, calculate and plot the Shapley values. Which variable is locally the most important and has the strongest influence on the valuation of the footballer?
 
 **With `iml`**
 
@@ -1647,18 +1887,6 @@ ranger_shap = predict_parts(ranger_exp,
              new_observation = player_1,
              type = "shap", B = 1)
 plot(ranger_shap, show_boxplots = FALSE)
-```
-
-6. For the selected footballer, calculate the Ceteris Paribus / Individual Conditional Expectation profiles to draw the local behavior of the model for this variable. Is it different from the global behavior?
-
-**With `DALEX`**
-
-```{r solutions-052, warning=FALSE, message=FALSE}
-num_features = c("movement_reactions", "skill_ball_control", "age")
-
-ranger_ceteris = predict_profile(ranger_exp, player_1)
-plot(ranger_ceteris, variables = num_features) +
-  ggtitle("Ceteris paribus for R. Lewandowski", " ")
 ```
 
 ## Solutions to @sec-special
@@ -1900,22 +2128,22 @@ And we can see, that the reason might be, that the false omission rate for femal
 
 Several problems with the existing metrics.
 
-We'll go through them one by one to deepen our understanding: 
+We'll go through them one by one to deepen our understanding:
 
 **Metric and evaluation**
 
-* In order for the fairness metric to be useful, we need to ensure that the data used for evaluation is representative and sufficiently large. 
+* In order for the fairness metric to be useful, we need to ensure that the data used for evaluation is representative and sufficiently large.
 
   We can investigate this further by looking at actual counts:
-  
+
 ```{r}
   table(tsk_adult_test$data(cols = c("race", "sex", "target")))
 ```
-  
+
   One of the reasons might be that there are only 3 individuals in the ">50k" category!
   This is an often encountered problem, as error metrics have a large variance when samples are small.
   Note, that the pre- and post-processing methods in general do not all support multiple protected attributes.
-   
+
 * We should question whether comparing the metric between all groups actually makes sense for the question we are trying to answer. Instead, we might want to observe the metric between two specific subgroups, in this case between individuals with `sex`: `Female` and `race`: `"Black"` or `"White`.
 
 First, we create a subset of only `sex`: `Female` and `race`: `"Black", "White`.
