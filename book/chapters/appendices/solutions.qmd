@@ -524,22 +524,24 @@ focus_search = function(task, learner, search_space, resampling, measure, random
     best_config = instance$result_x_search_space
 
     # narrow search space
-    walk(search_space$ids(), function(id) {
-      best = best_config[[id]]
-      lower = search_space$params[[id]]$lower
-      upper = search_space$params[[id]]$upper
+    params = map(search_space$subspaces(), function(subspace) {
+      best = best_config[[subspace$ids()]]
+      lower = subspace$lower
+      upper = subspace$upper
 
       new_lower = best - 0.25 * lower
       new_upper = best + 0.25 * upper
 
-      if ("ParamInt" %in% class(search_space$params[[id]])) {
+      if ("ParamInt" %in% subspace$class) {
         new_lower = round(new_lower)
         new_upper = round(new_upper)
-      }
 
-      search_space$params[[id]]$lower = max(new_lower, lower)
-      search_space$params[[id]]$upper = min(new_upper, upper)
+        p_int(max(new_lower, lower), min(new_upper, upper), tags = subspace$tags[[1]])
+      } else {
+        p_dbl(max(new_lower, lower), min(new_upper, upper), tags = subspace$tags[[1]])
+      }
     })
+    search_space = invoke(ps, .args = params)
 
     random_search_stages = random_search_stages - 1
     if (!random_search_stages) return(best_config)
@@ -561,14 +563,14 @@ focus_search(
 )
 ```
 
-As a stretch goal, look into `mlr3tuning`'s internal source code and turn your function into an R6 class inheriting from the `Tuner` class -- test it out on a learner of your choice.
+As a stretch goal, look into `mlr3tuning`'s internal source code and turn your function into an R6 class inheriting from the `TunerBatch` class -- test it out on a learner of your choice.
 
 ```{r}
 library(R6)
 library(mlr3tuning)
 
-TunerFocusSearch = R6Class("TunerFocusSearch",
-  inherit = Tuner,
+TunerBatchFocusSearch = R6Class("TunerFocusSearch",
+  inherit = TunerBatch,
   public = list(
 
     initialize = function() {
@@ -605,28 +607,33 @@ TunerFocusSearch = R6Class("TunerFocusSearch",
         best_config = inst$archive$best(batch = i)
 
         # narrow search space
-        walk(search_space$ids(), function(id) {
-          best = best_config[[id]]
-          lower = search_space$params[[id]]$lower
-          upper = search_space$params[[id]]$upper
+        params = map(search_space$subspaces(), function(subspace) {
+          best = best_config[[subspace$ids()]]
+          lower = subspace$lower
+          upper = subspace$upper
 
           new_lower = best - 0.25 * lower
           new_upper = best + 0.25 * upper
 
-          if ("ParamInt" %in% class(search_space$params[[id]])) {
+          if ("ParamInt" %in% subspace$class) {
             new_lower = round(new_lower)
             new_upper = round(new_upper)
-          }
 
-          search_space$params[[id]]$lower = max(new_lower, lower)
-          search_space$params[[id]]$upper = min(new_upper, upper)
+            p_int(max(new_lower, lower), min(new_upper, upper), tags = subspace$tags[[1]])
+          } else {
+            p_dbl(max(new_lower, lower), min(new_upper, upper), tags = subspace$tags[[1]])
+          }
         })
+        search_space = invoke(ps, .args = params)
+
+        xdt = generate_design_random(search_space, pv$random_search_size)$data
+        inst$eval_batch(xdt)
       }
     }
   )
 )
 
-mlr_tuners$add("focus_search", TunerFocusSearch)
+mlr_tuners$add("focus_search", TunerBatchFocusSearch)
 
 instance = ti(
   task = tsk("mtcars"),
@@ -1110,7 +1117,7 @@ filter_forward_selection_search = function(task, learner, resampling, measure, f
 filter_forward_selection_search(task, learner, resampling, measure, filter, n, max_features)
 ```
 
-Then, as a stretch goal, see if you can implement this as an R6 class inheriting from `FSelector`.
+Then, as a stretch goal, see if you can implement this as an R6 class inheriting from `FSelectorBatch`.
 
 ```{r}
 library(R6)
@@ -1119,8 +1126,8 @@ library(mlr3verse)
 library(mlr3fselect)
 library(data.table)
 
-FSelectorSequentialFilter = R6Class("FSelectorSequentialFilter",
-  inherit = FSelector,
+FSelectorBatchSequentialFilter = R6Class("FSelectorBatchSequentialFilter",
+  inherit = FSelectorBatch,
   public = list(
 
     #' @description
@@ -1185,7 +1192,7 @@ FSelectorSequentialFilter = R6Class("FSelectorSequentialFilter",
   )
 )
 
-mlr_fselectors$add("sequential_filter", FSelectorSequentialFilter)
+mlr_fselectors$add("sequential_filter", FSelectorBatchSequentialFilter)
 
 instance = fselect(
   fselector = fs(
