@@ -29,6 +29,7 @@ As we work through this chapter we will refer to the 'building blocks' of `r mlr
 | Density estimation | `r mlr3proba`  | Unsupervised estimation of probability density functions. |
 | Spatiotemporal analysis | `r mlr3spatiotempcv` and `r mlr3spatial`  | Supervised prediction of data with spatial (e.g., coordinates) and/or temporal outcomes. |
 | Cluster analysis | `r mlr3cluster`  | Unsupervised estimation of homogeneous clusters of data points. |
+| Functional data analysis | `r mlr3fda`  | Analysis and modeling of data where each observation is a function, often varying over time or space. |
 
 : Table of extension tasks that can be used with `mlr3` infrastructure. As we have a growing community of contributors, this list is far from exhaustive and many 'experimental' task implementations exist; this list just represents the tasks that have a functioning interface. {#tbl-alltasks}
 
@@ -1283,6 +1284,125 @@ In this section, we learned how we can use quantile regression in `mlr3`.
 Although both models capture the general trend of the data, the GAM-based approach provides smoother quantile estimates and better coverage of predictive intervals.
 The random forest model exhibits more variability and struggles with overfitting, particularly at extreme quantiles.
 
+## Functional Data Analysis (FDA) {#sec-fda}
+
+`r index('Functional data analysis')` deals with data where each observation is a curve or function rather than a single number, for example a spectrum measured across wavelengths or a signal recorded over time.
+Because the measurements within one curve are ordered and dependent, standard ML methods that treat each measurement point as an independent feature tend to perform poorly.
+The package `r mlr3fda` extends `mlr3` with support for functional data by providing `r ref("PipeOp")`s that preprocess functional columns and extract scalar features from them, so that any standard `mlr3` learner can be applied afterward.
+
+Functional data is represented using the `tfd_reg` (regular) and `tfd_irreg` (irregular) types from the `r ref_pkg("tf")` package.
+Regular functional data means all observations are measured at the same set of input points (e.g. the same wavelengths), while irregular data allows each observation to have its own set of input points.
+
+The package provides:
+
+* `r ref("PipeOp")`s for preprocessing: smoothing (`po("fda.smooth")`), interpolation to a common grid (`po("fda.interpol")`), and domain scaling (`po("fda.scalerange")`).
+* `r ref("PipeOp")`s for feature extraction: summary statistics (`po("fda.extract")`), functional PCA (`po("fda.fpca")`), flattening (`po("fda.flatten")`), discrete wavelet transform (`po("fda.wavelets")`), and others.
+
+### Tasks
+
+`mlr3fda` ships with three example tasks.
+The `"fuel"` task contains spectral data of fossil fuels with two regular functional features (`NIR` and `UVVIS`) and one scalar feature (`h2o`), with the goal of predicting the heat value (`heatan`).
+The `"dti"` task contains diffusion tensor imaging data with two irregular functional features (`cca` and `rcst`), and the `"phoneme"` task is a classification task with a single functional feature.
+
+```{r fda-001}
+library(mlr3fda)
+library(mlr3pipelines)
+
+task_fuel = tsk("fuel")
+task_fuel
+```
+
+We can see that the task has two functional features of type `tfr` (regular).
+Let us look at all tasks shipped with `mlr3fda`:
+
+```{r fda-002}
+as.data.table(mlr_tasks)[tfr > 0 | tfi > 0, c(1:2, 4:5)]
+```
+
+### Preprocessing
+
+Before extracting features, functional data often needs preprocessing.
+Two common steps are smoothing noisy curves and interpolating irregular data to a common grid.
+
+Smoothing uses `po("fda.smooth")`, which applies methods like LOWESS or rolling means to reduce noise in the functional observations:
+
+```{r fda-003}
+po_smooth = po("fda.smooth", method = "rollmean", args = list(k = 5))
+task_smoothed = po_smooth$train(list(task_fuel))[[1L]]
+```
+
+For irregular functional data (like in the `"dti"` task), observations are measured at different input points.
+The `po("fda.interpol")` operator interpolates all observations to a common grid, which is required by some downstream operations like FPCA:
+
+```{r fda-004}
+task_dti = tsk("dti")
+task_dti$data(cols = "cca", rows = 1:2)
+
+po_interpol = po("fda.interpol", grid = "union", method = "linear")
+task_dti_reg = po_interpol$train(list(task_dti))[[1L]]
+```
+
+### Feature Extraction
+
+Since there are currently no learners that directly operate on functional data in `mlr3fda`, the functional columns must be transformed into scalar features before applying a standard learner.
+The simplest approach is `po("fda.extract")`, which computes summary statistics (mean, min, max, slope, median, variance) from each functional column:
+
+```{r fda-005}
+po_extract = po("fda.extract",
+  features = c("mean", "min", "max", "slope"),
+  drop = TRUE
+)
+task_extracted = po_extract$train(list(task_fuel))[[1L]]
+task_extracted$head()
+```
+
+Setting `drop = TRUE` removes the original functional columns and keeps only the extracted numeric features.
+
+A more sophisticated approach is functional principal component analysis (FPCA) via `po("fda.fpca")`, which extracts principal component scores that capture the main modes of variation in the functional data.
+Note that FPCA requires regular functional data, so irregular data must be interpolated first:
+
+```{r fda-006}
+po_fpca = po("fda.fpca", n_components = 3L)
+task_fpca = po_fpca$train(list(task_fuel))[[1L]]
+task_fpca$head()
+```
+
+### Putting It All Together
+
+Because the feature extraction `PipeOp`s produce standard numeric features, they can be combined with any learner in a `r ref("GraphLearner")`.
+This makes it straightforward to benchmark different feature extraction strategies.
+Let us compare three approaches on the `"fuel"` task: summary statistics extraction, FPCA, and flattening.
+
+```{r fda-007, message=FALSE, warning=FALSE, results='hide'}
+glrn_extract = as_learner(
+  po("fda.extract", features = c("mean", "min", "max", "slope"), drop = TRUE) %>>%
+    lrn("regr.rpart")
+)
+glrn_extract$id = "extract+rpart"
+
+glrn_fpca = as_learner(
+  po("fda.fpca", n_components = 5L) %>>%
+    lrn("regr.rpart")
+)
+glrn_fpca$id = "fpca+rpart"
+
+glrn_flatten = as_learner(
+  po("fda.flatten", drop = TRUE) %>>%
+    lrn("regr.rpart")
+)
+glrn_flatten$id = "flatten+rpart"
+
+learners = list(glrn_extract, glrn_fpca, glrn_flatten)
+bmr = benchmark(benchmark_grid(task_fuel, learners, rsmp("cv", folds = 3)))
+bmr$aggregate(msr("regr.rmse"))[, c("learner_id", "regr.rmse")]
+```
+
+In this small experiment, we can compare how different representations of the functional features affect predictive performance.
+The FPCA approach provides a compact representation of the curves that often works well in practice, while simple summary statistics offer an easy-to-interpret baseline.
+The flatten approach, which treats each observed point as a separate feature, can capture fine-grained patterns but may suffer from the curse of dimensionality.
+
+In general, all standard `mlr3`-workflows, i.e. resampling, benchmarking, tuning, and the use of pipelines, can be applied to functional data tasks through the `PipeOp`-based feature extraction provided by `r mlr3fda`.
+
 ## Conclusion
 
 In this chapter, we explored going beyond regression and classification to see how classes in `mlr3` can be used to implement other ML tasks.
@@ -1292,7 +1412,8 @@ Survival analysis, available in `r mlr3proba`, can be thought of as a regression
 The final task in `mlr3proba` is density estimation, the unsupervised task concerned with estimating univariate probability distributions.
 Using `r mlr3cluster`, you can perform cluster analysis on observations, which involves grouping observations according to similarities in their variables.
 It is possible to perform spatial analysis with `r mlr3spatial` and `r mlr3spatiotempcv` to make predictions using coordinates as features and to make spatial predictions.
-Finally, we saw how we can use the predict type `"quantiles"` to predict conditional quantiles and construct prediction intervals.
+We saw how we can use the predict type `"quantiles"` to predict conditional quantiles and construct prediction intervals.
+Finally, functional data analysis with `r mlr3fda` enables working with curve-valued observations by extracting scalar features through preprocessing `PipeOp`s.
 The `mlr3` interface is highly extensible, which means future ML tasks can (and will) be added to our universe and we will add these to this chapter of the book in future editions.
 
 | Class | Constructor/Function | Fields/Methods |
@@ -1305,6 +1426,7 @@ The `mlr3` interface is highly extensible, which means future ML tasks can (and 
 | `r ref("mlr3cluster::TaskClust")` | `r ref("as_task_clust()")` | `$data()` |
 | `r ref("mlr3spatiotempcv::TaskClassifST")` | `r ref("as_task_classif_st()")` | `$data()` |
 | - | `r ref("mlr3spatiotempcv::predict_spatial()")` |  |
+| `r ref("mlr3pipelines::PipeOp")` | `po("fda.extract")`, `po("fda.fpca")`, `po("fda.flatten")` | - |
 
 : Important classes and functions covered in this chapter with underlying class (if applicable), class constructor or function, and important class fields and methods (if applicable). {#tbl-beyond-api}
 
