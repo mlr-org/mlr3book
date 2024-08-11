@@ -365,3 +365,8 @@ NULL
 #' @title Helper mlr links
 #' @export
 NULL
+
+#' @name mlr3fda
+#' @title Helper mlr links
+#' @export
+NULL
