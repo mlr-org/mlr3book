@@ -18,6 +18,7 @@ db$hosted = c(
   "mlr3db",
   "mlr3extralearners",
   "mlr3fairness",
+  "mlr3fda",
   "mlr3filters",
   "mlr3fselect",
   "mlr3hyperband",
