@@ -3,6 +3,11 @@ aliases:
   - "/validation_and_internal_tuning.html"
 ---
 
+BB: we need to check where this is optimally placed
+BB: we also want to inlude predict sets and explain how ppl can access and work with the training error
+BB: check that we clearly explain how this is combined with normal tuning
+BB: validation and internal tuning are 2 different concepts but they are not explained
+
 # Validation and Internal Tuning {#sec-valid-tuning}
 
 {{< include ../../common/_setup.qmd >}}
@@ -10,25 +15,22 @@ aliases:
 `r chapter = "Validation and Internal Tuning"`
 `r authors(chapter)`
 
-When developing machine learning models, the goal is to create a model that generalizes well to new, unseen data.
+When developing ML models, the goal is to create a model that generalizes well to new, unseen data.
 To achieve this, it’s crucial to assess how well the model performs.
-In chapter @sec-performance we already covered how to evaluate a fully trained machine learning model on a new dataset.
-However, for iterative procedures it can also be advantageous to track the performance *during* training on some dataset often called *validation* data.
-If the model’s performance on the training data keeps improving but the performance on the validation data plateaus or degrades, it indicates overfitting.
-This means the model is becoming too specialized to the training data and is likely to perform poorly on new observations.
+In chapter @sec-performance we already covered how to evaluate a fully trained ML model on new test observations.
+However, for iterative procedures it can also be advantageous to track the performance *during* training on *validation* data.
+This can be used simply for logging purposes and posthoc analysis, but the major usecase is early-stopping.
+If the model’s performance on the training data keeps improving but the performance on the validation data plateaus or degrades, this indicates overfitting and we stop iterative training.
 
-To mitigate this risk, a technique known as early stopping can be employed.
-Early stopping monitors the model’s performance on the validation data during the training process.
-When the validation loss no longer improves or starts to increase, indicating that the model may begin to overfit, the training process is halted before completing all the planned epochs.
-By avoiding unnecessary epochs where the model’s performance on new data is unlikely to improve, early stopping offers a more resource-efficient alternative to traditional hyperparameter tuning methods.
-Instead of fitting the model for a fixed number of epochs and then selecting the best iteration from different trials, early stopping dynamically determines the optimal stopping point within a single fit.
+Handling this in an online fashion during training is much more efficient than configuring the number of iterations from
+the outside via traditional, offline hyperparameter tuning, where we would fit again and again with different iterations numbers.
 
 ## Validation {#sec-validation}
 
-In `mlr3`, `Learner`s can have the properties `"validation"` and `"internal_tuning"` to indicate whether they can make use of a validatin set and whether they can internally optimize hyperparameters, for example via early stopping.
+In `mlr3`, `Learner`s can have the properties `"validation"` and `"internal_tuning"` to indicate whether they can make use of a validation set and whether they can internally optimize hyperparameters, for example via early stopping.
 Examples for such learners are boosting algorithms such as xgboost, lightgbm, or catboost, as well as deep learning models from `r ref_pkg("mlr3torch")`.
-In this section we will train xgboost on the sonar classification task and keep track of its performance on a validation set.
-Below, we see that the xgboost classifier has both of these properties.
+BB: maybe mention glmnet here? so stuff which is a bit different as it uses internal tuning but not valid sets?
+In this section we will train xgboost on sonar and keep track of its performance on a validation set.
 
 ```{r}
 tsk_sonar = tsk("sonar")
@@ -36,14 +38,15 @@ lrn_xgb = lrn("classif.xgboost")
 lrn_xgb
 ```
 
-In order to track the performance, we need to configure how the required validation data is constructed.
-For xgboost, there exists the `watchlist` parameter, but `mlr3` also offers a standardized -- and as we will see later more powerful -- interface via the `$validate` field of the `Learner`.
+We now need to configure the validation data.
+For xgboost, there exists a special `watchlist` parameter, but `mlr3` also offers a standardized -- and as we will see later more powerful -- interface via the `$validate` field of the `Learner`.
 This field can either be set to:
 
 * `NULL` to use no validation data (default),
-* a ratio indicating the proportion of data to use as the validation set,
+* a ratio indicating the proportion of training data to use as the validation set,
 * `"predefined"` to use the validation data specified in the task (we will shortly see how to configure this) and
-* `"test"` to use the test set as validation data, which only works in combination with resampling. 
+* `"test"` to use the test set as validation data, which only works in combination with resampling and
+  tuning.
 
 Below, we configure the xgboost learner to use $1/3$ of its training data for validation:
 
@@ -69,7 +72,7 @@ For xgboost the history is stored in the `$evaluation_log`.
 tail(lrn_xgb$model$evaluation_log)
 ```
 
-Furthermore, `mlr3` provides a standardized acccessor for the final validation performance via `$internal_valid_scores`.
+But `mlr3` provides a standardized acccessor for the final validation performance via `$internal_valid_scores`.
 
 ```{r}
 lrn_xgb$internal_valid_scores
@@ -85,6 +88,7 @@ lrn_xgb$validate = "predefined"
 
 This allows us to use the *internal validation task* (`$internal_valid_task`) set in the training task.
 This field can either be set manually or via the `$divide()` method which either accepts a ratio or an id vector to use as validation data.
+BB: why do we call it 'divide' here? isnt this confusing if 'partition' also exists? is this used internally?
 Below, we randomly sample 70 observations and set it as the validation task.
 
 ```{r}
@@ -100,11 +104,14 @@ tsk_sonar$nrow
 tsk_sonar$internal_valid_task$nrow
 ```
 
-When we now train the xgboost learner on the task, the data from the internal validation task will be used as the validation data:
+When we now train the xgboost learner on the task, the data from the internal validation task will be used as the validation data.
+Note that the `internal_valid_task` slot is always used, also when you set a ratio value in `learner$validate`, it is simply auto-constructed (and then passed down).
 
 ```{r}
 lrn_xgb$train(tsk_sonar)
 ```
+
+BB: maybe move pipelines to the end?
 
 In many cases, however, one does not only train an individual learner, but combines it with other (preprocessing) steps in a `r ref("GraphLearner")`.
 This is possible, because preprocessing `PipeOp`s also handle the validation task.
@@ -117,7 +124,7 @@ taskout = po_pca$train(list(tsk_sonar))[[1]]
 taskout$internal_valid_task
 ```
 
-This means that tracking validation performance also works in complex graphlearners, something that is not possible by manually setting the `watchlist` parameter of xgboost.
+This means that tracking validation performance also works in complex graph learners, something that is not possible by manually setting the `watchlist` parameter of xgboost.
 Below, we combine the chain the PCA operator with xgboost and convert it to a learner.
 
 ```{r}
@@ -138,7 +145,7 @@ set_validate(glrn, validate = "predefined")
 set_validate(glrn, validate = "predefined", ids = "classif.xgboost")
 ```
 
-We can now train the graphlearner just as before and inspect the final validation metric, which is now prefixed by the ID of the respective `PipeOp`.
+We can now train the graph learner just as before and inspect the final validation metric, which is now prefixed by the ID of the respective `PipeOp`.
 
 ```{r}
 glrn$validate = "predefined"
@@ -190,8 +197,8 @@ Below, we visualize the validation loss over time and the optimal nrounds is mar
 library(ggplot2)
 theme_set(theme_minimal())
 data = lrn_xgb$model$evaluation_log
-ggplot(data, aes(x = iter, y = test_logloss)) + 
-  geom_line() + 
+ggplot(data, aes(x = iter, y = test_logloss)) +
+  geom_line() +
   geom_point(aes(x = lrn_xgb$internal_tuned_values$nrounds,
     y = lrn_xgb$internal_valid_scores$logloss), color = "red") +
   labs(
@@ -221,6 +228,7 @@ lrn_xgb$validate = "test"
 Below, we tune xgboost on the sonar task using a simple grid search with 10 evaluations and 5-fold cross-validation.
 As the evaluation measure, we will use classification error.
 However, it is important to note that the internal tuning will not be influenced by this and is configured via the `eval_metric` parameter that we have set to "logloss" earlier.
+BB: ist das nicht komisch und gefährlich?
 
 ```{r}
 tsk_sonar$internal_valid_task = NULL
@@ -240,7 +248,9 @@ The tuning result contains the best found configuration for both `eta` and `nrou
 ti$result_learner_param_vals[c("eta", "nrounds")]
 ```
 
-This analogously for the `r ref("AutoTuner")`, which will use the internally optimized `nrounds`, as well as the explicitly tuned `eta` for the final model fit.
+BB: hier sollten wir auch was zum archiv kurz sagen
+
+This holds analogously for the `r ref("AutoTuner")`, which will use the internally optimized `nrounds`, as well as the explicitly tuned `eta` for the final model fit.
 
 
 ```{r}
@@ -261,9 +271,11 @@ In almost cases, the `$validate` field should only be set for the tuned learner 
 :::
 
 ## Conclusion
+BB: haben wir diese conclusion immer? ist es ein neues chapter? strukturvrgleich.
+haben wir noch sachen vergessen?
 
 In this chapter, we learned how to track the performance of an iterative learning procedure on a validation set.
-This technique also works seemlessly in a graphlearner, with the only difference being that one not only has to specify how to create the validation data, but also which PipeOps should use it.
+This technique also works seemlessly in a graph learner, with the only difference being that one not only has to specify how to create the validation data, but also which PipeOps should use it.
 Furthermore, mlr3's *internal tuning* mechanism allows to combine hyperparameter tuning via `r mlr3tuning` with internal tuning of the learning algorithm, such as early stopping in xgboost.
 
 ## Exercises
