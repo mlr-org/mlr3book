@@ -3,9 +3,6 @@ aliases:
   - "/validation_and_internal_tuning.html"
 ---
 
-BB: check that we clearly explain how this is combined with normal tuning
-BB: validation and internal tuning are 2 different concepts but they are not explained
-
 # Validation and Internal Tuning (+) {#sec-valid-tuning}
 
 {{< include ../../common/_setup.qmd >}}
@@ -23,15 +20,15 @@ If the model’s performance on the training data keeps improving but the perfor
 Handling this in an online fashion during training is much more efficient than configuring the number of iterations from
 the outside via traditional, offline hyperparameter tuning, where we would fit again and again with different iterations numbers.
 
-Finally, we will also show how to evaluate the performance on a machine learning model on different *predict sets*, namely the train, test and validation data.
-This can for example be used to assess overfitting.
+When analysing the performance of a machine learning model post-hoc, we are often interested in its performance on the test or validation data.
+To assess the degree of overfitting it can, however, also be of interest to evaluate the training performance.
+Besides illustrating how to enable validation and early stopping in the first two sections, the last part of this chapter shows how to evaluate the performance of a model on those sets.
 
 ## Validation {#sec-validation}
 
 In `mlr3`, `Learner`s can have the properties `"validation"` and `"internal_tuning"` to indicate whether they can make use of a validation set and whether they can internally optimize hyperparameters, for example via early stopping.
-Examples for such learners are boosting algorithms such as xgboost, lightgbm, or catboost, as well as deep learning models from `r ref_pkg("mlr3torch")`.
-BB: maybe mention glmnet here? so stuff which is a bit different as it uses internal tuning but not valid sets?
-In this section we will train xgboost on sonar and keep track of its performance on a validation set.
+Examples for such learners are boosting algorithms such as XGBoost, lightgbm, or catboost, as well as deep learning models from `r ref_pkg("mlr3torch")`.
+In this section we will train XGBoost on sonar and keep track of its performance on a validation set.
 
 ```{r}
 tsk_sonar = tsk("sonar")
@@ -39,8 +36,8 @@ lrn_xgb = lrn("classif.xgboost")
 lrn_xgb
 ```
 
-We now need to configure the validation data.
-For xgboost, there exists a special `watchlist` parameter, but `mlr3` also offers a standardized -- and as we will see later more powerful -- interface via the `$validate` field of the `Learner`.
+To enable validation, we need to configure how to construct the validation data.
+For XGBoost, there exists a special `watchlist` parameter, but `mlr3` also offers a standardized -- and as we will see later more powerful -- interface via the `$validate` field of the `Learner`.
 This field can either be set to:
 
 * `NULL` to use no validation data (default),
@@ -49,14 +46,17 @@ This field can either be set to:
 * `"test"` to use the test set as validation data, which only works in combination with resampling and
   tuning.
 
-Below, we configure the xgboost learner to use $1/3$ of its training data for validation:
-
+Below, we configure the XGBoost learner to use $1/3$ of its training data for validation:
 
 ```{r}
 lrn_xgb$validate = 1/3
 ```
 
-Further, we set the number of iterations (`nrounds`) and which metric to track (`eval_metric`) and train the learner:
+Next, we set the number of iterations (`nrounds`) and which metric to track (`eval_metric`) and train the learner.
+Here, $1/3/$ of the observations of the training task will be solely used for validation and the remaining $2/3$ for training.
+If stratification or grouping is enabled in the task, this will also be respected.
+This was already covered in @sec-performance.
+
 
 ```{r}
 lrn_xgb$param_set$set_values(
@@ -66,14 +66,28 @@ lrn_xgb$param_set$set_values(
 lrn_xgb$train(tsk_sonar)
 ```
 
-How the validation loss is stored in the learner's `$model` depends on the specific learning algorithm.
-For xgboost the history is stored in the `$evaluation_log`.
+Because the XGBoost learned kept a log of the validation performance, we can no access this through the `$model` slit.
+Where exactly in the model this information is kept, depends on the specific learning algorithm. 
+For XGBoost, the history is stored in `$evaluation_log`:
 
 ```{r}
 tail(lrn_xgb$model$evaluation_log)
 ```
 
-But `mlr3` provides a standardized acccessor for the final validation performance via `$internal_valid_scores`.
+The validation loss over time is visualized in the figure below, with the iterations on the x-axis and the validation logloss on the y-axis:
+
+```{r, out.width = "70%"}
+library(ggplot2)
+ggplot(lrn_xgb$model$evaluation_log, aes(x = iter, y = test_logloss)) + 
+  geom_line() + 
+  labs(
+    x = "Boosting Iteration",
+    y = "Validation Logloss"
+  ) + theme_minimal()
+```
+
+What `mlr3` does provide is a standardized acccessor for the final validation performance.
+We can access this via the field `$internal_valid_scores`, which is a named list containing possibly more than one validation metric.
 
 ```{r}
 lrn_xgb$internal_valid_scores
@@ -87,7 +101,7 @@ Such fine-grained control over the validation data is possible by setting the `v
 lrn_xgb$validate = "predefined"
 ```
 
-This allows us to use the *internal validation task* (`$internal_valid_task`) set in the training task.
+This allows us to use the `$internal_valid_task` defined in the training task.
 Below, we set the validation task to use 60 randomly sampled ids and remove them from the primary task.
 
 ```{r}
@@ -99,25 +113,26 @@ tsk_sonar$row_roles$use = setdiff(tsk_sonar$row_ids, valid_ids)
 tsk_sonar$internal_valid_task = tsk_valid
 ```
 
-Note that we could have achieved the same by simply setting `tsk_valid = valid_ids`, but we haven chosen to show the longer route here for clarity.
-The associated validation task now has 60 observations that were removed from the primary task:
+Note that we could have achieved the same by simply setting `tsk_valid = valid_ids`, but we haven chosen to show the longer route for clarity.
+The associated validation task now has 60 observations and the primary task 148:
 
 ```{r}
 tsk_sonar$nrow
 tsk_sonar$internal_valid_task$nrow
 ```
 
-When we now train the xgboost learner on the task, the data from the internal validation task will be used as the validation data.
-Note that the `internal_valid_task` slot is always used, also when you set a ratio value in `learner$validate`, it is simply auto-constructed (and then passed down).
+When we now train the XGBoost learner on the task, the data from the internal validation task will be used for validation.
+Note that the `$internal_valid_task` slot is always used, also when you set a ratio value in `learner$validate`, it is simply auto-constructed (and then passed down).
 
 ```{r}
 lrn_xgb$train(tsk_sonar)
 ```
 
-In many cases, however, one does not only train an individual learner, but combines it with other (preprocessing) steps in a `r ref("GraphLearner")`.
-This is possible, because preprocessing `PipeOp`s also handle the validation task.
+In many cases, however, one does not only train an individual learner, but combines it with other (preprocessing) steps in a `r ref("GraphLearner")`, see @sec-preprocessing.
+Validation in a `GraphLearner` is still possible, because preprocessing `PipeOp`s also handle the validation task.
 While the *train* logic of the `PipeOp` will be applied to the primary task, the *predict* logic will be applied to the validation data.
-Below, we construct a `PipeOpPCA` and apply it to the sonar task.
+This ensures that when the XGBoost learner evaluates its training performance on the validation data, there is no data leakage and we have an unbiased performance estimate.
+Below, we construct a `PipeOpPCA` and apply it to the sonar task with a validation task.
 
 ```{r}
 po_pca = po("pca")
@@ -125,21 +140,22 @@ taskout = po_pca$train(list(tsk_sonar))[[1]]
 taskout$internal_valid_task
 ```
 
-This means that tracking validation performance also works in complex graph learners, something that is not possible by manually setting the `watchlist` parameter of xgboost.
-Below, we combine the chain the PCA operator with xgboost and convert it to a learner.
+This means that tracking validation performance also works in complex graph learners, something that is not possible by manually setting the `watchlist` parameter of XGBoost.
+Below, we chain the PCA operator with XGBoost and convert it to a learner.
 
 ```{r}
 glrn = as_learner(po_pca %>>% lrn_xgb)
 ```
 
-However, we now have to specify the `$validate` field on two levels:
+While this almost 'just works', we now have to specify the `$validate` field on two levels:
 
 1. For the `GraphLearner` itself, i.e. how the validation data is created before the `Task` enters the graph.
 1. For which individual `PipeOp`s that do have the `"validation"` property we actually want to use the validation data.
 
 To simplify this configuration, the `set_validate()` helper function exists.
 When applied to a `GraphLearner`, we can specify the arguments `validate` which determines *how* to create the validation data and optionally the argument `ids` which specifies *which* `PipeOp`s should use it.
-By default, the latter is set to the `$base_learner()` of the `Graph`, which is the last learner, i.e. both calls below are equivalent:
+By default, the latter is set to the `$base_learner()` of the `Graph`, which is the last learner.
+This means that both calls in the following example are equivalent:
 
 ```{r}
 set_validate(glrn, validate = "predefined")
@@ -164,7 +180,7 @@ When employing the validation technique in a `GraphLearner` it is best to first 
 
 ## Internal Tuning {#sec-internal-tuning}
 
-Not only can xgboost log its validation performance, it can also monitor it to *early stop* its training, i.e. perform internal tuning of the `nrounds` hyperparameter during training.
+Not only can XGboost log its validation performance, it can also monitor it to *early stop* its training, i.e. perform internal tuning of the `nrounds` hyperparameter during training.
 This is marked by the `"internal_tuning"` property of the learner:
 
 ```{r}
@@ -174,13 +190,12 @@ lrn_xgb$properties
 Eearly stopping for XGBoost can be enabled by specifying the `early_stopping_rounds` parameter.
 This is also known as *patience* and specifies for how many iterations the validation loss must not improve for training to end.
 The metric that is used for early stopping is the first value that we passed to `eval_metric`, which was the logloss.
-Below, we set it to 10 and also set the performance measure (`eval_metric`) to `"error"`.
+Below, we set it to 10.
 
 ```{r}
 lrn_xgb$param_set$set_values(
   early_stopping_rounds = 10,
-  nrounds = 100,
-  eval_metric = "error"
+  nrounds = 100
 )
 ```
 
@@ -193,21 +208,22 @@ lrn_xgb$internal_tuned_values
 
 By using early stopping, we were able to already terminate training `r lrn_xgb$internal_tuned_values$nrounds` rounds.
 Below, we visualize the validation loss over time and the optimal nrounds is marked red.
+We see that after a logloss plateaus.
 
 ```{r, echo = FALSE, out.width = "70%"}
-library(ggplot2)
 theme_set(theme_minimal())
 data = lrn_xgb$model$evaluation_log
-ggplot(data, aes(x = iter, y = test_error)) +
+ggplot(data, aes(x = iter, y = test_logloss)) +
   geom_line() +
   geom_point(aes(x = lrn_xgb$internal_tuned_values$nrounds,
-    y = lrn_xgb$internal_valid_scores$error), color = "red") +
+    y = lrn_xgb$internal_valid_scores$logloss), color = "red") +
   labs(
-    x = "Iteration", y = "Classification Error"
+    x = "Iteration", y = "Validation Logloss"
   )
 ```
 
-So far, we have merely used the early stopping implementation of xgboost to optimze `nrounds`, but did not tune any other hyperparameters.
+
+So far, we have merely used the early stopping implementation of XGBoost to optimze `nrounds`, but did not tune any other hyperparameters.
 This is where `r mlr3` now shines, as it allows to the internal tuning of a `Learner` with (non-internal) hyperparameter tuning via `r ref_pkg("mlr3tuning")`.
 To do so, we set both parameters to `to_tune()`, but mark `nrounds` to be tuned internally.
 
@@ -220,25 +236,27 @@ lrn_xgb$param_set$set_values(
 
 In such scenarios, what one might often want to use the same validation data to optimize `eta` and `nrounds`.
 This is possible by specifying the `"test"` option of the `validate` field.
-This means that in resampling iteration the validation data will be set to the test set, i.e. the same data that is then also used to score the parameter configuration (to tune `eta`).
+This means that in each resampling iteration the validation data will be set to the test set, i.e. the same data that is then also used to score the parameter configuration (to tune `eta`).
 
 ```{r}
 lrn_xgb$validate = "test"
 ```
 
-Next, we tune xgboost on the sonar task using a simple grid search with 10 evaluations and 3-fold cross-validation.
-Internally, this will train xgboost with 10 different values of `eta` and the `nrounds` parameter fixed to 500, i.e. the upper boundary from above.
+We will now continue to tune XGBoost on the sonar task using a simple grid search with 10 evaluations and 3-fold cross-validation.
+Internally, this will train XGBoost with 10 different values of `eta` and the `nrounds` parameter fixed to 500, i.e. the upper boundary from above.
 For each value of `eta` a 3-fold cross-validation with early stopping will be performed, which yields 3 (possibly different) early stopped values for `nrounds` for each value of `eta`.
-These are combined to a single value according to the aggregation rule, which by default is set to averaging, but can be overwritten when creating the internal tune token, see `r ref("to_tune()")` for more information.
+These are combined to a single value according to an aggregation rule, which by default is set to averaging, but can be overwritten when creating the internal tune token, see `r ref("to_tune()")` for more information.
 
-When combining internal tuning with hyperparameter optimization via `r ref_pkg("mlr3tuning")` we need to specify two performance metrics, one for the internal tuning and one for the `Tuner`.
-For this reason, we require the internal tuning metric to be set explicitly, even if a default value exists.
-It is also possible to set the tuning measure to `msr("internal_valid_scores")`.
-Because a `Learner` can have multiple internal valid scores, the measure allows to select one by specifying the argument `select`.
-We also have to say whether the measure should be minimized by setting the argument `minimize`.
-Note that we could have also used a 'standard' `mlr3::Measure`, but we might then use a different measure for tuning `eta` and `nrounds`.
-However, some `Learner`s even allow to set an `mlr3::Measure` as their evaluation metric.
-You can find out which ones support this feature by checking the corresponding documentation.
+When combining internal tuning with hyperparameter optimization via `r ref_pkg("mlr3tuning")` we need to specify two performance metrics: one for the internal tuning and one for the `Tuner`.
+For this reason, `mlr3` requires the internal tuning metric to be set explicitly, even if a default value exists.
+In order to use the same evaluation metric for both types of hyperparameter optimization, two possibilities exist:
+
+1. To use `msr("internal_valid_scores", select = <id>)` as the tuning measure, which uses `learner$internal_valid_scores$<id>` that is the final validation performance of the learner.
+   Because a `Learner` can have multiple internal valid scores, the measure allows to select one by specifying the argument `select`.
+   We also have to say whether the measure should be minimized by setting the argument `minimize`.
+1. To set both, the `eval_metric` and the tuning measure to the same metric, e.g. `eval_metric = "error"` and `measure = msr("classif.ce")`.
+   Some learners even allow to set the validation metric to an `mlr3::Measure`.
+   You can find out which ones support this feature by checking the corresponding documentation.
 
 ```{r}
 tsk_sonar = tsk("sonar")
@@ -260,10 +278,12 @@ The tuning result contains the best found configuration for both `eta` and `nrou
 ti$result_learner_param_vals[c("eta", "nrounds")]
 ```
 
-We can also extract the configurations from the different tuning iterations from the tuning archive:
-All internally tuned parameters are accessible via the `$internal_tuned_values` list column.
-Below we extract the values for `eta` (transformed back from its logscale), `nrounds` (internally tuned) and the classification error evaluated on the internal validation task, which corresponded to the `Resampling`'s test set because we set `validate = `"test"`.
-We also visualize the results, where we can clearly see the inverse relationship between the two parameters, i.e. a larger step size (`eta`) requires more boosting iterations (`nrounds`).
+We now show how to extract the different parameter configurations iterations from the tuning archive.
+All internally tuned parameters are accessible via the `$internal_tuned_values`.
+This is a list column, because it is possible to tune more than one paramter internally, e.g. when using a `GraphLearner`.
+Below we extract the values for `eta` (transformed back from its logscale), `nrounds` (internally tuned) and the classification error.
+The latter was evaluated on the internal validation tasks, which corresponded to the `Resampling`'s test sets as we specified `validate = `"test"`.
+By visualizing the results we can see an inverse relationship between the two tuning parameters: a larger step size (`eta`) requires more boosting iterations (`nrounds`).
 
 ```{r, out.width = "70%"}
 d = ti$archive$data
@@ -279,14 +299,15 @@ ggplot(data = d, aes(x = eta, y = nrounds, color = ce)) +
 ```
 
 This holds analogously for the `r ref("AutoTuner")`, which will use the internally optimized `nrounds`, as well as the explicitly tuned `eta` for the final model fit.
-The final model will be fit on the whole dataset.
+This means that no validation or early stopping is active during the final model fit and we are utilizing as much data as possible.
 
 ```{r}
 at = auto_tuner(
   tuner = tnr("grid_search"),
   learner = lrn_xgb,
   resampling = rsmp("cv", folds = 3),
-  measure = msr("classif.ce"),
+  measure = msr("internal_valid_score",
+    select = "error", minimize = TRUE),
   term_evals = 10L
 )
 at$train(tsk_sonar)
@@ -294,20 +315,21 @@ at$train(tsk_sonar)
 
 ## Predict Sets {#predict-sets}
 
-Machine learning algorithms are evaluated by making predictions and evaluating them using a performance `r ref("Measure")`.
+Supervised machine learning algorithms are evaluated by making predictions and evaluating them using a performance `r ref("Measure")`.
 When using `resample()` or `benchmark()`, the default behavior is to make these predictions on the *test* set of the `r ref("Resampling")`.
-It is also possible to make predictions on the *train* and *internal_valid* data, by configuring the `$predict_sets` of a `Learner`.
-The latter is only possible if validation data is predefined in the task, or a `Learner` with property `"validation"` has its `$validate` field set.
+It is also possible to make predictions on the `"train"` and `"internal_valid"` data, by configuring the `$predict_sets` of a `Learner`.
+The `"internal_valid"` option is only possible if validation data is predefined in the task, or a `Learner` with property `"validation"` has its `$validate` field set.
 
-Below, we set the predict sets of the previously defined `r ref("AutoTuner")` to test and predict and resample the learner using nested resampling.
+Below, we set the predict sets of the previously defined `r ref("AutoTuner")` to train and test and resample the learner.
 
 ```{r}
 at$predict_sets = c("train", "test")
 rr = resample(tsk_sonar, at, rsmp("cv", folds = 3))
 ```
 
-Afterwards, we can access a different `r ref("Prediction")` object for each of the predict sets via the `$prediction()` function.
+In the resulting `r ref("ResampleResult")` we can access a different `r ref("Prediction")` object for each of the predict sets via the `$prediction()` function.
 These prediction objects are the union of the predictions on all three folds of the outer cross-validation.
+We can also prediction objects for all resampling iterations separately, we can do so using `$predictions()`.
 
 ```{r}
 test_pred = rr$prediction("test")
@@ -316,8 +338,8 @@ train_pred = rr$prediction("train")
 train_pred
 ```
 
-Instead of accessing the predictions, we can also evaluate  measures on the resample result.
-To aggregate a measure on a specific prediction set, we set the `predict_sets` field in the measure.
+Instead of accessing the predictions, we can also directly apply measures to the resample result.
+To aggregate a measure on a specific prediction set, we its `predict_sets` field.
 Here can only select from those predict sets that we configured the `Learner` to predict on.
 
 ```{r}
@@ -327,21 +349,23 @@ rr$aggregate(list(
 ))
 ```
 
+Unsurprisingly, the train error is lower than the test error.
+
 ## Conclusion
 
 In this chapter, we learned how to track the performance of an iterative learning procedure on a validation set.
 This technique also works seemlessly in a graph learner, with the only difference being that one not only has to specify how to create the validation data, but also which PipeOps should use it.
-Furthermore, mlr3's *internal tuning* mechanism allows to combine hyperparameter tuning via `r mlr3tuning` with internal tuning of the learning algorithm, such as early stopping in xgboost.
-Finally, we have learnerd how to configure and evaluate different predicts sets when resampling.
+Furthermore, mlr3's *internal tuning* mechanism allows to combine hyperparameter tuning via `r mlr3tuning` with internal tuning of the learning algorithm, such as early stopping in XGBoost.
+Finally, we have learnerd how to configure and evaluate different predicts sets when conducting resample experiments.
 
 ## Exercises
 
-1. Manually `$train()` a lightgbm classifier from the `r ref_pkg("mlr3extralearners")` on the penguins task using $1/3$ of the training data for validation.
+1. Manually `$train()` a lightgbm classifier from the `r ref_pkg("mlr3extralearners")` extension on the penguins task using $1/3$ of the training data for validation.
    Because the penguins task has missing values, select any method to impute them.
    Explicitly select an evaluation metric to classification error, the maximum number of boosting iterations to 500 and the patience parameter to 10. 
-   Then, show the final validation scores as well as the (early stopped) number of iterations.
-1. Wrap the learner from exercise 1) in an `AutoTuner` and evaluate it using nested resampling, using a three-fold CV for the inner and outer resampling.
-   Also change the rule for aggregating the different boosting iterations from averaging to taking the maximum over the folds.
+   Then, show the final validation scores as well as the early stopped number of iterations.
+1. Wrap the learner from exercise 1) in an `AutoTuner` and evaluate it using nested resampling using a three-fold CV for the inner and outer resampling.
+   Also change the rule for aggregating the different boosting iterations from averaging to taking the maximum across the folds.
    Don't tune any other parameters than the learning rate, which is possible by using `tnr("internal")`.
 1. Let's consider the code below: 
    ```{r}
@@ -370,10 +394,10 @@ Finally, we have learnerd how to configure and evaluate different predicts sets 
    at$train(tsk_sonar)
    ```
 
-   Answer the follwing questions:
-   1. During the hyperparameter optimization, how many observations are used for training the xgboost algorithm (excluding validation data) and how many for the random forest?
+   Answer the follwing questions (ideally without running the code):
+   1. During the hyperparameter optimization, how many observations are used for training the XGBoost algorithm (excluding validation data) and how many for the random forest?
    1. How many observations would be used to train the final model in case xgboost was selected? What if the random forest was selected?
-   1. How would the answers to the last two questions change if we had set the `$validate` field of the tuned graph-learner to `0.3` instead of `"test"`?
+   1. How would the answers to the last two questions change if we had set the `$validate` field of the tuned graph-learner to `0.2` instead of `"test"`?
 
 1. Consider the (erroring) code below:
    ```{r, error = TRUE}
@@ -385,3 +409,7 @@ Finally, we have learnerd how to configure and evaluate different predicts sets 
 
    Can you explain why the code above errs?
    Hint: Should the data that xgboost uses for validation be preprocessed according to the *train* or *predict* logic?
+
+::: {.content-visible when-format="html"}
+`r citeas(chapter)`
+:::
