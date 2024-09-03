@@ -2167,3 +2167,191 @@ We can see, that between women there is an even bigger discrepancy compared to m
 :::
 
 ## Solutions to @sec-valid-tuning
+
+1. Manually `$train()` a lightgbm classifier from `r ref_pkg("mlr3extralearners")` on the pima task using $1/3$ of the training data for validation.
+   Because the pima task has missing values, select some a methdo from `r ref_pkg("mlr3pipelines")` to impute them.
+   Explicitly set the evaluation metric to logloss, the maximum number of boosting iterations to 1000, the patience parameter to 10, and the step size to 0.01.
+   After training the learner show the final validation scores as well as the early stopped number of iterations.
+
+We start by loading the packages and creating the task.
+
+```{r}
+library(mlr3)
+library(mlr3extralearners)
+library(mlr3pipelines)
+
+tsk_pima = tsk("pima")
+tsk_pima
+```
+
+Belowm we see that the task has three features with missing values.
+
+```{r}
+tsk_pima$missings()
+```
+
+Next, we create the lightgbm classifier, but we don't specify the validation data yet.
+
+```{r}
+# don't specify the validation data yet!
+lrn_lgbm = lrn("classif.lightgbm",
+  num_iterations = 1000,
+  early_stopping_rounds = 10,
+  learning_rate = 0.01,
+  eval = "binary_logloss"
+)
+
+glrn = as_learner(po("imputemedian") %>>% lrn_lgbm)
+glrn$id = "lgbm"
+```
+
+After constructing the `GraphLearner`, we now configure the validation data using `r ref("set_validate")`.
+This sets `$validate` for `lrn_lgbm` to `"predefined"` and for the `glrn` itself to `0.3`.
+
+```{r}
+set_validate(glrn, validate = 0.3, ids = "classif.lightgbm")
+glrn$validate
+glrn$pipeops$classif.lightgbm$validate
+```
+
+Finally, we train the learner and inspect the validation scores and internally tuned values.
+
+```{r}
+glrn$train(tsk_pima)
+
+glrn$internal_tuned_values
+glrn$internal_valid_scores
+```
+
+1. Wrap the learner from exercise 1) in an `AutoTuner` using a three-fold CV for the tuning.
+   Also change the rule for aggregating the different boosting iterations from averaging to taking the maximum across the folds.
+   Don't tune any other parameters than the learning rate, which is possible by using `tnr("internal")`.
+   As the tuning measure us the internal validation metric.
+   Compare this learner with a `lrn("classif.rpart")` using a 10-fold outer cross-validation with respect to classification accuracy.
+
+We start by setting the number of boosting iterations to an internal tune token where the maximum number of boosting iterations is 1000 and the aggregation function the maximum.
+Note that the input to the aggregation function is a list of integer values (the early stopped values for the different resampling iterations), so we need to first convert it into an atomic vector before taking the maximum. 
+
+```{r}
+library(mlr3tuning)
+
+glrn$param_set$set_values(
+  classif.lightgbm.num_iterations = to_tune(
+    upper = 1000, internal = TRUE, aggr = function(x) max(unlist(x))
+  )
+)
+```
+
+Because we use the internal validation scores for tuning, no predictions are required, so we can set the learner's predict sets to `NULL`.
+
+
+```{r}
+glrn$predict_sets = NULL
+```
+
+Now we change the validation data from `0.3` to `"test"` where we can omit specifying `ids` as lightgbm is the base learner.
+
+```{r}
+set_validate(glrn, validate = "test")
+```
+
+Next we create the auto tuner using the configuration given in the instructions.
+Because the internal validation measures are computed by lightgbm and not `mlr3` we need to specify whether the metric should be minimized.
+
+```{r}
+at_lgbm = auto_tuner(
+  learner = glrn,
+  tuner = tnr("internal"),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("internal_valid_score", select = "binary_logloss", minimize = TRUE)
+)
+at$id = "at_lgbm"
+```
+
+Finally, we set up the benchmark design, run it and evaluate it using classification accuracy, where the autotuner performs better than the decision tree.
+
+```{r}
+design = benchmark_grid(
+  task = tsk_pima,
+  learners = list(at_lgbm, lrn("classif.rpart")),
+  resamplings = rsmp("cv", folds = 10)
+)
+
+bmr = benchmark(design)
+
+bmr$aggregate(msr("classif.acc"))
+```
+
+1. Consider the code below:
+
+```{r}
+branch_lrn = as_learner(
+  ppl("branch", list(
+    lrn("classif.ranger"),
+    lrn("classif.xgboost",
+      early_stopping_rounds = 10,
+      eval_metric = "error",
+      eta = to_tune(0.001, 0.1, logscale = TRUE),
+      nrounds = to_tune(upper = 1000, internal = TRUE)))))
+
+set_validate(branch_lrn, validate = "test", ids = "classif.xgboost")
+branch_lrn$param_set$set_values(branch.selection = to_tune())
+
+at = auto_tuner(
+  tuner = tnr("grid_search"),
+  learner = branch_lrn,
+  resampling = rsmp("holdout", ratio = 0.8),
+  # cannot use internal validation score because ranger does not have one
+  measure = msr("classif.ce"),
+  term_evals = 10L,
+  store_models = TRUE
+)
+
+tsk_sonar = tsk("sonar")$filter(1:100)
+
+rr = resample(
+  tsk_sonar, at, rsmp("holdout", ratio = 0.8), store_models = TRUE
+)
+```
+
+Answer the follwing questions (ideally without running the code):
+
+1. During the hyperparameter optimization, how many observations are used for training the XGBoost algorithm (excluding validation data) and how many for the random forest?
+
+The outer resampling already removes 20 observations from the data so only 80 datapoints are left for the inner resampling.
+Then, 16 (0.2 * 20; the test set of the inner holdout resampling) observations are used to evaluate the hyperparameter configurations.
+This leaves 64 (80 - 16) observations for training.
+For XGBoost, the 16 observations that comprise the inner test set are also used for validation.
+Therefore, both the random forest and the XGBoost model use 64 observations for training.
+
+1. How many observations would be used to train the final model in case xgboost was selected? What if the random forest was selected?
+
+In both cases, all 80 observations (the train set from the outer resampling) would be used.
+This is because during the final model fit no validation data is present.
+
+1. How would the answers to the last two questions change if we had set the `$validate` field of the graph-learner to `0.25` instead of `"test"`?
+
+In this case, the validation data is **not** identical to the test set of the inner resampling anymore.
+Instead, it is split off the 64 observations that comprise the inner training set.
+Because this happens before the task enters the `GraphLearner`, both the XGBoost model *and* the random forest only get access to 48 ((1 - 0.25) * 64) observations and the remaining 16 are used to create the validation data.
+Note that the random forest will ignore the validation data, as it does not have the `"validation"` property and hence cannot make use of it.
+Furthermore, the autotuner would now use a different validation set to tune and the boosting iterations.
+Therefore, we would usually recommend setting the validation data to `"test"` when used in an autotuner, unless there are specific reasons not to.
+
+4. Consider the (erroring) code below:
+
+```{r, error = TRUE}
+tsk_sonar = tsk("sonar")
+glrn = as_learner(
+  po("pca") %>>% lrn("classif.xgboost", validate = 0.3)
+)
+```
+
+Can you explain *why* the code errors?
+Hint: Should the data that xgboost uses for validation be preprocessed according to the *train* or *predict* logic?
+
+If we would set the `$validate` field of the xgboost classifier to `0.3`, the validation data would be created from the (primary) task of `PipeOpOpPCA`.
+However, this data was preprocessed using the the train logic.
+Because validation performance is supposed to measure how well a model would perform during prediction, the validation should be preprocessed according to the predict logic.
+Therefore it is not possible to set the `$validate` field of `PipeOp`s to values other than `"predefined"` or `NULL`.
+Only the `GraphLearner` itself can dictate *how* the validation data is created *before* it enters the `Graph`, so the validation data is then preprocessed according to the predict logic.
