@@ -9,7 +9,7 @@ aliases:
 
 `r chapter = "Predict Sets, Validation and Internal Tuning (+)"` `r authors(chapter)`
 
-## Predict Sets and Training Error Estimation
+## Predict Sets and Training Error Estimation {#sec-predict-sets}
 
 In the @sec-performance chapter we have already studied in detail how to train, predict and evaluate many different learners. Evaluating a fully trained model usually requires making predictions on unseen test observations. When we predict directly with a trained learner, we can explicitly control which observations are used:
 
@@ -48,7 +48,7 @@ rr$aggregate(list(
 
 The default predict set for a measure is usually the test set. But we can request other sets here. If multiple predict sets are requested for the measure, their predictions are joined, before they are passed into the measure, which then usually calculates an aggregated score over all predicted rows of the set. In our case, unsurprisingly, the train error is lower than the test error.
 
-If we only want to access information that is computed during training, we can even configure the learner not to make any predictions at all. This is useful, for example, for learners that already produce an estimate of their generalization error during training, e.g. using out-of-bag error estimates or validation scores. The former, which is only available to learners with the 'oob_error' property, can be accessed via `r ref("MeasureOOBError")`. The latter is available to learners with the 'validation' property and can be accessed via `r ref("MeasureInternalValidScore")`. Below we evaluate a random forest using its out-of-bag error. Since we do not need any predict sets, we can use `r ref("ResamplingInsample")`, which will use the entire dataset for training.
+If we only want to access information that is computed during training, we can even configure the learner not to make any predictions at all. This is useful, for example, for learners that already produce an estimate of their generalization error during training, e.g. using out-of-bag error estimates or validation scores. The former, which is only available to learners with the 'oob_error' property, can be accessed via `r ref("MeasureOOBError")`. The latter is available to learners with the 'validation' property and is implemented as `r ref("MeasureInternalValidScore")`. Below we evaluate a random forest using its out-of-bag error. Since we do not need any predict sets, we can use `r ref("ResamplingInsample")`, which will use the entire dataset for training.
 
 ```{r}
 tsk_sonar = tsk("sonar")
@@ -60,6 +60,7 @@ rr$aggregate(msr_oob)
 ```
 
 All this works in exactly the same way for benchmarking, tuning, nested resampling, and any other procedure where resampling is internally involved and we can either ask for predictions or apply measures at the end. Below we illustrate this by tuning the `mtry.ratio` parameter of the random forest using a simple grid search with 10 evaluations. Instead of explicitly making predictions on some test data and evaluating them, we use the out-of-bag error to evaluate the different values of `mtry.ratio`.
+This can speed up the tuning process considerably.
 
 ```{r}
 lrn_rf$param_set$set_values(
@@ -159,14 +160,14 @@ tsk_sonar$filter(setdiff(tsk_sonar$row_ids, valid_ids))
 tsk_sonar$internal_valid_task = tsk_valid
 ```
 
-Note that we could have achieved the same by simply setting `tsk_valid = valid_ids`, but we have chosen to show the more explicit way for the sake of clarity. The associated validation task now has 60 observations and the primary task 148:
+Note that we could have achieved the same by simply setting `tsk_valid$internal_valid_task = valid_ids`, but we have chosen to show the more explicit way for the sake of clarity. The associated validation task now has 60 observations and the primary task 148:
 
 ```{r}
-tsk_sonar$internal_valid_task$nrow
-tsk_sonar$nrow
+c(tsk_sonar$internal_valid_task$nrow, tsk_sonar$nrow)
 ```
 
-When we now train the XGBoost learner on the task, the data from the internal validation task will be used for validation. Note that the `$internal_valid_task` slot is always used internally, even if you set a ratio value in `learner$validate`, it is simply automatically constructed (and then passed down).
+When we now train the XGBoost learner on the task, the data from the internal validation task will be used for validation.
+Note that the `$internal_valid_task` slot is always used internally, even if you set a ratio value in `learner$validate`, it is simply automatically constructed (and then passed down).
 
 ```{r}
 lrn_xgb$train(tsk_sonar)
@@ -186,7 +187,7 @@ The preprocessing that is applied to the `$internal_valid_task` during `$train()
 po_pca$predict(list(tsk_sonar$internal_valid_task))[[1L]]
 ```
 
-This means that tracking validation performance works even in complex graph learners, which is not possible when manually setting the `watchlist` parameter of XGBoost. Below, we chain the PCA operator to XGBoost and convert it to a learner.
+This means that tracking validation performance works even in complex graph learners, which would not be possible when setting the `watchlist` parameter of XGBoost. Below, we chain the PCA operator to XGBoost and convert it to a learner.
 
 ```{r}
 glrn = as_learner(po_pca %>>% lrn_xgb)
@@ -249,8 +250,8 @@ theme_set(theme_minimal())
 data = lrn_xgb$model$evaluation_log
 ggplot(data, aes(x = iter, y = test_logloss)) +
   geom_line() +
-  geom_point(aes(x = lrn_xgb$internal_tuned_values$nrounds,
-    y = lrn_xgb$internal_valid_scores$logloss), color = "red") +
+  geom_point(data = data.table(x = lrn_xgb$internal_tuned_values$nrounds,
+    y = lrn_xgb$internal_valid_scores$logloss), aes(x = x, y = y, color = "red")) +
   labs(
     x = "Iteration", y = "Validation Logloss"
   )
@@ -317,7 +318,7 @@ ggplot(data = d, aes(x = eta, y = nrounds, color = logloss)) +
 ```
 
 This also works with an `r ref("AutoTuner")`, which will use the internally optimized `nrounds`, as well as the offline tuned `eta` for the final model fit.
-This means that there is no validation or early stopping when training the final model, and we use as much data as possible.
+This means that there is no validation or early stopping when training the final model, and we use all available data.
 
 ```{r}
 at = auto_tuner(
@@ -353,12 +354,17 @@ bmr$aggregate(msr("classif.ce"))
 ```
 
 At last, we will cover how to enable internal tuning when manually specifying a search space with the `ps()` function instead of the `to_tune()`-mechanism.
-While the latter is more convenient and therefore usually recommended, manually defining a search space gives you for more flexibility with respect to parameter transformations, see e.g. @sec-tune-trafo. Below, we define the search space from the previous example. To mark the `nrounds` parameter for internal tuning we have to tag it with `"internal_tuning"` and specify the aggregation function, in this case to take the average number of rounds across the folds.
+While the latter is more convenient and therefore usually recommended, manually defining a search space gives you for more flexibility with respect to parameter transformations, see e.g. @sec-tune-trafo.
+There are two ways to do this:
+1. We can include the internally tuned parameters in the primary `search_space`, specify an aggregation function and tag them with `"internal_tuning"`.
+2. We define a seperate `internal_search_space` where we also define the aggregation function but don't include the `"internal_tuning"` tag.
+
+We start by illustrating the first approach, which is more compact as the search space is defined as a single object.
 
 ```{r}
 search_space = ps(
   eta = p_dbl(0.001, 0.1, logscale = TRUE),
-  nrounds = p_dbl(upper = 500, tags = "internal_tuning",
+  nrounds = p_int(upper = 500, tags = "internal_tuning",
     aggr = function(x) as.integer(mean(unlist(x))))
 )
 ```
@@ -373,6 +379,35 @@ at = auto_tuner(
   measure = msr("internal_valid_score",
     select = "logloss", minimize = TRUE),
   search_space = search_space,
+  term_evals = 10L
+)
+at$train(tsk_sonar)
+```
+
+One reason to use the second approach is when a global parameter transformation (`.extra_trafo`) is applied to the primary search space.
+Univariate transformation, such as logarithmic scaling, are no problem.
+Below, we demonstrate this using an illustrative example where we sample set the `max_depth` of the trees depending on the value of `eta`:
+
+```{r}
+search_space = ps(eta = p_dbl(0.001, 0.1, logscale = TRUE),
+  .extra_trafo = function(x, param_set) {
+    x$max_depth = if (exp(x$eta) < 0.01) 10 else 20
+    x
+  })
+
+internal_search_space = ps(
+  nrounds = p_dbl(upper = 500, tags = "internal_tuning",
+    aggr = function(x) as.integer(mean(unlist(x))))
+)
+
+at = auto_tuner(
+  tuner = tnr("grid_search"),
+  learner = lrn_xgb,
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("internal_valid_score",
+    select = "logloss", minimize = TRUE),
+  search_space = search_space,
+  internal_search_space = internal_search_space,
   term_evals = 10L
 )
 at$train(tsk_sonar)
@@ -426,7 +461,7 @@ In this chapter we first learned how to evaluate machine learning methods on dif
 
 4.  Look at the (failing) code below:
 
-    ```{r, error = TRUE}
+    ```{r, error = TRUE, include = FALSE}
     tsk_sonar = tsk("sonar")
     glrn = as_learner(
       po("pca") %>>% lrn("classif.xgboost", validate = 0.3)
