@@ -21,23 +21,25 @@ pred1 = lrn_rf$predict(tsk_sonar, row_ids = 1:3)
 pred2 = lrn_rf$predict_newdata(tsk_sonar$data(1:3))
 ```
 
-But when using `resample()` or `benchmark()`, the default behavior is to predict on the *test* set of the resampling. It is also possible to make predictions on the *train* and *internal_valid* data, by configuring the `$predict_sets` of a learner. The *internal_valid* option (see next sections) is only possible if validation data is predefined in the task, or if a learner with property 'validation' has its `$validate` field set.
-
-We now configure our learner to make predictions on the train and test sets during resampling. The former may sometimes be of interest for further analysis or to study overfitting. Or maybe we are simply curious.
+But when using `resample()` or `benchmark()`, the default behavior is to predict on the *test* set of the resampling. It is also possible to make predictions on other dedicated subsets of the task and data, i.e. the *train* and *internal_valid* data, by configuring the `$predict_sets` of a learner.
+We will discuss the more complex *internal_valid* option in the next sections.
+We will now look at how to predict on *train* sets.
+This is sometimes be of interest for further analysis or to study overfitting. Or maybe we are simply curious.
+Let's configure our learner to simultaneously predict on *train* and *test*:
 
 ```{r}
 lrn_rf$predict_sets = c("train", "test")
 rr = resample(tsk_sonar, lrn_rf, rsmp("cv", folds = 3))
 ```
 
-The learner, during resampling, will now after having been trained for the current iteration, produce predictions on all requested sets. To access predictions in our case, we can either ask for a list of 3 prediction objects, one for each cross-validation fold, or we can ask for a combined prediction object for the whole CV -- which for a CV contains as many prediction rows as there are observations in the task.
+The learner, during resampling, will now after having been trained for the current iteration, produce predictions on all requested sets. To access them, we can either ask for a list of 3 prediction objects, one per CV fold, or we can ask for a combined prediction object for the whole CV -- which in this case contains as many prediction rows as observations in the task.
 
 ```{r}
 str(rr$predictions("test")) # or str(rr$predictions("train"))
 rr$prediction("test") # or rr$prediction("train")
 ```
 
-We can also apply measures to specific sets of the resample result:
+We can also apply performance measures to specific sets of the resample result:
 
 ```{r}
 rr$aggregate(list(
@@ -46,12 +48,11 @@ rr$aggregate(list(
 ))
 ```
 
-The default predict set for a measure is usually the test set. But we can request other sets here. If multiple predict sets are requested for the measure, their predictions are joined, before they are passed into the measure, which then usually calculates an aggregated score over all predicted rows of the set. In our case, unsurprisingly, the train error is lower than the test error.
+The default predict set for a measure is usually the test set. But we can request other sets here. If multiple predict sets are requested for the measure, their predictions are joined before they are passed into the measure, which then usually calculates an aggregated score over all predicted rows of the set. In our case, unsurprisingly, the train error is lower than the test error.
 
-If we only want to access information that is computed during training, we can even configure the learner not to make any predictions at all. This is useful, for example, for learners that already produce an estimate of their generalization error during training, e.g. using out-of-bag error estimates or validation scores. The former, which is only available to learners with the 'oob_error' property, can be accessed via `r ref("MeasureOOBError")`. The latter is available to learners with the 'validation' property and is implemented as `r ref("MeasureInternalValidScore")`. Below we evaluate a random forest using its out-of-bag error. Since we do not need any predict sets, we can use `r ref("ResamplingInsample")`, which will use the entire dataset for training.
+If we only want to access information that is computed during training, we can even configure the learner not to make any predictions at all. This is useful, for example, for learners that already (in their underlying implementation) produce an estimate of their generalization error during training, e.g. using out-of-bag error estimates or validation scores. The former, which is only available to learners with the 'oob_error' property, can be accessed via `r ref("MeasureOOBError")`. The latter is available to learners with the 'validation' property and is implemented as `r ref("MeasureInternalValidScore")`. Below we evaluate a random forest using its out-of-bag error. Since we do not need any predict sets, we can use `r ref("ResamplingInsample")`, which will use the entire dataset for training.
 
 ```{r}
-tsk_sonar = tsk("sonar")
 lrn_rf$predict_sets = NULL
 rsmp_in = rsmp("insample")
 rr = resample(tsk_sonar, lrn_rf, rsmp_in, store_models = TRUE)
@@ -59,8 +60,9 @@ msr_oob = msr("oob_error")
 rr$aggregate(msr_oob)
 ```
 
-All this works in exactly the same way for benchmarking, tuning, nested resampling, and any other procedure where resampling is internally involved and we can either ask for predictions or apply measures at the end. Below we illustrate this by tuning the `mtry.ratio` parameter of the random forest using a simple grid search with 10 evaluations. Instead of explicitly making predictions on some test data and evaluating them, we use the out-of-bag error to evaluate the different values of `mtry.ratio`.
-This can speed up the tuning process considerably.
+All this works in exactly the same way for benchmarking, tuning, nested resampling, and any other procedure where resampling is internally involved and we either generate predictions or apply performance measures on them. Below we illustrate this by tuning the `mtry.ratio` parameter of a random forest (with a simple grid search).
+Instead of explicitly making predictions on some test data and evaluating them, we use OOB error to evaluate `mtry.ratio`.
+This can speed up the tuning process considerably, as in this case only one RF is fitted (it is simply trained) and we can access the OOB from this single model, instead of fitting multiple models. As the OOB observations are untouched during the training of each tree in the ensemble, this still produces a valid performance estimate.
 
 ```{r}
 lrn_rf$param_set$set_values(
@@ -80,7 +82,7 @@ ti = tune(
 
 ## Validation {#sec-validation}
 
-For iterative training (which many learners use) it can be interesting to track performance *during* training on *validation* data. One can use this for simple logging or posthoc analysis, but the major use case is early stopping. If the model’s performance on the training data keeps improving but the performance on the validation data plateaus or degrades, this indicates overfitting and we should stop iterative training. Handling this in an online fashion during training is much more efficient than configuring the number of iterations from the outside via traditional, offline hyperparameter tuning, where we would fit the model again and again with different iteration numbers.
+For iterative training (which many learners use) it can be interesting to track performance *during* training on *validation* data. One can use this for simple logging or posthoc analysis, but the major use case is early stopping. If the model’s performance on the training data keeps improving but the performance on the validation data plateaus or degrades, this indicates overfitting and we should stop iterative training. Handling this in an online fashion during training is much more efficient than configuring the number of iterations from the outside via traditional, offline hyperparameter tuning, where we would fit the model again and again with different iteration numbers (and would not exploit any information regarding sequential progress).
 
 In `mlr3`, learners can have the 'validation' and 'internal_tuning' properties to indicate whether they can make use of a validation set and whether they can internally optimize hyperparameters, for example by stopping early. To check if a given learner supports this, we can simply access its `$properties` field. Examples of such learners are boosting algorithms like XGBoost, LightGBM, or CatBoost, as well as deep learning models from `r ref_pkg("mlr3torch")`. In this section we will train XGBoost on sonar and keep track of its performance on a validation set.
 
@@ -109,7 +111,8 @@ Below, we configure the XGBoost learner to use $1/3$ of its training data for va
 lrn_xgb$validate = 1/3
 ```
 
-Next, we set the number of iterations (`nrounds`) and which metric to track (`eval_metric`) and train the learner. Here, $1/3$ of the observations from the training task will be solely used for validation and the remaining $2/3$ for training. If stratification or grouping is enabled in the task, this will also be respected. This has already been covered in @sec-performance.
+Next, we set the number of iterations (`nrounds`) and which metric to track (`eval_metric`) and train the learner. Here, $1/3$ of the observations from the training task will be solely used for validation and the remaining $2/3$ for training. If stratification or grouping is enabled in the task, this will also be respected.
+For further details on this see @sec-performance.
 
 ```{r}
 lrn_xgb$param_set$set_values(
@@ -160,14 +163,15 @@ tsk_sonar$filter(setdiff(tsk_sonar$row_ids, valid_ids))
 tsk_sonar$internal_valid_task = tsk_valid
 ```
 
-Note that we could have achieved the same by simply setting `tsk_valid$internal_valid_task = valid_ids`, but we have chosen to show the more explicit way for the sake of clarity. The associated validation task now has 60 observations and the primary task 148:
+Note that we could have achieved the same by simply setting `tsk_valid$internal_valid_task = valid_ids`, but showed the explicit way for completeness sake.
+The associated validation task now has 60 observations and the primary task 148:
 
 ```{r}
 c(tsk_sonar$internal_valid_task$nrow, tsk_sonar$nrow)
 ```
 
-When we now train the XGBoost learner on the task, the data from the internal validation task will be used for validation.
-Note that the `$internal_valid_task` slot is always used internally, even if you set a ratio value in `learner$validate`, it is simply automatically constructed (and then passed down).
+When we now train, the learner will validate itself on the specified additional task.
+Note that the `$internal_valid_task` slot is always used internally, even if you set a ratio value in `learner$validate`, it is simply automatically auto-constructed (and then passed down).
 
 ```{r}
 lrn_xgb$train(tsk_sonar)
@@ -181,13 +185,13 @@ taskout = po_pca$train(list(tsk_sonar))[[1]]
 taskout$internal_valid_task
 ```
 
-The preprocessing that is applied to the `$internal_valid_task` during `$train()` is equivalent to making a prediction for it:
+The preprocessing that is applied to the `$internal_valid_task` during `$train()` is equivalent to predicting on it:
 
 ```{r}
 po_pca$predict(list(tsk_sonar$internal_valid_task))[[1L]]
 ```
 
-This means that tracking validation performance works even in complex graph learners, which would not be possible when setting the `watchlist` parameter of XGBoost. Below, we chain the PCA operator to XGBoost and convert it to a learner.
+This means that tracking validation performance works even in complex graph learners, which would not be possible when simply setting the `watchlist` parameter of XGBoost. Below, we chain the PCA operator to XGBoost and convert it to a learner.
 
 ```{r}
 glrn = as_learner(po_pca %>>% lrn_xgb)
@@ -243,7 +247,7 @@ lrn_xgb$train(tsk_sonar)
 lrn_xgb$internal_tuned_values
 ```
 
-By using early stopping, we were able to already terminate training after `r lrn_xgb$internal_tuned_values$nrounds + lrn_xgb$param_set$values$early_stopping_rounds` iterations. Below, we visualize the validation loss over time and the optimal nrounds is marked red. We can see that the logloss plateaus after `r lrn_xgb$internal_tuned_values$nrounds` rounds, but training continues for a while afterwards due to the patience.
+By using early stopping, we were able to already terminate training after `r lrn_xgb$internal_tuned_values$nrounds + lrn_xgb$param_set$values$early_stopping_rounds` iterations. Below, we visualize the validation loss over time and the optimal nrounds is marked red. We can see that the logloss plateaus after `r lrn_xgb$internal_tuned_values$nrounds` rounds, but training continues for a while afterwards due to the patience setting.
 
 ```{r, echo = FALSE, out.width = "70%"}
 theme_set(theme_minimal())
@@ -253,7 +257,7 @@ ggplot(data, aes(x = iter, y = test_logloss)) +
   geom_point(data = data.table(x = lrn_xgb$internal_tuned_values$nrounds,
     y = lrn_xgb$internal_valid_scores$logloss), aes(x = x, y = y, color = "red")) +
   labs(
-    x = "Iteration", y = "Validation Logloss", 
+    x = "Iteration", y = "Validation Logloss",
     color = NULL
   )
 ```
@@ -273,14 +277,16 @@ In such scenarios, one might often want to use the same validation data to optim
 lrn_xgb$validate = "test"
 ```
 
-We will now continue to tune XGBoost on the sonar task using a simple grid search with 10 evaluations and 3-fold cross-validation. Internally, this will train XGBoost with 10 different values of `eta` and the `nrounds` parameter fixed at 500, i.e. the upper bound from above. For each value of `eta` a 3-fold cross-validation with early stopping will be performed, yielding 3 (possibly different) early stopped values for `nrounds` for each value of `eta`. These are combined into a single value according to an aggregation rule, which by default is set to averaging, but which can be overridden when creating the internal tune token, see `r ref("to_tune()")` for more information.
+We will now continue to tune XGBoost with a simple grid search with 10 evaluations and a 3-fold CV for inner resampling.
+Internally, this will train XGBoost with 10 different values of `eta` and the `nrounds` parameter fixed at 500, i.e. the upper bound from above. For each value of `eta` a 3-fold CV with early stopping will be performed, yielding 3 (possibly different) early stopped values for `nrounds` for each value of `eta`. These are combined into a single value according to an aggregation rule, which by default is set to averaging, but which can be overridden when creating the internal tune token, see `r ref("to_tune()")` for more information.
 
 When combining internal tuning with hyperparameter optimization via `r ref_pkg("mlr3tuning")` we need to specify two performance metrics: one for the internal tuning and one for the `Tuner`. For this reason, `mlr3` requires the internal tuning metric to be set explicitly, even if a default value exists. There are two ways to use the same metric for both types of hyperparameter optimization:
 
 1.  Use `msr("internal_valid_scores", select = <id>)`, i.e. the final validation score, as the tuning measure. As a learner can have multiple internal valid scores, the measure allows us to select one by specifying the `select` argument. We also need to specify whether the measure should be minimized.
 2.  Set both, the `eval_metric` and the tuning measure to the same metric, e.g. `eval_metric = "error"` and `measure = msr("classif.ce")`. Some learners even allow to set the validation metric to an `mlr3::Measure`. You can find out which ones support this feature by checking their corresponding documentation. One example for this is XGBoost.
 
-The advantage of using the first option is that the predict step can be skipped because the internal validation scores are already computed during training. This is similar to evaluating the random forest from @sec-predict-sets using the out-of-bag error.
+The advantage of using the first option is that the predict step can be skipped because the internal validation scores are already computed during training.
+In a certain sense, this is similar to the evaluation of the random forest with the OOB error in @sec-predict-sets.
 
 ```{r}
 tsk_sonar = tsk("sonar")
