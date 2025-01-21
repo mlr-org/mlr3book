@@ -1,6 +1,6 @@
 # mlr3book
 
-[![mlr3book](https://github.com/mlr-org/mlr3book/workflows/mlr3book/badge.svg)](https://github.com/mlr-org/mlr3book/actions?query=workflow%3Amlr3book)
+[![mlr3book](https://github.com/mlr-org/mlr3book/actions/workflows/book-weekly.yml/badge.svg)](https://github.com/mlr-org/mlr3book/actions/workflows/book-weekly.yml)
 [![StackOverflow](https://img.shields.io/badge/stackoverflow-mlr3-orange.svg)](https://stackoverflow.com/questions/tagged/mlr3)
 [![Mattermost](https://img.shields.io/badge/chat-mattermost-orange.svg)](https://lmmisld-lmu-stats-slds.srv.mwn.de/mlr_invite/)
 
