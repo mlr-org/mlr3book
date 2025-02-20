@@ -20,9 +20,33 @@ You can read the rendered version of the book in either:
 
 To render the book yourself, follow these steps:
 
-1. Clone this repository (https://github.com/mlr-org/mlr3book.git)
-2. Install Quarto >=1.3.283 if needed
-3. Run `make serve` to render the book to HTML and preview on a local server or `make pdf` to render to PDF (other options are available and documented in the Makefile), note we use xelatex for rendering to PDF
+1. Clone this repository (https://github.com/mlr-org/mlr3book.git) and navigate to the `mlr3book` directory.
+2. Pull the docker image `docker pull mlrorgdocker/mlr3-book`.
+3. Preview the book with
+
+```bash
+docker run -v $(pwd):/book \
+ --rm \
+ -p 8888:8888 \
+ mlrorgdocker/mlr3-book quarto preview book/book --port 8888 --host 0.0.0.0 --no-browser
+```
+
+This command mounts your current directory into the docker container, allowing quarto to render the book and serve it on port 8888.
+Access the preview at `http://0.0.0.0:8888`.
+
+Make your changes locally and preview them with the above command.
+Once you are happy with your changes, open a pull request.
+The pull request will include a preview of your changes
+
+If your changes require new packages, install them in the docker image using the `remotes` package.
+
+```r
+remotes::install_github("mlr-org/mlr3extralearners")
+remotes::install_cran("qgam")
+```
+
+You can add these command temporary at the beginning of the new chapter.
+Once the pull request is accepted, add the new packages to the mlr3-book dockerfile at [https://github.com/mlr-org/mlr3docker](mlr-org/mlr3docker) and remove the installation with `remotes`.
 
 ## Contributing to the book
 
@@ -35,10 +59,3 @@ When (non-trivial) changes and corrections are made to chapters that are are inc
 When adding new chapters to the book not present in the published version, these should be marked as *Online Only* in their title.
 For such newly added chapters that are in early stages and have not been rigorously edited and reviewed, these should be additionally marked as being a *Draft*.
 
-* If you add a new package dependency to the book, please follow the following steps to update the lockfile:
-  * Start an R session in the `book/` directory
-  * Activate the project with `renv::activate()`
-  * Restore the project environment with `renv::restore()`
-  * Run `renv::install()` to install the new package
-  * Update the Lockfile with `renv::snapshot()`
-  * Commit `book/renv.lock` with your changes and create a pull request.
