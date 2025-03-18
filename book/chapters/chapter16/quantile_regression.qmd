@@ -18,17 +18,19 @@ remotes::install_cran("qgam")
 
 ## Introduction {#sec-introduction}
 
-In supervised learning, regression models typically predict the conditional mean of the target variable given the input features. While this is useful in many applications, relying solely on the mean can be limiting. Quantile regression extends standard regression by predicting conditional quantiles, allowing us to estimate different points of the outcome distribution rather than just a single central tendency.
+In supervised learning, regression models typically predict the conditional mean of the target variable given the input features. While this is useful in many applications, relying solely on the mean can be limiting. Quantile regression extends standard regression by predicting conditional quantiles, allowing us to estimate different points of the outcome distribution rather than just the mean. Instead of answering "What is the expected outcome given these features?", quantile regression asks, "What is the outcome at a given probability level (e.g., 10th percentile, median, 90th percentile)?". This allows us to estimate different points of the outcome distribution rather than just a single central tendency.
 
-A key concept in estimating quantile regression models is the pinball loss function, which generalizes the mean absolute error (`r ref("mlr3measures::mae()")`) to optimize for arbitrary quantiles. To understand this, we need to recall that the median, which is equivalent to the 0.5-quantile, minimizes the MAE. Pinball loss extends this idea to quantile-specific minimization, ensuring that predictions align with the desired quantile rather than the median. This enables models to estimate not just the center of the distribution, but also upper and lower bounds.
+A key concept in estimating quantile regression models is the pinball loss function, which generalizes the mean absolute error (`msr("regr.mae")`) to optimize for arbitrary quantiles $\tau$. To understand this, we need to recall that the median (i.e. the 0.5-quantile) minimizes the MAE. Pinball loss extends this idea to quantile-specific minimization by introducing an asymmetry to the loss function that encourages the model to focus on under- or over-prediction based on the chosen quantile level. This enables models to estimate not just the center of the distribution, but also upper and lower bounds.
+
+At its core, the pinball loss (`msr("regr.pinball")`) measures absolute differences between predicted and actual values, similar to the MAE. However, unlike MAE, it penalizes over- and under-predictions differently based on the value of $\tau$. For instance, setting $\tau = 0.1$ means overpredictions are 9 times more expensive than underpredictions, leading the model to systematically underestimate the target. Conversely, $\tau = 0.9$ results in a model that tends to overestimate the target. We can connect this directly to quantiles: If the model is trained to minimize pinball loss for a given quantile $\tau$, then $\tau \%$ of the observed values should be below the predicted value, and $(1 - \tau) \%$ should be above it. For example, a model trained with $\tau = 0.1$ will produce predictions such that 10\% of observed values fall below its predictions, making it an estimator of the 10th percentile.
 
 Quantile regression is particularly useful in scenarios where we want to model uncertainty and extremes in data. Instead of returning a single estimate, quantile regression can provide multiple upper and lower bounds for predictions. This can be relevant for:
 
 -   Constructing prediction intervals: By predicting multiple quantiles (e.g. 0.05, 0.5, or 0.95), we get a prediction interval around our estimates.
 -   Identifying extreme values: In applications such as risk analysis, financial modeling, or weather forecasting, we may be particularly interested in predicting the worst-case or best-case outcomes (e.g., the 5th quantile for a stock price drop).
--   Handling heteroskedastic data: When the variance of the response variable changes with the input features, quantile regression provides a more accurate modeling approach.
+-   Handling heteroscedastic data: When the variance of the response variable changes with the input features, quantile regression provides a more accurate modeling approach.
 
-In this chapter, we will explore how to work with quantile regression in `mlr3` by contrasing different approaches to estimating conditional quantiles.
+In this chapter, we will explore how to work with quantile regression in `mlr3` by contrasing different approaches to estimate conditional quantiles.
 
 ## Synthetic data set generation {#sec-data-generation}
 
@@ -41,7 +43,7 @@ n = 10000
 x = runif(n, min = 1, max = 15)
 f = function(x) 2 + ((10 * x * cos(x)) / (x^2))
 
-variance = function(x) 0.5 * sqrt(x)  # heteroskedastic variances
+variance = function(x) 0.5 * sqrt(x)  # heteroscedastic variance
 noise = rnorm(n, mean = 0, sd = sqrt(variance(x)))
 data = data.table(x = x, y = f(x) + noise)
 ```
@@ -58,11 +60,11 @@ ggplot() +
   theme_minimal()
 ```
 
-This plot reveals two important properties of our data. Firstly, we can see that the structure of the underlying function exhibits more oscillations for small values of `x` but becomes smoother for larger values. Secondly, the plot shows the heteroskedasticity in our data as the variance of `y` increases as `x` grows.
+This plot reveals two important properties of our data. Firstly, we can see that the structure of the underlying function exhibits more oscillations for small values of `x` but becomes smoother for larger values. Secondly, the plot shows the heteroscedasticity in our data as the variance of `y` increases as `x` grows.
 
-Because of the heteroskedasticity, mean-based models will struggle to provide robust predictions, especially for larger values of `x`, as they will be heavily influenced by extreme deviations. In contrast, the median (0.5-quantile) provides a more stable estimate, while other quantiles (e.g., 0.05 and 0.95) allow us to estimate uncertainty and extreme outcomes.
+Because of the heteroscedasticity, mean-based models will struggle to provide robust predictions, especially for larger values of `x`, as they will be heavily influenced by extreme deviations. In contrast, the median (0.5-quantile) provides a more stable estimate, while other quantiles (e.g., 0.05 and 0.95) allow us to estimate uncertainty and extreme outcomes.
 
-Now that we have generated our data set, we transform it into a `r ref("TaskRegr")` and split it into a train and test set for modeling.
+Now that we have generated our data set, we transform it into a regression task and split it into a train and test set for modeling.
 
 ```{r}
 library(mlr3verse)
@@ -81,22 +83,18 @@ Now that we have generated and visualized our data, we turn to quantile regressi
 
 We compare two different approaches for quantile regression:
 
--   Random Regression Forests (`regr.ranger`), a tree-based method that directly estimates quantiles.
--   Quantile Regression with Splines (`regr.qgam`), a smooth, flexible approach using generalized additive models (GAMs).
+-   Random Regression Forests (`"regr.ranger"`), a tree-based method that directly estimates quantiles.
+-   Quantile Regression with Splines (`"regr.qgam"`), a smooth, flexible approach using generalized additive models (GAMs).
 
 ### Random Regression Forest {#sec-quantile-ranger}
 
-The first learner we apply is a random regression forest (`regr.ranger`), implemented in `r ref_pkg("mlr3learners")` as `r ref("mlr3learners::LearnerRegrRanger")`. Random forests are used in supervised learning due to their ability to model complex interactions and non-linear relationships. The ranger implementation allows us to directly estimate quantiles, making it a good choice for quantile regression.
+The first learner we apply is a random regression forest (`lrn("regr.ranger")`), implemented in `r ref_pkg("mlr3learners")`. Random forests are used in supervised learning due to their ability to model complex interactions and non-linear relationships. The ranger implementation allows us to directly estimate quantiles, making it a good choice for quantile regression.
 
 ```{r, message=FALSE}
 lrn_ranger = lrn("regr.ranger", predict_type = "quantiles",
                      quantiles = qs, quantile_response = 0.5)
-
-lrn_ranger$param_set$values$min.node.size = 10
-lrn_ranger$param_set$values$num.trees = 100
-lrn_ranger$param_set$values$mtry = 1
-
-lrn_ranger$train(task, splits$train)
+lrn_ranger$param_set$set_values(min.node.size = 10, num.trees = 100, mtry = 1)
+lrn_ranger$train(task, row_ids = splits$train)
 ```
 
 In the above code, we train the random regression forest model on our test data set, configuring it to predict the 0.05, 0.25, 0.5, 0.75, and 0.95 quantiles. The median is set as the `response` of the Learner.
@@ -104,11 +102,12 @@ In the above code, we train the random regression forest model on our test data 
 To understand how our trained model behaves on unseen data, we predict with the test set and plot the predicted quantiles against the true test data. Each colored line represents a different quantile estimate, and the black curve represents the true function.
 
 ```{r}
-prds_ranger = lrn_ranger$predict(task, splits$test)
+prds_ranger = lrn_ranger$predict(task, row_ids = splits$test)
 ```
 
-
 ```{r, echo=FALSE}
+#| fig-cap: Results of quantile regression with GAM. 90%-prediction interval in dark blue and 50%-prediction interval in light blue. The red line is the underlying function.
+
 data_ranger = as.data.table(prds_ranger)
 data_ranger[, x := task$data(rows = splits$test)$x]
 
@@ -119,14 +118,6 @@ data_ranger_quantiles = melt(
   variable.name = "quantile",
   value.name = "predicted_value"
 )
-
-ggplot(data_ranger_quantiles) +
-  geom_point(aes(x = x, y = truth), alpha = 0.2, color = "darkgrey", size = 0.5) +
-  geom_line(aes(x = x, y = predicted_value, color = quantile), linewidth = 0.3) +
-  geom_line(data = true_data, aes(x = x, y =y), color = "black") +
-  xlim(c(1, 15)) +
-  labs(title = "", x = "x", y = "y", color = "Quantile") +
-  theme_minimal()
 
 ggplot(data_ranger, aes(x = x)) +
   geom_line(aes(y = q0.05), color = "blue", linewidth = 0.2) +
@@ -144,19 +135,19 @@ ggplot(data_ranger, aes(x = x)) +
 
 We can see that the random forest captures the overall trend of the function. It provides quantile estimates that increase as `x` increases and handles the non-linearity of our data well due to its ensemble nature.
 
-But the predicted quantiles appear overly jagged and spiky, which suggests that the model is overfitting to the noise in the training data rather than capturing smooth trends. The median estimate oscillates around the true function but does not consistently align with it. The reason for these limitations lies in how random forests construct quantiles. They are estimated from terminal node distributions, which may lead to discontinuous or highly variable predictions.
+But the predicted quantiles appear overly jagged and spiky, which suggests that the model is overfitting to the noise in the training data rather than capturing smooth trends. The median estimate oscillates around the true function but does not consistently align with it. The reason for these limitations lies in how random forests construct quantiles. In quantile regression forests, predictions are derived from the empirical distribution of the response values within the terminal nodes of individual trees. Each tree partitions the feature space into regions, and all observations that fall into the same region (terminal node) share the same conditional distribution estimate. Quantiles are computed based on the sorted values of these observations. Because the number of samples in each terminal node is finite, the estimated quantiles are discrete rather than continuous, leading to the characteristic "stair-step" appearance in the predictions. If a particular terminal node contains only a small number of observations, the estimated quantiles may shift abruptly between adjacent nodes, creating jagged or spiky predictions. Additionally, the aggregation across trees averages over multiple step functions, which can result in piecewise-constant and noisy quantile estimates.
 
 ### Smooth Additive Model with PipeOpLearnerQuantiles {#sec-quantile-qgam}
 
-To address the limitations that we observed with the random regression forest, we will now consider an alternative method: quantile regression with smooth generalized additive models (GAM) using `r ref("mlr3extralearners::LearnerRegrQGam")` from `r ref_pkg("mlr3extralearners")`. This approach allows for smoother estimates and may improve the robustness of quantile predictions. Unlike tree-based methods, GAMs offer more flexibility by modeling the relationship between the features and the target using smooth functions rather than discrete splits. This makes them well-suited for handling continuous and structured data.
+To address the limitations that we observed with the random regression forest, we will now consider an alternative method: quantile regression with smooth generalized additive models (GAM) using [`lrn("regr.qgam")`](https://mlr3extralearners.mlr-org.com/reference/mlr_learners_regr.qgam.html)` from `r ref_pkg("mlr3extralearners"). This approach allows for smoother estimates and may improve the robustness of quantile predictions. Unlike tree-based methods, GAMs offer more flexibility by modeling the relationship between the features and the target using smooth functions rather than discrete splits. This makes them well-suited for handling continuous and structured data.
 
 The predictive intervals we obtain from the quantile GAM differ from conventional confidence intervals in GAMs: rather than quantifying uncertainty around the estimated function itself, our quantile estimates enable direct predictive inference, allowing us to construct observation-wise prediction intervals.
 
-However, `r ref("mlr3extralearners::LearnerRegrQGam")` cannot predict multiple quantiles simultaneously. To overcome this, we use the `r ref("mlr3pipelines::PipeOpLearnerQuantiles")` from `r ref_pkg("mlr3pipelines")` which wraps the learner and extends its functionality to handle multiple quantiles in one step. @sec-pipelines and @sec-pipelines-nonseq have already given an introduction to `r ref_pkg("mlr3pipelines")`.
+However, `"regr.qgam"` cannot predict multiple quantiles simultaneously. To overcome this, we use the `po("learner_quantiles")` from `r ref_pkg("mlr3pipelines")` which wraps the learner and extends its functionality to handle multiple quantiles in one step. @sec-pipelines and @sec-pipelines-nonseq have already given an introduction to `r ref_pkg("mlr3pipelines")`.
 
-Note that in `qgam`, the origin package of `r ref("mlr3extralearners::LearnerRegrQGam")`, we could also use `mqgam` to fit multiple quantiles with one model.
+Note that in `qgam`, the origin package of `"regr.qgam"`, we could also use `mqgam` to fit multiple quantiles with one model.
 
-```{r, message=FALSE}
+```{r, message=FALSE, results='hide'}
 library(mlr3extralearners)
 
 lrn_qgam = lrn("regr.qgam")
@@ -167,16 +158,18 @@ po_qgam = po("learner_quantiles", learner = lrn_qgam,
                   quantiles.q_vals = qs)
 
 graph_lrn_qgam = as_learner(po_qgam)
-graph_lrn_qgam$train(task, splits$train)
+graph_lrn_qgam$train(task, row_ids = splits$train)
 ```
 
-As we have done above for the random regression forest, we now use the `r ref("mlr3pipelines::GraphLearner")` to predict for the test set and visualize the results. After training, we generate predictions for the test set and visualize the results.
+As we have done above for the random regression forest, we now use `r ref("mlr3pipelines::GraphLearner")` to predict for the test set and visualize the results. After training, we generate predictions for the test set and visualize the results.
 
 ```{r}
-prds_qgam = graph_lrn_qgam$predict(task, splits$test)
+prds_qgam = graph_lrn_qgam$predict(task, row_ids = splits$test)
 ```
 
 ```{r, echo=FALSE}
+#| fig-cap: Results of quantile regression with GAM. 90%-prediction interval in dark blue and 50%-prediction interval in light blue. The red line is the underlying function.
+
 data_qgam = as.data.table(prds_qgam)
 data_qgam[, x := task$data(rows = splits$test)$x]
 
@@ -188,17 +181,9 @@ data_qgam_quantiles = melt(
   value.name = "predicted_value"
 )
 
-ggplot(data_qgam_quantiles) +
-  geom_point(aes(x = x, y = truth), alpha = 0.2, color = "darkgrey", size = 0.5) +
-  geom_line(data = true_data, aes(x = x, y =y), color = "black") +
-  geom_line(aes(x = x, y = predicted_value, color = quantile)) +
-  xlim(c(1, 15)) +
-  labs(title = "", x = "x", y = "y", color = "Quantile") +
-  theme_minimal()
-
 ggplot(data_qgam, aes(x = x)) +
-  geom_line(aes(y = q0.05), color = "blue", size = 0.2) +
-  geom_line(aes(y = q0.95), color = "blue", size = 0.2) +
+  geom_line(aes(y = q0.05), color = "blue", linewidth = 0.2) +
+  geom_line(aes(y = q0.95), color = "blue", linewidth = 0.2) +
   geom_ribbon(aes(ymin = q0.05, ymax = q0.95), fill = "blue", alpha = 0.7) +
   geom_line(aes(y = q0.25), color = "lightblue") +
   geom_line(aes(y = q0.75), color = "lightblue") +
@@ -210,21 +195,30 @@ ggplot(data_qgam, aes(x = x)) +
   theme_minimal()
 ```
 
-Compared to the random regression forest, the quantile GAM produces smoother estimates, as expected from an additive model. The predicted median closely follows the true function, and the estimated prediction intervals capture the heteroskedastic variance of the target well. Notably, the coverage of the quantiles is more stable, without the fluctuations seen in the random forest approach.
+Compared to the random regression forest, the quantile GAM produces smoother estimates, as expected from an additive model. The predicted median closely follows the true function, and the estimated prediction intervals capture the heteroscedastic variance of the target well. Notably, the coverage of the quantiles is more stable, without the fluctuations seen in the random forest approach.
 
 ### Comparison of methods {#sec-comparison}
 
 So far, we have only looked at a visualization of the predictions on the test data. We will now compare the two mdoels based on more criteria.
 
-To evaluate how well each model predicts quantiles on our test data, we compute pinball loss. In general, a lower absolute pinball loss indicates better accuracy for a given quantile `alpha`. Since extreme quantiles (e.g. 0.05 or 0.95) represent rare events and rely on less data for estimation, we would typically expect them to have higher loss than the median.
+To evaluate how well each model predicts quantiles on our test data, we compute the pinball loss. In general, a lower absolute pinball loss indicates better accuracy for a given quantile `alpha`. Since extreme quantiles (e.g. 0.05 or 0.95) represent rare events and rely on less data for estimation, we would typically expect them to have higher loss than the median.
 
 ```{r}
 loss = mlr3misc::map_dtr(qs, function(q) {
   q_str = sprintf("q%s", format(q, trim = TRUE, scientific = FALSE))
-  score_ranger = mlr3measures::pinball(truth = prds_ranger$truth, response = prds_ranger$quantiles[, q_str, drop = FALSE], alpha = q)
-  score_qgam = mlr3measures::pinball(truth = prds_qgam$truth, response = prds_qgam$quantiles[, q_str, drop = FALSE], alpha = q)
+  
+  score_ranger = mlr3measures::pinball(
+    truth = prds_ranger$truth,
+    response = prds_ranger$quantiles[, q_str, drop = FALSE], alpha = q
+  )
+  score_qgam = mlr3measures::pinball(
+    truth = prds_qgam$truth,
+    response = prds_qgam$quantiles[, q_str, drop = FALSE], alpha = q
+  )
+    
   list(quantile = q_str, loss_ranger = score_ranger, loss_qgam = score_qgam)
 })
+
 loss
 ```
 
@@ -242,18 +236,23 @@ coverage = data.table(
     mean(data_qgam[, q0.25 <= truth & truth <= q0.75]),
     mean(data_qgam[, q0.05 <= truth & truth <= q0.95]))
   )
+
 coverage
 ```
 
-The GAM-based model provides excellent coverage: coverage is close to 50% for the 50% interval and above 90% for the 90% interval, suggesting a well-calibrated model. The coverage of the random forest however fall short of expected levels, indicating that its estimated quantiles fail to provide reliable uncertainty estimates.
+The GAM-based model provides excellent coverage: coverage is close to 50% for the 50% interval and above 90% for the 90% interval, suggesting a well-calibrated model. The coverage of the random forest however falls short of expected levels, indicating that its estimated quantiles fail to provide reliable uncertainty estimates.
 
 ## Conclusion
 
-In this chapter, we explored quantile regression and its application using two different modeling approaches. We started by generating a synthetic data set with heteroskedastic noise to mimic real-world scenarios where variance is not constant across observations. Using this data set, we compared a tree-based method (random regression forest) and a smooth generalized additive model to estimate conditional quantiles.
+In this chapter, we learned how we can use quantile regression in `mlr3`. Using a synthetic data set, we compared a tree-based method (random regression forest) and a smooth generalized additive model to estimate conditional quantiles. Although both models capture the general trend of the data, the GAM-based approach provides smoother quantile estimates and better coverage of predictive intervals. The random forest model exhibits more variability and struggles with overfitting, particularly at extreme quantiles.
 
-Although both models capture the general trend of the data, the GAM-based approach provides smoother quantile estimates and better coverage of predictive intervals. The random forest model exhibits more variability and struggles with overfitting, particularly at extreme quantiles.
+While we focused on a single-feature regression problem, quantile regression can be extended to multiple features. We can also use hyperparameter tuning to improve performance, particularly for tree-based methods like gradient boosting machines (GBM).
 
-While we focused on a single-feature regression problem, quantile regression can be extended to multiple features, allowing for more complex modeling of uncertainty. Furthermore, hyperparameter tuning could improve performance, particularly for tree-based methods like gradient boosting machines (GBM).
+## Exercises
+
+1.  Manually `$train()` a GBM regression model from `r ref_pkg("mlr3extralearners")` on the mtcars task to predict the 95th percentile of the target variable. Make sure that you split the data and only use the test data for fitting the earner.
+
+2.  Use the test data to evaluate your learner with the pinball loss. 
 
 ::: {.content-visible when-format="html"}
 `r citeas(chapter)`
