@@ -1,0 +1,67 @@
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 13 * * *"  # Every day at 13:00 UTC
+  pull_request:
+    branches:
+      - main
+
+name: book-dev-daily
+
+jobs:
+  book-weekly:
+    runs-on: ubuntu-latest
+    container:
+      image: mlrorgdocker/mlr3-book
+      env:
+        R_REMOTES_NO_ERRORS_FROM_WARNINGS: true
+        GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+    strategy:
+      matrix:
+        config:
+          - {dev-package: 'mlr-org/mlr3'}
+          - {dev-package: 'mlr-org/mlr3learners'}
+          - {dev-package: 'mlr-org/mlr3tuning'}
+          - {dev-package: 'mlr-org/mlr3pipelines'}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install dev versions
+        run: pak::pkg_install(c('${{ matrix.config.dev-package }}'))
+        shell: Rscript {0}
+
+      - name: Install headless chromium
+        run: quarto tools install chromium
+
+      - name: Cache OpenML
+        uses: actions/cache@v4
+        id: openml-cache
+        with:
+          path: book/openml
+          key: ${{ runner.os }}-openml-${{ hashFiles('./book/chapters/chapter11/large-scale_benchmarking.qmd') }}-${{hashFiles('./book/chapters/appendices/solutions_large-scale_benchmarking.qmd')}}
+          restore-keys: ${{ runner.os }}-openml-
+
+      - name: Render book
+        run: quarto render book/ --cache-refresh --execute-debug
+
+      - name: Add .lycheeignore
+        run: cp .lycheeignore book/_book/.lycheeignore
+
+      - name: Deploy netlify preview
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: mlr-org/actions/quarto-netlify-preview@v1.3.0
+        with:
+          netlify_auth_token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          netlify_site_id: ${{ secrets.NETLIFY_SITE_ID }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          path: book/_book
+          netlify_url: mlr3book.netlify.app
+
+      - name: Upload pdf book
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlr3book
+          path: book/_book/Applied-Machine-Learning-Using-mlr3-in-R.pdf
+          retention-days: 1
