@@ -491,6 +491,98 @@ lrn_rpart$parallel_predict = TRUE
 prediction = lrn_rpart$predict(tsk_sonar)
 ```
 
+### Parallelization with `mirai`
+
+With `mlr3` 1.0.0, we integrated the `mirai` package, which provides a new backend for parallelization.
+`mirai` starts persistent R sessions which are called daemons to evaluate tasks in parallel.
+Daemons can be launched locally or on a remote machine via ssh or cluster managers.
+`mirai` is much faster than `future`.
+Like the parallelization with `future`, as a user you only have to configure the backend before starting any computations.
+
+
+
+```{r, include = FALSE}
+mirai::daemons(0)
+```
+
+Parallelization of Resamplings and Benchmarks with `mirai`.
+
+```{r}
+library(mirai)
+
+mirai::daemons(2)
+
+tsk_sonar = tsk("sonar")
+lrn_rpart = lrn("classif.rpart")
+rsmp_cv3 = rsmp("cv", folds = 3)
+system.time({resample(tsk_sonar, lrn_rpart, rsmp_cv3)})
+```
+
+Setting a chunk size is a thing of the past with `mirai`.
+
+Parallelization of Tuning with `mirai`.
+
+The daemon is still running, so we can continue with the tuning.
+
+```{r}
+instance = tune(
+  tnr("random_search", batch_size = 12),
+  tsk("penguins"),
+  lrn("classif.rpart", minsplit = to_tune(2, 128)),
+  rsmp("cv", folds = 3),
+  term_evals = 20
+)
+
+instance$archive$n_evals
+```
+
+
+Nested resampling with `mirai`.
+Parallelize the outer loop with `daemons(5)`
+
+```{r}
+lrn_rpart = lrn("classif.rpart",
+  minsplit  = to_tune(2, 128))
+
+lrn_rpart_tuned = auto_tuner(tnr("random_search", batch_size = 2),
+  lrn_rpart, rsmp("cv", folds = 3), msr("classif.ce"), 2)
+
+rr = resample(tsk("penguins"), lrn_rpart_tuned, rsmp("cv", folds = 5))
+```
+
+Parallelizing the outer and inner loop with `mirai`.
+Use `everywhere()` to setup the daemons of the inner loop on the workers of the outer loop.
+
+```{r, eval = FALSE}
+# reset daemons
+mirai::daemons(0)
+
+mirai::daemons(5)
+
+everywhere({
+  mirai::daemons(3)
+})
+```
+
+Running the outer loop in the main session and the inner loop in the workers is currently not supported.
+But you can run the outer loop in a single daemon and the inner loop on multiple daemons.
+
+```{r, eval = FALSE}
+# reset daemons
+mirai::daemons(0)
+
+mirai::daemons(1)
+
+everywhere({
+  mirai::daemons(3)
+})
+```
+
+
+
+
+
+
 ## Error Handling {#sec-error-handling}
 
 In large experiments, it is not uncommon that a model fit or prediction fails with an error.\index{debugging}
