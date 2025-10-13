@@ -26,7 +26,7 @@ To render the book yourself, follow these steps:
 
 ```bash
 docker run --name mlr3book \
- -v $(pwd):/book \
+ -v $(pwd)/book:/book \
  --rm \
  -p 8888:8888 \
  mlrorg/mlr3-book quarto preview book --port 8888 --host 0.0.0.0 --no-browser
