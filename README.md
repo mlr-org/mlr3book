@@ -26,10 +26,10 @@ To render the book yourself, follow these steps:
 
 ```bash
 docker run --name mlr3book \
- -v $(pwd)/book:/book \
+ -v $(pwd):/mlr3book_latest \
  --rm \
  -p 8888:8888 \
- mlrorg/mlr3-book quarto preview book --port 8888 --host 0.0.0.0 --no-browser
+ mlrorg/mlr3-book quarto preview mlr3book_latest/book --port 8888 --host 0.0.0.0 --no-browser
 ```
 
 This command mounts your current directory into the docker container, allowing quarto to render the book and serve it on port 8888.
