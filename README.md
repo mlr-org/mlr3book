@@ -21,21 +21,22 @@ You can read the rendered version of the book in either:
 To render the book yourself, follow these steps:
 
 1. Clone this repository (https://github.com/mlr-org/mlr3book.git) and navigate to the `mlr3book` directory.
-2. Pull the docker image `docker pull mlrorgdocker/mlr3-book`.
+2. Pull the docker image `docker pull mlrorg/mlr3-book`.
 3. Preview the book with
 
 ```bash
 docker run --name mlr3book \
- -v $(pwd):/book \
+ -v $(pwd):/mlr3book_latest \
  --rm \
  -p 8888:8888 \
- mlrorg/mlr3-book quarto preview book/book --port 8888 --host 0.0.0.0 --no-browser
+ mlrorg/mlr3-book quarto preview mlr3book_latest/book --port 8888 --host 0.0.0.0 --no-browser
 ```
 
 This command mounts your current directory into the docker container, allowing quarto to render the book and serve it on port 8888.
 Access the preview at `http://0.0.0.0:8888`.
 
 Make your changes locally and preview them with the above command.
+Add `--cache-refresh` to the command to refresh the cache.
 Once you are happy with your changes, open a pull request.
 The pull request will include a preview of your changes
 
