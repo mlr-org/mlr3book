@@ -48,7 +48,7 @@ remotes::install_cran("qgam")
 ```
 
 You can add these command temporary at the beginning of the new chapter.
-Once the pull request is accepted, add the new packages to the mlr3-book dockerfile at [https://github.com/mlr-org/mlr3docker](mlr-org/mlr3docker) and remove the installation with `remotes`.
+Once the pull request is accepted, add the new packages to the mlr3-book dockerfile at [mlr-org/mlr3docker](https://github.com/mlr-org/mlr3docker) and remove the installation with `remotes`.
 
 ## Contributing to the book
 
