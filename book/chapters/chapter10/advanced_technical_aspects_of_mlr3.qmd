@@ -13,7 +13,7 @@ aliases:
 In the previous chapters, we demonstrated how to turn machine learning concepts and methods into code.
 In this chapter we will turn to those technical details that can be important for more advanced uses of `r mlr3`, including:
 
-* `r index('Parallelization')` with the `r ref_pkg("future")` framework (@sec-parallelization);
+* `r index('Parallelization')` with the `r ref_pkg("future")` and `r ref_pkg("mirai")` frameworks (@sec-parallelization);
 * Error handling and `r index('debugging')` (@sec-error-handling);
 * Adjusting the logger to your needs (@sec-logging);
 * Working with out-of-memory data, e.g., data stored in databases (@sec-backends); and
@@ -35,6 +35,7 @@ There are a few pieces of terminology associated with parallelization that we wi
 * The `r index("parallelization backend", aside = TRUE)` is the hardware to parallelize with a respective interface provided by an R package.
   Many parallelization backends have different APIs, so we use the `r ref_pkg("future")` package as a unified, abstraction layer for many parallelization backends.
   From a user perspective, `mlr3` interfaces with `future` directly so all you will need to do is configure the backend before starting any computations.
+  Alternatively, `mlr3` also provides direct support for the `r ref_pkg("mirai")` package, which offers a lightweight backend with lower overhead per task (see @sec-parallel-mirai).
 * The Main process is the R session or process that orchestrates the computational work, called jobs.
 * Workers are the R sessions, processes, or machines that receive the jobs, perform calculations, and then send the results back to Main.
 
@@ -58,13 +59,13 @@ Starting and terminating workers as well as possible communication between worke
 This overhead strongly varies between parallelization backends and must be carefully weighed against the runtime of the sequential execution to determine if parallelization is worth the effort.
 If the sequential execution is comparably fast, enabling parallelization may introduce additional complexity with little runtime savings, or could even slow down the execution.
 It is possible to control the `r index("granularity", aside = TRUE)` of the parallelization to reduce the parallelization overhead.
-For example, we could reduce the overhead of parallelizing a `for`-loop with 1000 iterations on four CPU cores by `r index('chunking')` the work of the 1000 jobs into four computational jobs performing 250 iterations each, resulting in four big jobs and not 1000 small ones.
+For example, we could reduce the overhead of parallelizing a `for`-loop with 10000 iterations on two CPU cores by `r index('chunking')` the work of the 10000 jobs into two computational jobs performing 5000 iterations each, resulting in two big jobs and not 10000 small ones.
 
 This effect is illustrated in the following code chunk using a `r index('socket cluster')` with the `r ref_pkg("parallel")` package, which has a `chunk.size` option so we do not need to manually create chunks:
 ```{r advanced_technical_aspects_of_mlr3-001, eval = TRUE}
-# set up a socket cluster with 4 workers on the local machine
+# set up a socket cluster with 2 workers on the local machine
 library(parallel)
-cores = 4
+cores = 2
 cl = makeCluster(cores)
 
 # vector to operate on
@@ -77,7 +78,7 @@ f = function(y) sqrt(y + 1)
 system.time({parSapply(cl, x, f, chunk.size = 1)})
 
 # chunked approach: 4 jobs
-system.time({parSapply(cl, x, f, chunk.size = 2500)})
+system.time({parSapply(cl, x, f, chunk.size = 5000)})
 ```
 
 Whenever you have the option to control the granularity by setting the chunk size, you should aim for at least as many jobs as workers.
@@ -489,6 +490,53 @@ lrn_rpart$parallel_predict = TRUE
 
 # predict
 prediction = lrn_rpart$predict(tsk_sonar)
+```
+
+### Parallelization with `mirai` (+) {#sec-parallel-mirai}
+
+The `r ref_pkg("mirai")` package is an alternative parallelization backend that starts persistent R sessions called daemons.
+Compared to the `r ref_pkg("future")` package, `mirai` has significantly lower overhead per task, making it especially advantageous when training many fast-fitting models.
+Manual chunking is no longer necessary, because `mirai`'s dispatcher automatically distributes tasks across available daemons.
+
+To parallelize computations, start daemons with `mirai::daemons()`.
+The compute profile must be set to `"mlr3_parallelization"`.
+To make results reproducible with `mirai`, set a `seed` when creating daemons.
+For local daemons, you can redirect log messages to the main session with `output = TRUE`.
+
+```{r}
+mirai::daemons(2, .compute = "mlr3_parallelization", seed = 7832L, output = TRUE)
+
+tsk_sonar = tsk("sonar")
+lrn_rpart = lrn("classif.rpart")
+rsmp_cv3 = rsmp("cv", folds = 3)
+system.time({resample(tsk_sonar, lrn_rpart, rsmp_cv3)})
+```
+
+`mirai` also supports nested setups.
+With only daemons configured in the main R session, outer loop runs in parallel while the inner loop runs sequentially on each daemon.
+
+```{r}
+mirai::daemons(5, .compute = "mlr3_parallelization")
+
+lrn_rpart_tuned = auto_tuner(
+  tnr("random_search", batch_size = 2),
+  lrn("classif.rpart", minsplit = to_tune(2, 128)),
+  rsmp("cv", folds = 3),
+  msr("classif.ce"),
+  2
+)
+
+resample(tsk("penguins"), lrn_rpart_tuned, rsmp("cv", folds = 5))
+```
+
+To parallelize both outer and inner loops, use `mirai::everywhere()` to configure daemons for the inner loop.
+
+```{r, eval = FALSE}
+mirai::daemons(5, .compute = "mlr3_parallelization")
+
+everywhere({
+  mirai::daemons(3, .compute = "mlr3_parallelization")
+}, .compute = "mlr3_parallelization")
 ```
 
 ## Error Handling {#sec-error-handling}
