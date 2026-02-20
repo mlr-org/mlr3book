@@ -33,6 +33,10 @@ remotes::install_cran("qgam")
 
 Add these lines temporarily at the beginning of the new chapter. Once the pull request is accepted, add the packages to the mlr3-book Dockerfile at [mlr-org/mlr3docker](https://github.com/mlr-org/mlr3docker) and remove the installation calls.
 
+## Corrections
+
+When corrections are made to chapters included in the first published edition, document them in the *Errata* appendix.
+
 ## Chapter Structure
 
 Each chapter (except the preamble, introduction, and appendix) must be structured as follows.
@@ -44,7 +48,19 @@ Include the following metadata in the front matter of each chapter:
 - Chapter authors (name, affiliation, ORCID)
 - A 150–200 word abstract
 
-Include `{{< include _setup.qmd >}}` at the start of each chapter. Do **not** add `set.seed()` anywhere unless it appears inside an exercise at the end of the chapter.
+New chapters not present in the published edition should be marked with a `+` in the title.
+Early-stage chapters that have not yet been rigorously edited and reviewed should be additionally marked as *Draft*.
+Online-only chapters must wrap their content in the following block:
+
+```qmd
+::: {.content-visible when-format="html"}
+...
+:::
+```
+
+### Setup
+
+Add `{{< include _setup.qmd >}}` at the start of each chapter. Do **not** call `set.seed()` anywhere in the chapter body; it may only appear inside exercises at the end.
 
 ### Introduction
 
@@ -108,6 +124,8 @@ The appendix shows `str()` and `head()` of these datasets — do not repeat this
 - Avoid external hyperlinks unless strictly required. When required, use the `` `r link()` `` function.
 - Never use bare markdown links for internal sections, e.g. `[some topic](#topic)`. Always use `@sec-...` cross-references instead.
 - When referencing functions outside the mlr3verse — or where ambiguity is possible — include the package prefix, e.g. write `paradox::to_tune` rather than `to_tune`.
+- Link packages using `` `r ref_pkg("package")` ``, or `` `r mlr3` `` for mlr3 ecosystem packages.
+- Link each package or function only once per `##` subsection.
 
 **Cross-references:** All tables, figures, and other floats must have a caption and a reference key. The key must match the float type: `tbl-` for tables, `fig-` for figures.
 
@@ -139,9 +157,9 @@ The appendix shows `str()` and `head()` of these datasets — do not repeat this
 | Important | `:::{.callout-important} :::` | **Never** use |
 | Caution | `:::{.callout-caution} :::` | **Never** use |
 
-## Online-Only
 
-When corrections are made to chapters included in the first published edition, document them in the *Errata* appendix.
-New chapters not present in the published edition should be marked with a `+` in the title.
-For such newly added chapters that are in early stages and have not been rigorously edited and reviewed, these should be additionally marked as being a *Draft*.
+
+
+
+
 
