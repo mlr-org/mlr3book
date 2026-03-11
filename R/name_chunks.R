@@ -4,11 +4,15 @@
 #' Names all chunks of all qmd files using the pattern `[file-name]-[number]`.
 #'
 #' @export
-name_chunks_mlr3book = function() {
+name_chunks_mlr3book = function(file = NULL) {
   root = rprojroot::find_package_root_file()
   path = file.path(root, "book")
-  qmds = list.files(path, pattern = "^[^_].*\\.qmd$", full.names = TRUE, recursive = TRUE)
-  pattern = "^([[:space:]]*```\\{[rR])([[:alnum:] -]*)(.*\\})[[:space:]]*$"
+  if (!is.null(file)) {
+    qmds = file
+  } else {
+    qmds = list.files(path, pattern = "^[^_].*\\.qmd$", full.names = TRUE, recursive = TRUE)
+  }
+  pattern = "^([[:space:]]*```\\{[rR])([[:alnum:]_ -]*)(.*\\})[[:space:]]*$"
 
   for (qmd in qmds) {
     message(sprintf("Renaming chunks in '%s'", basename(qmd)))
