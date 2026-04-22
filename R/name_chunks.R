@@ -3,6 +3,9 @@
 #' @description
 #' Names all chunks of all qmd files using the pattern `[file-name]-[number]`.
 #'
+#' @param file `character(1)`\cr
+#' Optional path to a single qmd file. If `NULL`, all qmd files in the `book/` directory are processed.
+#'
 #' @export
 name_chunks_mlr3book = function(file = NULL) {
   root = rprojroot::find_package_root_file()

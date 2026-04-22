@@ -4,7 +4,11 @@
 \alias{name_chunks_mlr3book}
 \title{Name all chunks}
 \usage{
-name_chunks_mlr3book()
+name_chunks_mlr3book(file = NULL)
+}
+\arguments{
+\item{file}{\code{character(1)}\cr
+Optional path to a single qmd file. If \code{NULL}, all qmd files in the \verb{book/} directory are processed.}
 }
 \description{
 Names all chunks of all qmd files using the pattern \verb{[file-name]-[number]}.
