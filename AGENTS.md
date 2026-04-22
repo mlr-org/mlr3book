@@ -1,118 +1,166 @@
-# R package development
+# mlr3book
+
+## Book overview
+
+The mlr3book is a Quarto-based book about the mlr3 R package ecosystem, titled "Applied Machine Learning Using mlr3 in R".
+It was originally published in print by CRC Press and is also available online.
+Chapters added after the print release are marked with `(+)` in the title.
+Early-stage chapters not yet rigorously reviewed are additionally marked as *Draft*.
+
+The repository also contains a small R helper layer (`R/`, `DESCRIPTION`) used by the book's `.qmd` files.
+This is not a CRAN package — the helpers exist only to support rendering.
+
+## Project structure
+
+- `book/_quarto.yml` — book configuration and chapter list.
+- `book/index.qmd` — book front page.
+- `book/chapters/chapter{N}/` — chapter content (`.qmd` files).
+- `book/chapters/appendices/` — appendices including `errata.qmd`.
+- `book/common/_setup.qmd` — shared setup included at the top of every chapter.
+- `book/common/_utils.qmd` — helper functions (`authors()`, `citeas()`, `include_multi_graphics()`).
+- `book/common/_optional.qmd` — callout block included after optional/advanced sections.
+- `book/common/chap_auths.csv` and `book/common/authors.csv` — chapter author metadata.
+- `book/Figures/` — shared figures.
+- `book/book.bib` — bibliography.
+- `R/links.R` — helper functions: `ref()`, `ref_pkg()`, `link()`, `index()`, `define()`.
+- `R/name_chunks.R` — chunk naming utility.
 
 ## Key commands
 
 ```
-# To run code
+# Preview the book locally (auto-reloads on save)
+quarto preview book
+
+# Render the full book
+quarto render book
+
+# Render a single chapter
+quarto render book/chapters/chapter1/introduction_and_overview.qmd
+
+# Load the helper functions in R/ for interactive use
 Rscript -e "devtools::load_all(); code"
 
-# To run all tests
-Rscript -e "devtools::test()"
+# Reformat the bibliography
+make bibtex
 
-# To run all tests for files starting with {name}
-Rscript -e "devtools::test(filter = '^{name}')"
-
-# To run all tests for R/{name}.R
-Rscript -e "devtools::test_active_file('R/{name}.R')"
-
-# To run a single test "blah" for R/{name}.R
-Rscript -e "devtools::test_active_file('R/{name}.R', desc = 'blah')"
-
-# To redocument the package
-Rscript -e "devtools::document()"
-
-# To check pkgdown documentation
-Rscript -e "pkgdown::check_pkgdown()"
-
-# To check the package with R CMD check
-Rscript -e "devtools::check()"
+# Clean generated artifacts
+make clean
 ```
 
-## Code Style
+## Chapter structure rules
 
-* Always use `=` for assignment, never `<-`.
-* 2-space indentation, 120-character line limit.
-* `snake_case` for functions and variables, `CamelCase` for R6 classes.
-* When calling a function from imported package `foo` do not write `foo::bar()` but `bar()`
-* Double quotes for strings, explicit `TRUE`/`FALSE` (never `T`/`F`), explicit `1L` for integers.
-* Use implicit return values for functions.
-* Prefer `result = if (...) ... else ...` over `if (...) { result = ... } else { result = ... }`
-  when the only difference between branches is the assigned value.
-* User-facing API (exported functions, public R6 methods) must have `checkmate` `assert_*()` argument checks.
-  For internal code, match the existing level of defensiveness.
-* Use these mlr3misc utilities when appropriate:
-  `map()`, `map_chr()`, `invoke()`, `calculate_hash()`, `str_collapse()`, `%nin%`, `%??%`.
-* Before implementing something, read similar existing files first to match the established patterns.
-* Always use `# nolint next` to disable linters for the next line instead of `# nolint` on the same line.
+Every chapter `.qmd` file must have:
 
-## File structure and naming
+1. **YAML front matter** at the top.
+2. **`{{< include ../../common/_setup.qmd >}}`** immediately after the chapter heading — never add `set.seed()` at the top level; it belongs only inside exercises if needed.
+3. **`` `r chapter = "Chapter Title"` ``** and **`` `r authors(chapter)` ``** to display author information.
+4. **Abstract** — 150 to 200 words, in the front matter or opening.
+5. **Introduction** covering: what will be covered, why it matters, theoretical background, and formulae used conservatively.
+   If the chapter has several substantially different subsections, the introduction should cover only the first subsection and each subsequent subsection gets its own short intro.
+6. **Conclusion** containing: key takeaways, mini API table (sugar functions to R6 classes), further reading, gallery links with descriptions, and exercises with solutions.
 
-* Name the file as the most important contained function / class
-* No whitespaces, no special chart in filenames
-* Usually one large function / class, per file, but adding multiple smaller helpers is ok
+## New and online-only chapters
 
-## Collation order
+- New chapters not in the original print edition: mark title with `(+)`.
+- Early-stage chapters: additionally mark as *Draft*.
+- Online-only chapters: wrap entire content in `::: {.content-visible when-format="html"}`.
+- Changes to existing content should be listed in `book/chapters/appendices/errata.qmd`.
 
-* Derived classes must declare `#' @include ParentClass.R` in their roxygen header.
-  This controls the `Collate:` field in DESCRIPTION so base classes load before derived classes.
+## R code rules (for chapter chunks)
 
-## Core dependencies
-* Use `checkmate` for arg-checks
-* Use `data.table` for efficient table structures
-* For OOP-stype use `R6`
-* Use `cli` to format messages, warnings, errors and prints
+- Use `=` for assignment, never `<-`.
+- Use `mtcars` for regression tasks and `penguins` (from `palmerpenguins`) for classification tasks.
+  Flag other datasets unless justified.
+- All optional arguments must use named argument syntax.
+- Use sugar functions (`lrn()`, `tsk()`, `msr()`, `rsmp()`, `trm()`, `po()`) in prose and main examples, not `$new()` constructors.
+- No comments in code chunks — explanations go in surrounding text.
+  Exception: very complex code where a brief comment genuinely aids comprehension.
+- Do not shadow function names as variable names (e.g., do not name a variable `lrn` or `task`).
+  Use descriptive names: `learner`, `task_iris`, `rr`, `bmr`, etc.
+- Every code chunk must have accompanying prose explaining what it does and what the output means.
+- Double quotes for strings, explicit `TRUE`/`FALSE` (never `T`/`F`), explicit `1L` for integers.
 
-## Testing
+## Chunk naming
 
-* Tests for `R/{name}.R` go in `tests/testthat/test_{name}.R`.
-* All new code should have an accompanying test.
-* If there are existing tests, place new tests next to similar existing tests.
-* Strive to keep your tests minimal with few comments.
-* The full test suite takes a long time. Only run tests relevant to your changes with `devtools::test(filter = '^{name}')`.
+Code chunks should follow the pattern `[file-name]-[number]` (e.g., `introduction_and_overview-001`).
+The `name-chunk` skill can auto-number unnamed chunks for a given file.
 
-## Documentation
+## R helper code style (for `R/*.R`)
 
-- Every user-facing function should be exported and have roxygen2 documentation.
-- Wrap roxygen comments at 120 characters.
-- Write one sentence per line.
-- If a sentence exceeds the limit, break at a comma, "and", "or", "but", or other appropriate point.
-- Internal functions should not have roxygen documentation.
-- Always re-document the package after changing a roxygen2 comment.
-- Don’t hand-edit generated artifacts: `man/`, or `NAMESPACE`.
-- Never edit `README.md` directly -- it is generated from `README.Rmd`. Always edit `README.Rmd` and then run `devtools::build_readme()` to regenerate `README.md`.
-- When adding a new S3 method (such as `print.<ClassName>`), always run `devtools::document()` afterwards to re-generate the NAMESPACE.
-- Environment variables and options are documented in package-level documentation (typically `R/package.R`).
-- Roxygen templates live in `man-roxygen/`. Use `@template` to avoid duplicating common parameter descriptions.
-  Only create new templates for sections that will likely be re-used.
-- For functions, always document the return value (section `#' @return`).
-- Bibliographic references go in `R/bibentries.R` and are cited with `` `r format_bib("key")` ``.
+The helpers in `R/` are small and internal. Match the existing style:
 
-## Pkgdown
+- Use `=` for assignment, never `<-`.
+- 2-space indentation, 120-character line limit.
+- `snake_case` for functions and variables.
+- Double quotes, explicit `TRUE`/`FALSE`, explicit `1L` for integers.
+- Use `checkmate` `assert_*()` for argument checks in user-facing helpers.
+- Prefer `result = if (...) ... else ...` over `if/else` blocks that only differ by the assigned value.
 
-- When adding a new exported function, ensure it's in the `_pkgdown.yml` file.
+## English writing rules
 
-## `NEWS.md`
+- Do not write "R6" unless explicitly discussing class paradigms.
+  Write "The `Learner`..." not "The R6 class `Learner`...".
+- No contractions: "do not" not "don't", "cannot" not "can't", "it is" not "it's".
+- American English, Oxford comma.
+- Use sentence case for headings.
+- Do not capitalize normal nouns or method names.
+  "Bayesian" is capitalized, "random forest" is not.
+- Cross-reference the book's glossary for consistent terminology.
+- Use `cspell` to check against typos, and add needed words to `.cspell/project-words.txt` if reasonable.
 
-- Every user-facing change should be given a bullet in `NEWS.md`.
-  Do not add bullets for small documentation changes or internal refactorings.
-- Each bullet should briefly describe the change to the end user and mention the related issue in parentheses.
-- A bullet can consist of multiple sentences but should not contain any new lines (i.e. DO NOT line wrap).
-- If the change is related to a function, put the name of the function early in the bullet.
-- Order bullets alphabetically by function name. Put all bullets that don't mention function names at the beginning.
+## Quarto and formatting rules
+
+**Inline code formatting:**
+- Packages: `` `package` `` (e.g., `` `mlr3` ``)
+- Functions with package qualifier: `` `package::function()` ``
+- Functions (in-package): `` `function()` ``
+- R6 fields: `` `$field` ``
+- R6 methods: `` `$method()` ``
+
+**Links and references:**
+- External URLs: use `` `r link("https://example.com")` `` — the `link()` function takes only a URL parameter.
+- API references: use `` `r ref("function()")` `` or `` `r ref("package::function()")` `` for disambiguation.
+- Package references: use `` `r ref_pkg("package")` `` for non-mlr3 packages; for mlr3 ecosystem packages use `` `r mlr3` ``, `` `r mlr3tuning` ``, etc. (defined as objects in `R/links.R`).
+- Link packages and functions only once per subsection (`##`).
+- Cross-reference sections with `@sec-*` syntax, never `[text](#anchor)`.
+- Figures: must have `#| label: fig-*`, `#| fig-cap:`, and `#| fig-alt:`.
+- Tables: must have `{#tbl-*}` reference key and a caption.
+
+**Terms and indexing:**
+- First introduction of a key term: `` `r define("term")` ``.
+- Subsequent references for the index: `` `r index("term")` ``.
+
+**Optional/advanced sections:**
+- Include `{{< include _optional.qmd >}}` immediately after the section heading.
+- Never use `::: {.callout-note}` directly; use the `_optional.qmd` include instead.
+
+**Callout boxes — permitted types only:**
+- `::: {.callout-warning}` — important exceptions the reader must not miss.
+- `::: {.callout-tip}` — optional useful hints, more advanced notes.
+- Never use `::: {.callout-note}`, `::: {.callout-important}`, or `::: {.callout-caution}`.
+
+**Numbers in prose:**
+- Plain numbers: no formatting (`1`, not `` `1` `` or `$1$`).
+- Code values: backticks.
+- Mathematical quantities: `$...$`.
+
+## Bibliography
+
+- References live in `book/book.bib`.
+- Run `make bibtex` to reformat the file after edits.
+- Cite with Quarto's `[@key]` syntax.
 
 ## GitHub
 
 - If you use `gh` to retrieve information about an issue, always use `--comments` to read all the comments.
 
-## Natural Language
+## Proofreading
 
-- The following applies to all natural language text, so docs, commments, NEWS, etc, but not code
-- Use American english
-- Use the Oxford comma
-- Do not capitalize normal nouns or method names. "Bayesian" is capitalized, "random forest" is not.
-- Use cspell to check against typos, and add needed words to .cspell/project-words.txt if reasonable
+If the user asks you to proofread a file, act as an expert proofreader and editor with a deep understanding of clear, engaging, and well-structured writing.
 
-## Further agents files
-- Read and respect all files in the `extra-rules` folder
+Work paragraph by paragraph, always starting by making a TODO list that includes individual items for each top-level heading.
 
+Fix spelling, grammar, and other minor problems without asking the user.
+Label any unclear, confusing, or ambiguous sentences with a FIXME comment.
 
+Only report what you have changed.
