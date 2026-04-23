@@ -17,7 +17,8 @@ docker run --name mlr3book \
  mlrorg/mlr3-book quarto preview mlr3book_latest/book --port 8888 --host 0.0.0.0 --no-browser
 ```
 
-Access the preview at `http://0.0.0.0:8888`. Add `--cache-refresh` to force a cache refresh.
+Access the preview at `http://0.0.0.0:8888`.
+Add `--cache-refresh` to force a cache refresh.
 To speed this up, comment out the other chapters in `book/_quarto.yml`.
 
 Before opening a pull request, run the [mlr3book-reviewer](https://github.com/mlr-org/actions/tree/main/skills/mlr3book-reviewer) Claude skill to automatically check your changes against the style and structure guide.
