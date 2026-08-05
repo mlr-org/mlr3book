@@ -146,6 +146,28 @@ ggplot(attributes(lrn_xgb$model)$evaluation_log, aes(x = iter, y = test_logloss)
 lrn_xgb$internal_valid_scores
 ```
 
+Because the validation performance is tracked over the whole training run, the score of the *final* model is not necessarily the *best* score that was observed.
+For this reason there is a second accessor, `$best_valid_scores`, which returns the validation scores of the best iteration.
+
+```{r predsets_valid_inttune-012a}
+lrn_xgb$best_valid_scores
+```
+
+Whether the two differ depends on the learner:
+
+* XGBoost also *predicts* with the best `nrounds` when early stopping is enabled, so the final model *is* the best model and both fields agree.
+* Learners that keep training after the optimum and return the last state -- most notably neural networks trained with `r ref_pkg("mlr3torch")`, where the returned network is the one after the last epoch -- report different values.
+
+This distinction matters because `$internal_tuned_values` reports the *best* iteration, i.e. the one written into the tuning archive.
+Whenever the learner does not roll back to that iteration, `$internal_valid_scores` refers to a different model than the internally tuned value does.
+We come back to this when we choose a tuning measure in @sec-internal-tuning.
+
+::: {.callout-note}
+Not every learner tracks the best score.
+Learners only report `$best_valid_scores` if their `$.extract_internal_valid_scores()` method supports the `which` argument, see `r ref("Learner")`.
+For learners that do not, `msr("best_valid_score")` returns `NA`.
+:::
+
 In some cases one might want to have more control over the construction of the validation data. This can be useful, for example, if there is a predefined validation split to be used with a task. Such fine-grained control over the validation data is possible by setting the `validate` field to `"predefined"`.
 
 ```{r predsets_valid_inttune-013}
@@ -280,11 +302,17 @@ Internally, this will train XGBoost with 10 different values of `eta` and the `n
 
 When combining internal tuning with hyperparameter optimization via `r ref_pkg("mlr3tuning")` we need to specify two performance metrics: one for the internal tuning and one for the `Tuner`. For this reason, `mlr3` requires the internal tuning metric to be set explicitly, even if a default value exists. There are two ways to use the same metric for both types of hyperparameter optimization:
 
-1.  Use `msr("internal_valid_scores", select = <id>)`, i.e. the final validation score, as the tuning measure. As a learner can have multiple internal valid scores, the measure allows us to select one by specifying the `select` argument. If this is not specified, the first validation measure will be used. We also need to specify whether the measure should be minimized.
+1.  Use `msr("best_valid_score", select = <id>)`, i.e. the validation score of the best iteration, as the tuning measure. As a learner can have multiple internal valid scores, the measure allows us to select one by specifying the `select` argument. If this is not specified, the first validation measure will be used. We also need to specify whether the measure should be minimized.
 2.  Set both, the `eval_metric` and the tuning measure to the same metric, e.g. `eval_metric = "error"` and `measure = msr("classif.ce")`. Some learners even allow to set the validation metric to an `mlr3::Measure`. You can find out which ones support this feature by checking their corresponding documentation. One example for this is XGBoost.
 
 The advantage of using the first option is that the predict step can be skipped because the internal validation scores are already computed during training.
 In a certain sense, this is similar to the evaluation of the random forest with the OOB error in @sec-predict-sets.
+
+We recommend `msr("best_valid_score")` over `msr("internal_valid_score")` here.
+The internally tuned value that is written into the archive is the *best* iteration, so the best validation score is the score that actually belongs to the configuration being recorded.
+`msr("internal_valid_score")` reports the score of the final model instead, which for learners that do not roll back to the best iteration evaluates a different model than the one the archive describes -- systematically pessimistic, since the final iteration is by definition no better than the best one.
+For XGBoost the two coincide, because it predicts with the best `nrounds` anyway, but the choice matters as soon as you swap in a learner that does not, such as a `r ref_pkg("mlr3torch")` network.
+Use `msr("internal_valid_score")` when you deliberately want to score the final model, e.g. because you will refit without early stopping.
 
 ```{r predsets_valid_inttune-028}
 tsk_sonar = tsk("sonar")
@@ -295,7 +323,7 @@ ti = tune(
   learner = lrn_xgb,
   task = tsk_sonar,
   resampling = rsmp("cv", folds = 3),
-  measure = msr("internal_valid_score",
+  measure = msr("best_valid_score",
     select = "logloss", minimize = TRUE),
   term_evals = 10L
 )
@@ -334,7 +362,7 @@ at = auto_tuner(
   tuner = tnr("grid_search"),
   learner = lrn_xgb,
   resampling = rsmp("cv", folds = 3),
-  measure = msr("internal_valid_score",
+  measure = msr("best_valid_score",
     select = "logloss", minimize = TRUE),
   term_evals = 10L
 )
@@ -381,7 +409,7 @@ at = auto_tuner(
   tuner = tnr("grid_search"),
   learner = lrn_xgb,
   resampling = rsmp("cv", folds = 3),
-  measure = msr("internal_valid_score",
+  measure = msr("best_valid_score",
     select = "logloss", minimize = TRUE),
   search_space = search_space,
   term_evals = 10L
