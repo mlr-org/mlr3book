@@ -25,18 +25,34 @@ This is not a CRAN package — the helpers exist only to support rendering.
 - `R/links.R` — helper functions: `ref()`, `ref_pkg()`, `link()`, `index()`, `define()`.
 - `R/name_chunks.R` — chunk naming utility.
 
+## Rendering environment
+
+Always render the book inside the `mlrorg/mlr3-book` Docker image, never with a local R or Quarto installation.
+The image provides the R packages, Quarto version, and system dependencies the book needs, and it is the same image the CI workflows in `.github/workflows/` use.
+Its Dockerfile lives in [mlr-org/mlr3docker](https://github.com/mlr-org/mlr3docker).
+
+```
+# Pull the latest image
+docker pull mlrorg/mlr3-book
+
+# Preview the book at http://0.0.0.0:8888 (auto-reloads on save)
+docker run --name mlr3book --rm -v $(pwd):/mlr3book_latest -p 8888:8888 \
+  mlrorg/mlr3-book quarto preview mlr3book_latest/book --port 8888 --host 0.0.0.0 --no-browser
+
+# Render the full book
+docker run --rm -v $(pwd):/mlr3book_latest -w /mlr3book_latest mlrorg/mlr3-book quarto render book
+
+# Render a single chapter
+docker run --rm -v $(pwd):/mlr3book_latest -w /mlr3book_latest mlrorg/mlr3-book \
+  quarto render book/chapters/chapter1/introduction_and_overview.qmd
+```
+
+Add `--cache-refresh` to force a cache refresh.
+If a chapter needs a package the image does not have, install it temporarily at the top of the chapter and add it to the mlr3-book Dockerfile in mlr3docker once the pull request is accepted.
+
 ## Key commands
 
 ```
-# Preview the book locally (auto-reloads on save)
-quarto preview book
-
-# Render the full book
-quarto render book
-
-# Render a single chapter
-quarto render book/chapters/chapter1/introduction_and_overview.qmd
-
 # Load the helper functions in R/ for interactive use
 Rscript -e "devtools::load_all(); code"
 

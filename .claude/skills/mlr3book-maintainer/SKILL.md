@@ -62,27 +62,50 @@ R error. Identify the chapter `.qmd` under `book/chapters/chapterN/`.
 
 ### 2. Reproduce locally
 
-This skill already runs inside the `mlr3bookdev` container, which is built
-`FROM mlrorg/mlr3-book` — the same image CI uses — so run `quarto` and `Rscript`
-directly. Render just the broken chapter for fast iteration:
+Always render inside the `mlrorg/mlr3-book` image, the same one CI uses.
+Never run `quarto` or `Rscript` on the host: the host R library differs from the
+image (older packages, no `mlr3book` helper package), so host renders fail for
+reasons CI never sees. Do not assume you are already in a container; check with
+`test -f /.dockerenv`. Pull the image first so it matches CI:
 
 ```bash
-quarto render book/chapters/chapter4/hyperparameter_optimization.qmd --execute-debug
+docker pull mlrorg/mlr3-book
 ```
 
-To reproduce a **dev-weekly** failure, install the dev package first, exactly as
-the matrix leg does:
+The repository root may contain a personal `.Rprofile` (ignored by git) that
+loads packages the image does not have, such as `testthat` and `languageserver`.
+Every `Rscript` call in the mounted repository then fails with
+`there is no package called 'testthat'`. Pass `-e R_PROFILE_USER=/dev/null` to
+skip it.
+
+Render just the broken chapter for fast iteration:
 
 ```bash
-Rscript -e 'remotes::install_github("mlr-org/mlr3tuning")'
+docker run --rm -e R_PROFILE_USER=/dev/null -v $(pwd):/mlr3book_latest -w /mlr3book_latest \
+  mlrorg/mlr3-book \
+  quarto render book/chapters/chapter4/hyperparameter_optimization.qmd --cache-refresh --execute-debug
 ```
 
-To reproduce a **weekly** failure from a fresh CRAN release, update packages
-before rendering:
+To reproduce a **dev-weekly** failure, install the dev package in the same
+`docker run` call before rendering, exactly as the matrix leg does. The
+container is removed afterwards (`--rm`), so the host and the image stay clean:
 
 ```bash
-Rscript -e 'update.packages(ask = FALSE)'
+docker run --rm -e R_PROFILE_USER=/dev/null -v $(pwd):/mlr3book_latest -w /mlr3book_latest \
+  mlrorg/mlr3-book bash -c '
+    Rscript -e "remotes::install_github(\"mlr-org/mlr3tuning\", upgrade = \"never\")" &&
+    quarto render book/chapters/chapter4/hyperparameter_optimization.qmd --cache-refresh --execute-debug'
 ```
+
+To reproduce a **weekly** failure from a fresh CRAN release, run
+`Rscript -e 'update.packages(ask = FALSE)'` the same way before rendering.
+
+Container runs write files such as the OpenML cache in `book/openml/` as root.
+A host render then cannot write there and fails in `saveRDS()` with `cannot open
+the connection`. This is one more reason to render only in the container.
+
+Quarto may add a `**/*.quarto_ipynb` line to `book/.gitignore` during a render.
+Revert it (`git checkout -- book/.gitignore`) so it does not end up in the fix.
 
 ### 3. Classify the failure
 
@@ -115,32 +138,39 @@ Edit the affected `.qmd` under `book/chapters/`.
 
 ### 4b. Update the Docker image (missing package)
 
-The build image is defined in the **`mlr3docker`** repository, which is mounted
-in the container alongside this one at
-`~/repositories/mlr3docker/mlr3book/Dockerfile` (locate with `Glob` pattern
-`**/mlr3book/Dockerfile`).
+The build image is defined in the **`mlr3docker`** repository, which is checked
+out alongside this one at `~/repositories/mlr3docker/mlr3book/Dockerfile`
+(locate with `Glob` pattern `**/mlr3book/Dockerfile`).
 
 Add the package to the big `pak::pak(c(...))` call (keep the list alphabetical).
 GitHub-only packages use `"owner/repo"` syntax. If a package needs a non-CRAN
 repository, add it to the `pak::repo_add(...)` call first.
 
-You cannot rebuild the Docker image from inside the container — that is handled
-automatically by CI once the Dockerfile change is merged. To confirm the missing
-package is the only problem, install it into the running container and re-render:
+Do not rebuild or push the image yourself. CI handles that once the Dockerfile
+change is merged. To confirm the missing package is the only problem, install it
+in a throwaway container and re-render, as in step 2:
 
 ```bash
-Rscript -e 'pak::pak("the_missing_package")'
+docker run --rm -e R_PROFILE_USER=/dev/null -v $(pwd):/mlr3book_latest -w /mlr3book_latest \
+  mlrorg/mlr3-book bash -c '
+    Rscript -e "install.packages(\"the_missing_package\")" &&
+    quarto render book/chapters/chapter4/hyperparameter_optimization.qmd --cache-refresh --execute-debug'
 ```
 
 ### 5. Verify the fix
 
-Re-render the affected chapter with the single-file command from step 2 and
-confirm it executes cleanly. Then render the whole book to catch regressions
-introduced by the fix:
+Re-render the affected chapter in the container with the single-file command
+from step 2 and confirm it executes cleanly. Then render the whole book the
+same way to catch regressions introduced by the fix:
 
 ```bash
-quarto render book/ --cache-refresh --execute-debug
+docker run --rm -e R_PROFILE_USER=/dev/null -v $(pwd):/mlr3book_latest -w /mlr3book_latest \
+  mlrorg/mlr3-book quarto render book --cache-refresh --execute-debug
 ```
+
+A full render takes a long time; run it in the background. If you could not
+render something (for example because the OpenML cache is missing), say so in
+the report instead of calling the fix verified.
 
 ### 6. Record the change
 
